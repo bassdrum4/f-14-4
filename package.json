@@ -1,0 +1,29 @@
+{
+  "name": "f14-tomcat-simulator",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port ${PORT:-5173}",
+    "build": "vite build",
+    "typecheck": "tsc -b --noEmit",
+    "test:sim": "bun scripts/simtest.ts"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.170.0"
+  },
+  "resolutions": {
+    "baseline-browser-mapping": "2.11.26"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/three": "^0.170.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "~5.6.3",
+    "vite": "^6.0.3"
+  }
+}
