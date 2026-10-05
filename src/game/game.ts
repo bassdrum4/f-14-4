@@ -1,4 +1,4 @@
-// Game orchestrator: state machine, fixed-timestep sim, render loop, HUD feed.
+// Flight orchestrator: state machine, fixed-timestep sim, render loop, HUD feed.
 
 import * as THREE from "three";
 import { WorldRenderer } from "../render/renderer";

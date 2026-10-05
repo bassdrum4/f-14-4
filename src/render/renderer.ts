@@ -100,7 +100,7 @@ export class WorldRenderer {
 
   /**
    * Drive the whole scene look from a sun position: light colour/intensity,
-   * hemisphere fill, fog and the sky dome. Called every frame by the game.
+   * hemisphere fill, fog and the sky dome. Called every frame by the simulator.
    */
   applyDaylight(sun: SunPosition, sunDir: THREE.Vector3, focus: THREE.Vector3): void {
     const env = sampleEnvironment(sun, this.env);
