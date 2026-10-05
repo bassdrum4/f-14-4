@@ -7,7 +7,9 @@
     "dev": "vite --host 0.0.0.0 --port ${PORT:-5173}",
     "build": "vite build",
     "typecheck": "tsc -b --noEmit",
-    "test:sim": "bun scripts/simtest.ts"
+    "test:sim": "bun scripts/simtest.ts",
+    "test:daynight": "bun scripts/daynight.ts",
+    "test:flaps": "bun scripts/diag-flaps.ts"
   },
   "dependencies": {
     "react": "^18.3.1",

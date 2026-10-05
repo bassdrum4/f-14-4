@@ -53,6 +53,11 @@ const MAT_THIN = new THREE.MeshStandardMaterial({
  * front (z=-len/2) to (w1,h1) at the back, with the back offset by (cx,cy).
  * Winding stays valid, so computeVertexNormals keeps outward normals.
  */
+/** Bandit materials: standard material without the shared-instance pitfalls. */
+function std(color: number, roughness: number, metalness: number): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color, roughness, metalness });
+}
+
 function taperedBox(
   w0: number,
   h0: number,
@@ -98,38 +103,45 @@ function wheel(r: number, halfW: number): THREE.Mesh {
   return m;
 }
 
-export function buildTomcat(): TomcatMesh {
+export function buildTomcat(paint: "gray" | "bandit" = "gray"): TomcatMesh {
   const group = new THREE.Group();
+  // Bandits get their own material set (dark red-brown) so hostiles read at a
+  // glance in a furball. The player keeps the stock greys.
+  const matBody = paint === "bandit" ? std(0x8a4438, 0.6, 0.3) : MAT_BODY;
+  const matDark = paint === "bandit" ? std(0x2a2224, 0.85, 0.2) : MAT_DARK;
+  const matThin = paint === "bandit" ? std(0x743a30, 0.65, 0.25) : MAT_THIN;
+  const matGlass = paint === "bandit"
+    ? new THREE.MeshStandardMaterial({ color: 0x3d2a2a, roughness: 0.15, metalness: 0.6, transparent: true, opacity: 0.85 })
+    : MAT_GLASS;
 
   // --- fuselage segments (nose at -Z) ---
-  add(group, taperedBox(0.5, 0.45, 1.7, 1.5, 1.9, 0, -0.08), MAT_BODY, 0, 0.1, -8.6); // radome
-  add(group, taperedBox(1.7, 1.5, 3.0, 2.2, 3.9), MAT_BODY, 0, 0, -5.9); // forward
-  add(group, taperedBox(3.0, 2.2, 3.5, 2.45, 7.0), MAT_BODY, 0, 0, -0.5); // mid
-  add(group, taperedBox(3.5, 2.45, 3.1, 2.1, 4.6, 0, 0.1), MAT_BODY, 0, 0, 5.3); // aft
-  add(group, taperedBox(3.1, 2.1, 2.6, 1.6, 1.8, 0, -0.25), MAT_BODY, 0, 0, 8.5); // nozzle deck
-  add(group, taperedBox(2.0, 0.7, 2.3, 0.8, 6.0), MAT_BODY, 0, 1.1, 4.5); // spine
-  add(group, taperedBox(1.2, 0.6, 2.0, 0.8, 2.2), MAT_BODY, 0, 0.95, -2.9); // cockpit fairing
+  add(group, taperedBox(0.5, 0.45, 1.7, 1.5, 1.9, 0, -0.08), matBody, 0, 0.1, -8.6); // radome
+  add(group, taperedBox(1.7, 1.5, 3.0, 2.2, 3.9), matBody, 0, 0, -5.9); // forward
+  add(group, taperedBox(3.0, 2.2, 3.5, 2.45, 7.0), matBody, 0, 0, -0.5); // mid
+  add(group, taperedBox(3.5, 2.45, 3.1, 2.1, 4.6, 0, 0.1), matBody, 0, 0, 5.3); // aft
+  add(group, taperedBox(3.1, 2.1, 2.6, 1.6, 1.8, 0, -0.25), matBody, 0, 0, 8.5); // nozzle deck
+  add(group, taperedBox(2.0, 0.7, 2.3, 0.8, 6.0), matBody, 0, 1.1, 4.5); // spine
+  add(group, taperedBox(1.2, 0.6, 2.0, 0.8, 2.2), matBody, 0, 0.95, -2.9); // cockpit fairing
 
   // gloves (fixed wing root ahead of pivot)
-  add(group, taperedBox(1.0, 0.34, 2.0, 0.22, 3.0), MAT_THIN, 1.9, 0.28, -1.2);
-  add(group, taperedBox(1.0, 0.34, 2.0, 0.22, 3.0), MAT_THIN, -1.9, 0.28, -1.2);
+  add(group, taperedBox(1.0, 0.34, 2.0, 0.22, 3.0), matThin, 1.9, 0.28, -1.2);
+  add(group, taperedBox(1.0, 0.34, 2.0, 0.22, 3.0), matThin, -1.9, 0.28, -1.2);
 
   // intakes
   const intakes = new THREE.Group();
-  add(intakes, taperedBox(1.2, 1.7, 1.1, 1.9, 3.2), MAT_BODY, 2.25, -0.1, -3.0);
-  add(intakes, taperedBox(1.2, 1.7, 1.1, 1.9, 3.2), MAT_BODY, -2.25, -0.1, -3.0);
+  add(intakes, taperedBox(1.2, 1.7, 1.1, 1.9, 3.2), matBody, 2.25, -0.1, -3.0);
+  add(intakes, taperedBox(1.2, 1.7, 1.1, 1.9, 3.2), matBody, -2.25, -0.1, -3.0);
   const inlet = new THREE.CylinderGeometry(0.52, 0.52, 0.3, 16);
-  const in1 = add(intakes, inlet, MAT_DARK, 2.25, 0.2, -4.65);
+  const in1 = add(intakes, inlet, matDark, 2.25, 0.2, -4.65);
   in1.rotation.x = Math.PI / 2;
-  const in2 = add(intakes, inlet, MAT_DARK, -2.25, 0.2, -4.65);
+  const in2 = add(intakes, inlet, matDark, -2.25, 0.2, -4.65);
   in2.rotation.x = Math.PI / 2;
   group.add(intakes);
 
   // canopy
   const canopy = add(
     group,
-    new THREE.SphereGeometry(0.85, 16, 12),
-    MAT_GLASS,
+    new THREE.SphereGeometry(0.85, 16, 12), matGlass,
     0,
     1.15,
     -5.6,
@@ -139,7 +151,7 @@ export function buildTomcat(): TomcatMesh {
   // engines / nozzles
   const nozzle = new THREE.CylinderGeometry(0.58, 0.66, 1.2, 14, 1, true);
   for (const sx of [-1, 1]) {
-    const n = add(group, nozzle, MAT_DARK, sx * 0.85, -0.15, 9.4);
+    const n = add(group, nozzle, matDark, sx * 0.85, -0.15, 9.4);
     n.rotation.x = Math.PI / 2;
   }
 
@@ -161,15 +173,17 @@ export function buildTomcat(): TomcatMesh {
     // panel: built along +Z (span), then rotated so +Z -> outward ±X
     const panelGeom = taperedBox(4.3, 0.3, 2.3, 0.12, 7.8);
     panelGeom.translate(0, 0, 3.9);
-    const panel = new THREE.Mesh(panelGeom, MAT_THIN);
+    const panel = new THREE.Mesh(panelGeom, matThin);
     panel.rotation.y = sx * (Math.PI / 2);
     pivot.add(panel);
-    // flap: hinged sub-panel on the trailing edge (panel-local: -X is aft)
+    // flap: hinged sub-panel on the trailing edge. The two panel frames are
+    // 180° apart (rotation.y = ±90°), so local X points forward on the right
+    // wing and aft on the left — the hinge and its offset mirror with the wing.
     const flapPivot = new THREE.Group();
-    flapPivot.position.set(-1.85, 0, 2.9);
+    flapPivot.position.set(-sx * 1.85, 0, 2.9);
     const flapGeom = new THREE.BoxGeometry(1.0, 0.09, 3.6);
-    const flap = new THREE.Mesh(flapGeom, MAT_THIN);
-    flap.position.x = -0.5;
+    const flap = new THREE.Mesh(flapGeom, matThin);
+    flap.position.x = -sx * 0.5;
     flapPivot.add(flap);
     panel.add(flapPivot);
     group.add(pivot);
@@ -186,7 +200,7 @@ export function buildTomcat(): TomcatMesh {
     pivot.position.set(sx * 1.35, -0.45, 7.4);
     const geom = taperedBox(2.0, 0.16, 1.1, 0.08, 3.4);
     geom.translate(0, 0, 1.7);
-    const panel = new THREE.Mesh(geom, MAT_THIN);
+    const panel = new THREE.Mesh(geom, matThin);
     panel.rotation.y = sx * (Math.PI / 2);
     pivot.add(panel);
     pivot.rotation.z = -sx * 0.06; // slight anhedral
@@ -198,25 +212,25 @@ export function buildTomcat(): TomcatMesh {
   const rudders: [THREE.Mesh, THREE.Mesh] = [] as unknown as [THREE.Mesh, THREE.Mesh];
   for (let i = 0; i < 2; i++) {
     const sx = i === 0 ? 1 : -1;
-    const fin = add(group, taperedBox(0.18, 3.0, 0.14, 2.0, 3.0, 0.35, 0), MAT_BODY, sx * 1.7, 1.85, 7.9);
-    const rud = add(fin, new THREE.BoxGeometry(0.1, 2.0, 0.75), MAT_THIN, 0.2, -0.35, 1.75);
+    const fin = add(group, taperedBox(0.18, 3.0, 0.14, 2.0, 3.0, 0.35, 0), matBody, sx * 1.7, 1.85, 7.9);
+    const rud = add(fin, new THREE.BoxGeometry(0.1, 2.0, 0.75), matThin, 0.2, -0.35, 1.75);
     rudders[i] = rud;
   }
   // ventral fins
-  add(group, taperedBox(0.12, 0.8, 0.1, 0.5, 1.6, 0, 0.25), MAT_THIN, 1.45, -1.05, 6.9);
-  add(group, taperedBox(0.12, 0.8, 0.1, 0.5, 1.6, 0, 0.25), MAT_THIN, -1.45, -1.05, 6.9);
+  add(group, taperedBox(0.12, 0.8, 0.1, 0.5, 1.6, 0, 0.25), matThin, 1.45, -1.05, 6.9);
+  add(group, taperedBox(0.12, 0.8, 0.1, 0.5, 1.6, 0, 0.25), matThin, -1.45, -1.05, 6.9);
 
   // --- landing gear ---
   const gear = new THREE.Group();
   // tyre bottoms are coplanar with the mains (flight.ts WHEEL_BOTTOM_Y = -2.03)
   const noseStrut = new THREE.CylinderGeometry(0.08, 0.08, 0.9, 8);
-  add(gear, noseStrut, MAT_DARK, 0, -1.28, -6.0);
+  add(gear, noseStrut, matDark, 0, -1.28, -6.0);
   const nw = wheel(0.3, 0.12);
   nw.position.set(0, -1.73, -6.0);
   gear.add(nw);
   for (const sx of [-1, 1]) {
     const strut = new THREE.CylinderGeometry(0.1, 0.1, 0.8, 8);
-    add(gear, strut, MAT_DARK, sx * 2.3, -1.25, 0.5);
+    add(gear, strut, matDark, sx * 2.3, -1.25, 0.5);
     const mw = wheel(0.33, 0.14);
     mw.position.set(sx * 2.3, -1.7, 0.5);
     gear.add(mw);
@@ -225,7 +239,16 @@ export function buildTomcat(): TomcatMesh {
 
   group.traverse((o) => {
     o.frustumCulled = false;
+    const mesh = o as THREE.Mesh;
+    if (mesh.isMesh) {
+      // The sun's shadow camera is framed tightly around the jet (see
+      // renderer.ts), so the airframe is the caster that matters.
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+    }
   });
+  // The additive afterburner plume must never darken the deck below it.
+  afterburner.castShadow = false;
 
   return {
     group,

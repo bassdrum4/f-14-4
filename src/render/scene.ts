@@ -535,8 +535,16 @@ export function buildCarrier(c: CarrierDef): THREE.Group {
   // frame: local +X -> fwd, local +Z -> starboard.
   g.position.set(c.x, 0, c.z);
   g.rotation.y = ((90 - c.headingDeg) * Math.PI) / 180;
-  g.castShadow = false;
-  g.receiveShadow = true;
+  // Shadows are per-mesh (flags on a Group do not reach its children): the
+  // ship casts onto its own deck and the sea, and receives the jet's shadow
+  // while parked on the roof.
+  g.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (m.isMesh) {
+      m.castShadow = true;
+      m.receiveShadow = true;
+    }
+  });
   return g;
 }
 
@@ -597,6 +605,15 @@ export function buildAirfield(): THREE.Group {
   const tower = new THREE.Mesh(new THREE.CylinderGeometry(6, 8, 34, 10), mat);
   tower.position.set(af.centerX - 60, af.elevation + 17, af.centerZ - 160);
   g.add(tower);
+
+  // The runway receives the jet's shadow but does not cast: its slab sits
+  // 2 cm above the flattened plateau, and two surfaces that close together
+  // only shadow-fight at the shadow map's texel size. Buildings do cast.
+  runway.receiveShadow = true;
+  for (const b of [hangar, hangar2, tower]) {
+    b.castShadow = true;
+    b.receiveShadow = true;
+  }
 
   return g;
 }

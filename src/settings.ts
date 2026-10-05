@@ -22,7 +22,8 @@ export type Action =
   | "camera"
   | "pause"
   | "trimUp"
-  | "trimDown";
+  | "trimDown"
+  | "fire";
 
 export const ACTION_LABELS: Record<Action, string> = {
   pitchUp: "Pitch up (nose up)",
@@ -43,6 +44,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   pause: "Pause",
   trimUp: "Trim nose up",
   trimDown: "Trim nose down",
+  fire: "Fire guns (dogfight)",
 };
 
 export const DEFAULT_BINDINGS: Record<Action, string> = {
@@ -64,14 +66,22 @@ export const DEFAULT_BINDINGS: Record<Action, string> = {
   pause: "Escape",
   trimUp: "KeyT",
   trimDown: "KeyV",
+  fire: "KeyQ",
 };
 
 export type DaylightMode = "live" | "fixed" | "cycle";
+
+export type GameMode = "cruise" | "dogfight";
 
 export const DAYLIGHT_LABELS: Record<DaylightMode, string> = {
   live: "Real time (Hawaii)",
   fixed: "Fixed time of day",
   cycle: "Fast cycle",
+};
+
+export const GAME_MODE_LABELS: Record<GameMode, string> = {
+  cruise: "Cruise — free flight",
+  dogfight: "Dogfight — AI bandits",
 };
 
 /** Minutes of real time for one full day in "cycle" mode (4 minutes). */
@@ -82,6 +92,7 @@ export interface Settings {
   sensitivity: number; // 0.4..1.5 — control input ramp rate multiplier
   quality: Quality;
   world: WorldId; // procedural islands or real Mapbox terrain
+  gameMode: GameMode; // free flight or AI dogfight
   daylight: DaylightMode;
   /** Local clock hour 0..24, used by "fixed" mode. */
   timeOfDay: number;
@@ -103,6 +114,7 @@ export function defaultSettings(): Settings {
     sensitivity: 1,
     quality: "medium",
     world: "archipelago",
+    gameMode: "cruise",
     daylight: "live",
     timeOfDay: 9,
     minimap: true,
@@ -126,6 +138,7 @@ export function loadSettings(): Settings {
           : base.quality,
       world:
         parsed.world === "archipelago" || parsed.world === "kauai" ? parsed.world : base.world,
+      gameMode: parsed.gameMode === "dogfight" || parsed.gameMode === "cruise" ? parsed.gameMode : base.gameMode,
       daylight:
         parsed.daylight === "live" || parsed.daylight === "fixed" || parsed.daylight === "cycle"
           ? parsed.daylight

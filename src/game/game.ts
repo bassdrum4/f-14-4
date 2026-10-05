@@ -31,6 +31,7 @@ import { KAUAI_REGION, loadHeightfield, loadSatellite } from "../sim/mapbox";
 import type { TerrainPaint, TerrainTextureRef } from "../render/scene";
 import { CYCLE_MINUTES_PER_DAY, type Settings } from "../settings";
 import { dayPhase, sunPosition, sunVector, type DayPhase } from "../sim/sun";
+import { Dogfight } from "../sim/dogfight";
 
 export type Phase = "menu" | "flying" | "paused" | "result";
 
@@ -87,6 +88,15 @@ export interface HudSnapshot {
   worldExtent: number;
   localHour: number;
   dayPhase: DayPhase;
+  // dogfight mode
+  dfActive: boolean;
+  dfHull: number;
+  dfKills: number;
+  dfWave: number;
+  dfBandits: number;
+  dfNearestKm: number;
+  dfNearestBrgDeg: number;
+  enemyMarkers: Array<{ x: number; z: number }>;
 }
 
 const FIXED_DT = 1 / 120;
@@ -129,6 +139,8 @@ function defaultHud(): HudSnapshot {
     playerX: 0, playerZ: 0, playerHeadingDeg: 0, carrierMarkers: [],
     fieldX: 0, fieldZ: 0, worldExtent: 12000,
     localHour: 12, dayPhase: "day",
+    dfActive: false, dfHull: 100, dfKills: 0, dfWave: 1, dfBandits: 0,
+    dfNearestKm: 0, dfNearestBrgDeg: 0, enemyMarkers: [],
   };
 }
 
@@ -163,6 +175,7 @@ export class Game {
   private dayHours: number;
   private dayPhase: DayPhase = "day";
   private sunVec = new THREE.Vector3(0, 1, 0);
+  private df: Dogfight;
 
   constructor(canvas: HTMLCanvasElement, settings: Settings) {
     this.settings = settings;
@@ -174,6 +187,10 @@ export class Game {
     });
     this.renderer.applyQuality(settings.quality);
     this.input = new InputManager(settings);
+    // honour the persisted volume from the first frame — applySettings only
+    // runs when the user touches a setting, so the constructor must seed it.
+    this.audio.setVolume(settings.volume);
+    this.df = new Dogfight(this.renderer.scene);
     this.input.attach(canvas);
     window.addEventListener("resize", this.onResize);
     this.state = spawnAircraft("carrier");
@@ -186,11 +203,17 @@ export class Game {
     const qualityChanged = s.quality !== this.settings.quality;
     const daylightChanged =
       s.daylight !== this.settings.daylight || s.timeOfDay !== this.settings.timeOfDay;
+    const modeChanged = s.gameMode !== this.settings.gameMode;
     this.settings = s;
     this.input.applySettings(s);
     this.audio.setVolume(s.volume);
     if (qualityChanged) this.renderer.applyQuality(s.quality);
     if (daylightChanged) this.dayHours = this.resolveDayHours(s);
+    // toggling the mode mid-flight starts or clears the fight immediately
+    if (modeChanged) {
+      if (s.gameMode === "dogfight" && this.phase === "flying") this.df.begin(this.state);
+      else this.df.clear();
+    }
   }
 
   /**
@@ -232,6 +255,8 @@ export class Game {
   private beginMission(mission: MissionKind, carrierIndex: number): void {
     this.mission = mission;
     this.state = spawnAircraft(mission, carrierIndex);
+    if (this.settings.gameMode === "dogfight") this.df.begin(this.state);
+    else this.df.clear();
     this.prevPos.copy(this.state.pos);
     this.prevQuat.copy(this.state.quat);
     this.setPhase("flying");
@@ -262,6 +287,7 @@ export class Game {
   }
 
   quitToMenu(): void {
+    this.df.clear();
     this.state = spawnAircraft(this.mission, this.spawnCarrier);
     this.updateJetPose(1);
     this.audio.update(0.05, 0, 0, false, true);
@@ -382,6 +408,7 @@ export class Game {
 
   dispose(): void {
     cancelAnimationFrame(this.raf);
+    this.df.dispose();
     window.removeEventListener("resize", this.onResize);
     this.input.detach();
     this.audio.dispose();
@@ -394,9 +421,12 @@ export class Game {
     this.raf = requestAnimationFrame(this.loop);
     const now = nowMs / 1000;
     const frameDt = Math.min(0.05, Math.max(0.0001, now - this.last));
+    // Advance the clock every frame (including the menu), otherwise the
+    // clamp below pins dt at 0.05 forever and the menu's orbit camera and
+    // fast daylight cycle run ~3x fast at 60 fps.
+    this.last = now;
 
     if (this.phase === "flying") {
-      this.last = now;
       this.handleEdges();
       const inp = this.input.sample(FIXED_DT);
       this.inputPitch = inp.pitch;
@@ -404,10 +434,8 @@ export class Game {
       this.inputYaw = inp.yaw;
       this.stepSim(inp, frameDt);
     } else if (this.phase === "paused") {
-      this.last = now;
       if (this.input.take("pause")) this.resume();
     } else if (this.phase === "result") {
-      this.last = now;
       this.input.take("pause"); // swallow esc while result shows
       this.updateJetPose(1);
       this.updateAudio();
@@ -445,6 +473,7 @@ export class Game {
       this.prevPos.copy(this.state.pos);
       this.prevQuat.copy(this.state.quat);
       stepAircraft(this.state, inp, FIXED_DT);
+      this.df.step(FIXED_DT, this.state, inp.fire === true);
       this.acc -= FIXED_DT;
       steps++;
     }
@@ -478,15 +507,18 @@ export class Game {
     const q = this.prevQuat.clone().slerp(st.quat, alpha);
     const mouse = this.input.takeMouse();
     this.rig.mouse(mouse.dx, mouse.dy);
-    this.rig.update(this.renderer.camera, p, q, st.speed, dt);
+    // menu attract + crash replay get the slow orbit; in flight the third
+    // camera is locked behind the jet
+    const cinematic = this.phase === "menu" || (this.phase === "result" && st.result?.kind === "crash");
+    this.rig.update(this.renderer.camera, p, q, st.speed, dt, cinematic);
     // hide airframe in cockpit view
     this.renderer.jetGroup.visible = this.rig.mode !== "cockpit" || this.phase === "menu";
     // menu attract mode: slow orbit
     if (this.phase === "menu") {
-      this.rig.mode = "orbit";
+      this.rig.mode = "action";
     }
     if (this.phase === "result" && st.result?.kind === "crash") {
-      this.rig.mode = "orbit";
+      this.rig.mode = "action";
     }
   }
 
@@ -586,7 +618,10 @@ export class Game {
       worldExtent: EXTENT,
       localHour: this.dayHours,
       dayPhase: this.dayPhase,
+      ...this.dfHud(),
     };
+    // React re-renders at most ~20 Hz; the pitch-ladder canvas redraws
+    // every frame from the latest snapshot regardless.
     // React re-renders at most ~20 Hz; the pitch-ladder canvas redraws
     // every frame from the latest snapshot regardless.
     const nowMs = performance.now();
@@ -598,5 +633,23 @@ export class Game {
 
   private groundRef(st: AircraftState): number {
     return groundAt(st.pos.x, st.pos.z).y;
+  }
+
+  /** Dogfight HUD fields (defaults when the mode is off). */
+  private dfHud(): Pick<
+    HudSnapshot,
+    "dfActive" | "dfHull" | "dfKills" | "dfWave" | "dfBandits" | "dfNearestKm" | "dfNearestBrgDeg" | "enemyMarkers"
+  > {
+    const h = this.df.hud(this.state);
+    return {
+      dfActive: h.active,
+      dfHull: h.hull,
+      dfKills: h.kills,
+      dfWave: h.wave,
+      dfBandits: h.bandits,
+      dfNearestKm: h.nearestKm,
+      dfNearestBrgDeg: (h.nearestBrgDeg + 360) % 360,
+      enemyMarkers: h.markers,
+    };
   }
 }

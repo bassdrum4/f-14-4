@@ -6,8 +6,8 @@ import type { Game, Phase, WorldState } from "../game/game";
 import type { WorldId } from "../sim/world";
 import { Hud, useHud } from "./Hud";
 import {
-  ACTION_LABELS, DAYLIGHT_LABELS, DEFAULT_BINDINGS, keyLabel,
-  type Action, type DaylightMode, type Quality, type Settings,
+  ACTION_LABELS, DAYLIGHT_LABELS, DEFAULT_BINDINGS, GAME_MODE_LABELS, keyLabel,
+  type Action, type DaylightMode, type GameMode, type Quality, type Settings,
 } from "../settings";
 
 function usePhase(game: Game | null): Phase {
@@ -236,6 +236,17 @@ function SettingsPanel({ settings, onSettings, onBack }: {
         />
       </label>
       <label className="menu-row">
+        <span>Game mode</span>
+        <select
+          value={settings.gameMode}
+          onChange={(e) => set({ gameMode: e.target.value as GameMode })}
+        >
+          {(Object.keys(GAME_MODE_LABELS) as GameMode[]).map((m) => (
+            <option key={m} value={m}>{GAME_MODE_LABELS[m]}</option>
+          ))}
+        </select>
+      </label>
+      <label className="menu-row">
         <span>Daylight</span>
         <select
           value={settings.daylight}
@@ -265,6 +276,7 @@ function SettingsPanel({ settings, onSettings, onBack }: {
       </label>
       <p className="menu-note">
         Time of day drives the sun, sky and fog. Real time follows Hawaii (HST).
+        Dogfight mode spawns AI bandits — fire guns with Q.
       </p>
       <Btn onClick={onBack}>BACK</Btn>
     </div>
@@ -307,7 +319,7 @@ function ControlsPanel({ settings, onSettings, onBack }: {
           </button>
         ))}
       </div>
-      <p className="menu-note">Mouse: drag to look around (chase &amp; orbit cameras).</p>
+      <p className="menu-note">Mouse: drag to look around (chase camera · C cycles chase / cockpit / action).</p>
       <div className="menu-row-btns">
         <Btn
           onClick={() =>

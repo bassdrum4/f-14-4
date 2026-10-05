@@ -124,6 +124,8 @@ export interface FlightInput {
   trimDown: boolean;
   brake: boolean;
   catHold: boolean;
+  /** Dogfight guns held (ignored by the bare flight model). */
+  fire?: boolean;
 }
 
 export type CatPhase = "idle" | "ready" | "charging" | "firing";

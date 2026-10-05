@@ -29,6 +29,8 @@ const EMPTY: HudSnapshot = {
   playerX: 0, playerZ: 0, playerHeadingDeg: 0, carrierMarkers: [],
   fieldX: 0, fieldZ: 0, worldExtent: 12000,
   localHour: 12, dayPhase: "day",
+  dfActive: false, dfHull: 100, dfKills: 0, dfWave: 1, dfBandits: 0,
+  dfNearestKm: 0, dfNearestBrgDeg: 0, enemyMarkers: [],
 };
 
 export function Hud({ game, daylight, minimap }: {
@@ -46,6 +48,9 @@ export function Hud({ game, daylight, minimap }: {
         <Gauge label="MACH" value={hud.mach.toFixed(2)} />
         <Gauge label="AOA" value={hud.aoaDeg.toFixed(1)} unit="°" warn={Math.abs(hud.aoaDeg) > 13} />
         <Gauge label="G" value={hud.gLoad.toFixed(1)} warn={hud.gLoad > 7.5 || hud.gLoad < -1} />
+        {hud.dfActive && (
+          <Gauge label="HULL" value={hud.dfHull} unit="%" warn={hud.dfHull <= 30} />
+        )}
       </div>
       <div className="hud-right">
         <Gauge label="ALT" value={Math.round(hud.altFt).toLocaleString()} unit="FT" big />
@@ -73,6 +78,11 @@ export function Hud({ game, daylight, minimap }: {
         <div className="hud-nav">
           <div>CARRIER {hud.carrierName} · {hud.distCarrierKm.toFixed(1)} KM · {Math.round(hud.bearingCarrierDeg)}°</div>
           <div>FIELD {hud.distFieldKm.toFixed(1)} KM · {Math.round(hud.bearingFieldDeg)}°</div>
+          {hud.dfActive && (
+            <div>
+              BANDITS {hud.dfBandits} · KILLS {hud.dfKills} · WAVE {hud.dfWave} · NEAREST {hud.dfNearestKm.toFixed(1)} KM {Math.round(hud.dfNearestBrgDeg)}°
+            </div>
+          )}
           <div className="hud-cam">
             {hud.cameraMode.toUpperCase()} CAM · C to cycle · {formatClock(hud.localHour)} {daylight === "live" ? "HST" : "LOCAL"}
           </div>
@@ -223,6 +233,17 @@ function Minimap({ hud }: { hud: HudSnapshot }) {
       ctx.fillText(m.name, x + 6, y + 3);
     }
 
+    // --- bandits (dogfight mode): red dots ---
+    ctx.fillStyle = "rgba(255, 91, 77, 0.95)";
+    for (const m of hud.enemyMarkers) {
+      const x = px(m.x);
+      const y = py(m.z);
+      if (x < -10 || x > size + 10 || y < -10 || y > size + 10) continue;
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     // --- player: heading-up triangle at the centre ---
     const hdg = (hud.playerHeadingDeg * Math.PI) / 180;
     ctx.save();
@@ -286,7 +307,10 @@ function PitchLadder({ hud }: { hud: HudSnapshot }) {
 
       ctx.save();
       ctx.translate(cx, cy);
-      ctx.rotate(-roll);
+      // rollDeg is negative for a right bank (starboard wing down). The ladder
+      // is world-fixed, so it must counter-rotate: banking right lifts the
+      // ladder's right end up the same way the real horizon appears to.
+      ctx.rotate(roll);
 
       ctx.strokeStyle = "rgba(120,255,140,0.9)";
       ctx.fillStyle = "rgba(120,255,140,0.9)";

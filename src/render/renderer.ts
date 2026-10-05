@@ -73,14 +73,18 @@ export class WorldRenderer {
     sc.bottom = -60;
     sc.near = 1;
     sc.far = 14000;
-    this.sun.shadow.bias = -0.0005;
+    this.sun.shadow.bias = -0.00001; // ~0.14 m across the 1..14000 depth range
+    this.sun.shadow.normalBias = 0.05; // ~one shadow-map texel (120 m / 2048)
 
     // world (rebuildable)
     this.sky = buildSky();
     this.scene.add(this.sky.stars);
     this.scene.add(this.sky.mesh);
     // Approach lighting: dark by day, glowing after dusk. Rebuilt with the
-    // world, since its positions come from the active layout.
+    // world, since its positions come from the active layout. applyWorld()
+    // re-binds this material to the group it actually puts in the scene —
+    // keeping the constructor's instance would leave the daylight cycle
+    // driving an orphaned material while the lights stayed dark forever.
     this.nightLights = buildNightLights().material;
     this.scene.add(this.nightRoot);
     const ocean = buildOcean();
@@ -150,11 +154,18 @@ export class WorldRenderer {
     // where the previous world's carriers were.
     disposeTree(this.nightRoot);
     this.nightRoot.clear();
-    this.nightRoot.add(buildNightLights().group);
+    const night = buildNightLights();
+    this.nightLights = night.material;
+    this.nightRoot.add(night.group);
   }
 
   applyQuality(q: Quality): void {
     this.quality = q;
+    const shadows = q !== "low";
+    // These are only set in the constructor today, so switching quality at
+    // runtime would otherwise leave shadows stuck at their startup state.
+    this.renderer.shadowMap.enabled = shadows;
+    this.sun.castShadow = shadows;
     const pr =
       q === "low"
         ? 0.75

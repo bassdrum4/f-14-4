@@ -1,9 +1,11 @@
-// Camera rig: cockpit, chase, and orbit modes. Mouse drag looks around in
-// chase/orbit. Cameras follow interpolated render state, never raw sim state.
+// Camera rig: cockpit, chase, and action modes. Mouse drag looks around in
+// chase. Cameras follow interpolated render state, never raw sim state.
 
 import * as THREE from "three";
 
-export type CameraMode = "cockpit" | "chase" | "orbit";
+export type CameraMode = "cockpit" | "chase" | "action";
+
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
 export class CameraRig {
   mode: CameraMode = "chase";
@@ -15,13 +17,15 @@ export class CameraRig {
   private smoothed = new THREE.Vector3();
   private tmpQ = new THREE.Quaternion();
   private lookTarget = new THREE.Vector3();
+  private actionOffset = new THREE.Vector3();
+  private upTmp = new THREE.Vector3();
   /** Cockpit attitude, filtered — the pilot's head, not the airframe. */
   private cockpitQ = new THREE.Quaternion();
   private cockpitReady = false;
   private tmpEuler = new THREE.Euler();
 
   cycle(): void {
-    this.mode = this.mode === "chase" ? "cockpit" : this.mode === "cockpit" ? "orbit" : "chase";
+    this.mode = this.mode === "chase" ? "cockpit" : this.mode === "cockpit" ? "action" : "chase";
     if (this.mode !== "chase") {
       this.yaw = 0;
       this.pitch = 0;
@@ -30,7 +34,7 @@ export class CameraRig {
   }
 
   label(): string {
-    return this.mode === "cockpit" ? "COCKPIT" : this.mode === "chase" ? "CHASE" : "ORBIT";
+    return this.mode === "cockpit" ? "COCKPIT" : this.mode === "chase" ? "CHASE" : "ACTION";
   }
 
   /** Apply mouse drag deltas. Cockpit gets a narrower look-around cone. */
@@ -44,9 +48,9 @@ export class CameraRig {
    * Position/orient the camera.
    * @param pos interpolated aircraft position
    * @param quat interpolated aircraft orientation
-   * @param speed m/s (for orbit distance)
+   * @param speed m/s (for action-cam distance)
    * @param dt frame dt for internal smoothing
-   * @param firstPerson true hides the airframe in cockpit view (caller handles)
+   * @param cinematic true for the menu / crash attract shot (slow circle)
    */
   update(
     camera: THREE.PerspectiveCamera,
@@ -54,6 +58,7 @@ export class CameraRig {
     quat: THREE.Quaternion,
     speed: number,
     dt: number,
+    cinematic = false,
   ): void {
     if (this.mode === "cockpit") {
       // Filter the airframe attitude into a "head" attitude. A real pilot's
@@ -91,15 +96,26 @@ export class CameraRig {
       return;
     }
 
-    // orbit: slow cinematic circle around the jet
-    this.orbitTimer += dt;
-    const r = 34 + Math.sin(this.orbitTimer * 0.21) * 6;
-    this.orbitAngle += dt * 0.14;
-    const wx = pos.x + Math.cos(this.orbitAngle) * r;
-    const wz = pos.z + Math.sin(this.orbitAngle) * r;
-    const wy = pos.y + 9 + Math.sin(this.orbitTimer * 0.33) * 3;
-    camera.position.set(wx, wy, wz);
-    camera.up.set(0, 1, 0);
-    camera.lookAt(pos);
+    // action cam. In flight it is locked hard behind the jet: rigid offset,
+    // no smoothing lag, so it reads as a boom camera bolted to the tail.
+    // The menu and crash replays pass cinematic=true for a slow orbit instead.
+    if (cinematic) {
+      this.orbitTimer += dt;
+      const r = 34 + Math.sin(this.orbitTimer * 0.21) * 6;
+      this.orbitAngle += dt * 0.14;
+      const wx = pos.x + Math.cos(this.orbitAngle) * r;
+      const wz = pos.z + Math.sin(this.orbitAngle) * r;
+      const wy = pos.y + 9 + Math.sin(this.orbitTimer * 0.33) * 3;
+      camera.position.set(wx, wy, wz);
+      camera.up.set(0, 1, 0);
+      camera.lookAt(pos);
+      return;
+    }
+    this.actionOffset.set(0, 8, 30).applyQuaternion(quat);
+    camera.position.copy(pos).add(this.actionOffset);
+    this.upTmp.set(0, 1.5, 0).applyQuaternion(quat);
+    this.lookTarget.copy(pos).add(this.upTmp);
+    camera.up.set(0, 1, 0).applyQuaternion(quat).lerp(WORLD_UP, 0.5).normalize();
+    camera.lookAt(this.lookTarget);
   }
 }

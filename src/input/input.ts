@@ -13,6 +13,7 @@ export interface InputFrame {
   trimDown: boolean;
   brake: boolean;
   catHold: boolean;
+  fire: boolean;
 }
 
 export class InputManager {
@@ -83,6 +84,23 @@ export class InputManager {
       return;
     }
     if (e.repeat) return;
+    // Menu controls keep their standard keyboard behaviour: arrows drive
+    // sliders/selects and Space activates the focused button instead of
+    // being eaten by the flight controls (and never reaching the widget).
+    // Escape is exempt — it is the global pause/resume key and must keep
+    // working wherever focus sits.
+    const target = e.target as HTMLElement | null;
+    if (
+      e.code !== "Escape" &&
+      target &&
+      (target.tagName === "INPUT" ||
+        target.tagName === "SELECT" ||
+        target.tagName === "TEXTAREA" ||
+        target.tagName === "BUTTON" ||
+        target.isContentEditable)
+    ) {
+      return;
+    }
     const code = e.code;
     const action = this.actionFor(code);
     if (action) e.preventDefault();
@@ -156,6 +174,7 @@ export class InputManager {
       trimDown: this.isDown("trimDown"),
       brake: this.isDown("brake"),
       catHold: this.isDown("cat"),
+      fire: this.isDown("fire"),
     };
   }
 

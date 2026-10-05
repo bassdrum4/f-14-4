@@ -32,10 +32,11 @@ export function animateJet(
   jet.stabs[0].rotation.x = elev;
   jet.stabs[1].rotation.x = elev;
 
-  // rudders
+  // rudders — the twin fins are not mirrored (both share the body frame), so
+  // both rudders deflect the same way: trailing edges move together.
   const rud = clampSym(g.userData.rudder ?? 0, 0.5);
   jet.rudders[0].rotation.y = rud;
-  jet.rudders[1].rotation.y = -rud;
+  jet.rudders[1].rotation.y = rud;
 
   // gear: fold legs up + hide when retracted; lift by tyre compression so the
   // wheels sit on the deck/runway instead of sinking into it
