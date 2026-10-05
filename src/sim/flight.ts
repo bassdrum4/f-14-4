@@ -192,7 +192,7 @@ export interface AircraftState {
   result: SimResult | null;
   banner: Banner | null;
 
-  // interpolation snapshots (written by game loop)
+  // interpolation snapshots (written by render loop)
   prevPos: Vector3;
   prevQuat: Quaternion;
 }

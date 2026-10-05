@@ -1,5 +1,5 @@
 // HUD overlay: canvas-based pitch ladder + gauges + text readouts.
-// Reads the Game's HudSnapshot via useSyncExternalStore — no per-frame React
+// Reads the simulator HudSnapshot via useSyncExternalStore — no per-frame React
 // state.
 
 import { useEffect, useRef, useSyncExternalStore } from "react";

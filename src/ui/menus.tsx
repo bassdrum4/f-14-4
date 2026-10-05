@@ -236,7 +236,7 @@ function SettingsPanel({ settings, onSettings, onBack }: {
         />
       </label>
       <label className="menu-row">
-        <span>Game mode</span>
+        <span>Flight mode</span>
         <select
           value={settings.gameMode}
           onChange={(e) => set({ gameMode: e.target.value as GameMode })}
