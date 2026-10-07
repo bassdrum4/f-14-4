@@ -17,9 +17,12 @@ export function animateJet(
 
   // wing sweep: 20 deg (out) to 68 deg (back). Panels span outward along ±X,
   // so the right (+X) wing rotates about -Y to swing its tip aft (body +Z).
-  const sweep = THREE.MathUtils.degToRad(20 + 48 * s.sweepT);
-  jet.wings[0].rotation.y = -sweep;
-  jet.wings[1].rotation.y = sweep;
+  // Fixed-wing types keep the sweep baked into their geometry.
+  if (jet.sweepable !== false) {
+    const sweep = THREE.MathUtils.degToRad(20 + 48 * s.sweepT);
+    jet.wings[0].rotation.y = -sweep;
+    jet.wings[1].rotation.y = sweep;
+  }
 
   // flaps droop when down (also act as flaperons)
   const flapDroop = 0.45 * s.flapT;

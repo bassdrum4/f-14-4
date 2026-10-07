@@ -30,6 +30,18 @@ check("defaults include a time of day", typeof d.timeOfDay === "number" && d.tim
 check("defaults show the minimap", d.minimap === true, String(d.minimap));
 check("every daylight mode is labelled", Object.keys(DAYLIGHT_LABELS).length === 3);
 
+// A first run mints a callsign so a guest has a stable name, but never a room
+// code: the field stays blank until a pilot types one, so nothing on screen
+// looks like a room that is already waiting.
+check("a first run mints a callsign", d.callsign.length > 0, d.callsign);
+check("a first run leaves the room code blank", d.room === "", JSON.stringify(d.room));
+check("the defaults leave the room code blank", defaultSettings().room === "", JSON.stringify(defaultSettings().room));
+
+// A code a pilot did type is kept, so rejoining does not mean retyping it.
+store.set(KEY, JSON.stringify({ room: "F14abcd!" }));
+const withRoom = loadSettings();
+check("a saved room code round-trips, normalised", withRoom.room === "F14ABCD", withRoom.room);
+
 // round trip
 const s = defaultSettings();
 s.daylight = "cycle";

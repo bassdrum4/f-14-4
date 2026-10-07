@@ -1,0 +1,1 @@
+Be smart, always keep your todos updated, and then when there are a lot of changes being asked for, order them in most fun to least fun (you pick what that means), and after each one that is somewhat big, redploy, always redeploy when finished with changes 

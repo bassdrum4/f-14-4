@@ -3,6 +3,12 @@
 
 import type { Action, Settings } from "../settings";
 
+/** A left-click on the canvas, in client (CSS) pixels. */
+export interface ClickEvent {
+  x: number;
+  y: number;
+}
+
 export interface InputFrame {
   pitch: number; // -1..1, +1 = nose up
   roll: number; // -1..1, +1 = roll right
@@ -33,6 +39,19 @@ export class InputManager {
   mouseDX = 0;
   mouseDY = 0;
   private dragging = false;
+  /** Pointer position in client pixels, for HUD designators. */
+  pointerX = 0;
+  pointerY = 0;
+  /** Left-clicks (press + release without dragging) waiting to be consumed. */
+  private clicks: ClickEvent[] = [];
+  private pressStart: ClickEvent | null = null;
+  private pressTravel = 0;
+  /**
+   * In the target pod a slew *ends* in a designation, so a release after
+   * dragging still counts as a click. Everywhere else a camera drag is not a
+   * click, or looking around would fire the guns course changes.
+   */
+  clicksAfterDrag = false;
 
   // rebind capture
   capture: ((code: string) => void) | null = null;
@@ -41,9 +60,13 @@ export class InputManager {
   private onKeyBound = (e: KeyboardEvent) => this.onKeyDown(e);
   private onKeyUpBound = (e: KeyboardEvent) => this.onKeyUp(e);
   private onDownBound = (e: MouseEvent) => this.onMouseDown(e);
-  private onUpBound = () => (this.dragging = false);
+  private onUpBound = (e: MouseEvent) => this.onMouseUp(e);
   private onMoveBound = (e: MouseEvent) => this.onMouseMove(e);
-  private onBlurBound = () => this.down.clear();
+  private onBlurBound = () => {
+    this.down.clear();
+    this.dragging = false;
+    this.pressStart = null;
+  };
 
   constructor(settings: Settings) {
     this.bindings = { ...settings.bindings };
@@ -118,14 +141,50 @@ export class InputManager {
   }
 
   private onMouseDown(e: MouseEvent): void {
-    if (e.button === 0) this.dragging = true;
+    if (e.button !== 0) return;
+    // A press only becomes a look-around drag once it actually travels; a tap
+    // stays a click, so the target pod can be aimed at without first having to
+    // fight the camera.
+    this.pressStart = { x: e.clientX, y: e.clientY };
+    this.pressTravel = 0;
   }
 
   private onMouseMove(e: MouseEvent): void {
+    this.pointerX = e.clientX;
+    this.pointerY = e.clientY;
+    if (this.pressStart) {
+      this.pressTravel = Math.max(
+        this.pressTravel,
+        Math.hypot(e.clientX - this.pressStart.x, e.clientY - this.pressStart.y),
+      );
+      if (!this.dragging && this.pressTravel > 4) this.dragging = true;
+    }
     if (this.dragging) {
       this.mouseDX += e.movementX ?? 0;
       this.mouseDY += e.movementY ?? 0;
     }
+  }
+
+  private onMouseUp(e: MouseEvent): void {
+    const wasDrag = this.dragging;
+    this.dragging = false;
+    this.pressStart = null;
+    const slop = this.clicksAfterDrag ? Infinity : 4;
+    if (e.button === 0 && (!wasDrag || this.clicksAfterDrag) && this.pressTravel <= slop) {
+      this.clicks.push({ x: e.clientX, y: e.clientY });
+      if (this.clicks.length > 4) this.clicks.shift();
+    }
+    this.pressTravel = 0;
+  }
+
+  /** Next left-click, or null when there is none pending. */
+  takeClick(): ClickEvent | null {
+    return this.clicks.shift() ?? null;
+  }
+
+  /** Drop pending clicks (screen changes, mission start). */
+  clearClicks(): void {
+    this.clicks = [];
   }
 
   private actionFor(code: string): Action | null {
@@ -148,21 +207,27 @@ export class InputManager {
     return false;
   }
 
-  /** Drop queued edge events (used when screens change). */
+  /** Drop queued edge events and clicks (used when screens change). */
   clearEdges(): void {
     this.pressedQueue.clear();
+    this.clicks = [];
   }
 
   /** Sample axes for this sim tick. dt is the sim timestep. */
   sample(dt: number): InputFrame {
-    const rate = 3.6 * this.sensitivity; // units per second toward target
+    // Pressing ramps in smoothly, but a released key recentres about twice as
+    // fast: a digital key has to be able to stop the aircraft. With a symmetric
+    // slow ramp the roll kept going for ~0.3 s after the key came up, so a
+    // keyboard pilot overshot every bank by 30-40 deg.
+    const press = 3.6 * this.sensitivity; // units per second toward target
+    const release = press * 2;
     const tPitch = (this.isDown("pitchUp") ? 1 : 0) - (this.isDown("pitchDown") ? 1 : 0);
     const tRoll = (this.isDown("rollRight") ? 1 : 0) - (this.isDown("rollLeft") ? 1 : 0);
     const tYaw = (this.isDown("yawRight") ? 1 : 0) - (this.isDown("yawLeft") ? 1 : 0);
 
-    this.pitch = moveToward(this.pitch, tPitch, rate * dt);
-    this.roll = moveToward(this.roll, tRoll, rate * dt);
-    this.yaw = moveToward(this.yaw, tYaw, rate * dt);
+    this.pitch = moveToward(this.pitch, tPitch, (tPitch === 0 ? release : press) * dt);
+    this.roll = moveToward(this.roll, tRoll, (tRoll === 0 ? release : press) * dt);
+    this.yaw = moveToward(this.yaw, tYaw, (tYaw === 0 ? release : press) * dt);
 
     return {
       pitch: applyExpo(this.pitch),

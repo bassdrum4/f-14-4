@@ -33,8 +33,8 @@ export function makeEnvironmentSample(): EnvironmentSample {
     hemiGround: new THREE.Color(),
     hemiIntensity: 0.75,
     fogColor: new THREE.Color(),
-    fogNear: 3500,
-    fogFar: 30000,
+    fogNear: 6000,
+    fogFar: 58000,
     zenith: new THREE.Color(),
     horizon: new THREE.Color(),
     glow: 0.35,
@@ -143,8 +143,10 @@ export function sampleEnvironment(sun: SunPosition, out: EnvironmentSample): Env
   // darkness closing in rather than a washed-out grey world.
   const night = 1 - smoothstep(clamp((el + 6) / 12, 0, 1));
   out.ambient = night * 0.12;
-  out.fogNear = lerp(3500, 1400, night);
-  out.fogFar = lerp(30000, 15000, night);
+  // The chain is 60 km across, so daylight needs a long sight line or the
+  // islands would sit in a white wall. Night closes in hard, as it should.
+  out.fogNear = lerp(6000, 1800, night);
+  out.fogFar = lerp(58000, 16000, night);
   out.starsVisible = dayPhase(el) === "night";
   return out;
 }

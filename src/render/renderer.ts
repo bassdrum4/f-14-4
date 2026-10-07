@@ -1,6 +1,6 @@
 // Three.js renderer wrapper: scene graph, lighting, resize, quality scaling.
-// The world root (terrain + airfield + carriers) can be rebuilt at runtime
-// when the player switches between the procedural islands and real terrain.
+// The world root (terrain + airfield + carriers) is rebuilt at runtime whenever
+// the terrain seed changes, so the mesh always follows the physics heightfield.
 
 import * as THREE from "three";
 import {
@@ -12,8 +12,11 @@ import {
   buildTerrain,
   type TerrainPaint,
 } from "./scene";
-import { buildTomcat, type TomcatMesh } from "./geometry";
+import { buildAircraft, type TomcatMesh } from "./geometry";
+import { isSharedMaterial, updateAirLights, updateShipLights } from "./lights";
+import { ScaleCues } from "./scale";
 import { makeEnvironmentSample, sampleEnvironment, type EnvironmentSample } from "./environment";
+import { DEFAULT_AIRCRAFT, type AircraftId } from "../sim/aircraft";
 import { carriers } from "../sim/world";
 import type { Quality } from "../settings";
 import type { SunPosition } from "../sim/sun";
@@ -36,8 +39,17 @@ export class WorldRenderer {
   private env: EnvironmentSample = makeEnvironmentSample();
   private sunDir = new THREE.Vector3(0, 1, 0);
   private tmpColor = new THREE.Color();
+  /** 0 = full day, 1 = night. Drives every nav light, lamp and strobe. */
+  private dark = 0;
+  /** In-world altitude cues: cloud decks, the jet's ground shadow, the masts. */
+  private scaleCues: ScaleCues;
 
-  constructor(canvas: HTMLCanvasElement, quality: Quality, initialPaint: TerrainPaint) {
+  constructor(
+    canvas: HTMLCanvasElement,
+    quality: Quality,
+    initialPaint: TerrainPaint,
+    aircraft: AircraftId = DEFAULT_AIRCRAFT,
+  ) {
     this.quality = quality;
     this.renderer = new THREE.WebGLRenderer({
       canvas,
@@ -48,9 +60,11 @@ export class WorldRenderer {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.Fog(0xbfd3e0, 3500, 30000);
+    this.scene.fog = new THREE.Fog(0xbfd3e0, 6000, 58000);
 
-    this.camera = new THREE.PerspectiveCamera(62, 1, 0.5, 48000);
+    // Far plane past the fog: the chain runs 60 km, and the sea haze should
+    // close the horizon before the frustum does.
+    this.camera = new THREE.PerspectiveCamera(62, 1, 0.5, 70000);
     this.camera.position.set(0, 200, 200);
 
     // lighting
@@ -93,14 +107,27 @@ export class WorldRenderer {
     this.scene.add(this.worldRoot);
     this.applyWorld(initialPaint);
 
-    this.jet = buildTomcat();
+    this.jet = buildAircraft(aircraft);
+    this.jetGroup = this.jet.group;
+    this.scene.add(this.jetGroup);
+    this.scaleCues = new ScaleCues(this.scene);
+  }
+
+  /**
+   * Swap the player's airframe, e.g. when the aircraft is changed on the menu.
+   * Only geometry is released — the airframe materials are module-shared.
+   */
+  setAircraft(id: AircraftId): void {
+    this.jetGroup.removeFromParent();
+    disposeGeometryTree(this.jetGroup);
+    this.jet = buildAircraft(id);
     this.jetGroup = this.jet.group;
     this.scene.add(this.jetGroup);
   }
 
   /**
    * Drive the whole scene look from a sun position: light colour/intensity,
-   * hemisphere fill, fog and the sky dome. Called every frame by the game.
+   * hemisphere fill, fog and the sky dome. Called every frame by the sim.
    */
   applyDaylight(sun: SunPosition, sunDir: THREE.Vector3, focus: THREE.Vector3): void {
     const env = sampleEnvironment(sun, this.env);
@@ -132,8 +159,12 @@ export class WorldRenderer {
     this.oceanMat.color.copy(env.fogColor).lerp(this.tmpColor.setRGB(0.05, 0.16, 0.24), 0.75);
 
     // Deck and runway lights come up as the sun goes down, so night approaches
-    // stay flyable instead of being a black deck against black water.
-    this.nightLights.emissiveIntensity = clamp01((6 - sun.elevationDeg) / 12) * 2.4;
+    // stay flyable instead of being a black deck against black water. The same
+    // darkness drives the ships' own lamps and every aircraft's nav lights.
+    this.dark = clamp01((6 - sun.elevationDeg) / 12);
+    this.nightLights.emissiveIntensity = this.dark * 2.4;
+    // Cloud decks, ground shadow and masts read off the same sun and focus.
+    this.scaleCues.update(focus, this.camera.position, this.sunDir, this.dark);
 
     this.sky.set(this.sunDir, env.sunColor, env.zenith, env.horizon, env.glow);
     // The dome and star field ride with the viewer: they are effectively at
@@ -142,7 +173,7 @@ export class WorldRenderer {
     this.sky.setStarsVisible(env.starsVisible);
   }
 
-  /** Rebuild terrain + airfield + carriers for the currently active world. */
+  /** Rebuild terrain + airfield + carriers for the currently active seed. */
   applyWorld(paint: TerrainPaint): void {
     disposeTree(this.worldRoot);
     this.worldRoot.clear();
@@ -185,11 +216,21 @@ export class WorldRenderer {
     this.camera.updateProjectionMatrix();
   }
 
+  /** Release GPU resources (world, cues, airframe, renderer). */
+  dispose(): void {
+    this.scaleCues.dispose();
+    this.renderer.dispose();
+  }
+
   render(): void {
     // slow swell drift: gives motion cues when judging height over water
     const t = performance.now() / 1000;
     const waves = this.oceanMat.bumpMap;
     if (waves) waves.offset.set(t * 0.006, t * 0.0025);
+    // Lights blink on wall-clock time, not sim time, so a paused night scene
+    // still reads as a living one.
+    updateAirLights(this.dark, t);
+    updateShipLights(this.dark, t);
     this.renderer.render(this.scene, this.camera);
   }
 }
@@ -199,6 +240,9 @@ function clamp01(v: number): number {
 }
 
 function disposeMaterial(m: THREE.Material): void {
+  // Nav lights, ship lamps and other fleet-wide materials outlive a rebuilt
+  // world: disposing one here would pull the lights off every other ship.
+  if (isSharedMaterial(m)) return;
   const ref = m as THREE.Material & {
     map?: THREE.Texture | null;
     bumpMap?: THREE.Texture | null;
@@ -210,6 +254,14 @@ function disposeMaterial(m: THREE.Material): void {
   ref.roughnessMap?.dispose();
   ref.normalMap?.dispose();
   m.dispose();
+}
+
+/** Release only geometries under a node, leaving shared materials intact. */
+function disposeGeometryTree(root: THREE.Object3D): void {
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    mesh.geometry?.dispose();
+  });
 }
 
 function disposeTree(root: THREE.Object3D): void {

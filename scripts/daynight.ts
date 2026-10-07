@@ -1,14 +1,13 @@
 // Headless day/night verification: sun path, phase transitions, environment
 // lighting response and the fast-cycle clock. Mirrors exactly the chain the
-// game runs every frame: advanceDaylight -> sunPosition -> sunVector /
+// the sim runs every frame: advanceDaylight -> sunPosition -> sunVector /
 // dayPhase -> sampleEnvironment (what applyDaylight feeds the lights).
 // Usage: bun scripts/daynight.ts
 
 import { Color } from "three";
-import { dayPhase, sunPosition, sunVector } from "../src/sim/sun";
+import { HOME_SITE, dayPhase, sunPosition, sunVector } from "../src/sim/sun";
 import { makeEnvironmentSample, sampleEnvironment } from "../src/render/environment";
 import { CYCLE_MINUTES_PER_DAY } from "../src/settings";
-import { KAUAI_REGION } from "../src/sim/mapbox";
 
 let failures = 0;
 function check(name: string, cond: boolean, extra = ""): void {
@@ -20,12 +19,12 @@ function check(name: string, cond: boolean, extra = ""): void {
   }
 }
 
-const LAT = KAUAI_REGION.centerLat;
-const LON = KAUAI_REGION.centerLon;
-const TZ = -10; // Hawaii standard time, no DST
+const LAT = HOME_SITE.lat;
+const LON = HOME_SITE.lon;
+const TZ = HOME_SITE.tzOffsetHours;
 const DAY_OF_YEAR = 278; // Oct 5
 
-// --- 1. solar noon: peak elevation near midday, plausible height for Kauai ---
+// --- 1. solar noon: peak elevation near midday at the home station ---
 {
   let peak = -90;
   let peakHour = 0;
@@ -36,7 +35,8 @@ const DAY_OF_YEAR = 278; // Oct 5
       peakHour = h;
     }
   }
-  // Kauai in early October: declination ~ -4.3 deg, so max elevation ~ 63-66 deg
+  // The home station in early October: declination ~ -4.3 deg, so the peak is
+  // around 63-66 deg
   check("solar noon peak elevation ~64 deg", peak > 60 && peak < 68, `${peak.toFixed(1)} deg`);
   check("solar noon occurs 11:30-13:00 HST", peakHour >= 11.5 && peakHour <= 13, `${peakHour.toFixed(2)} h`);
   console.log(`      (solar noon ${fmt(peakHour)}, elevation ${peak.toFixed(1)} deg)`);
