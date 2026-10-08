@@ -151,12 +151,13 @@ export function defaultCallsign(): string {
   return `PILOT-${Math.floor(1000 + Math.random() * 9000)}`;
 }
 
-/** A room code that is easy to read out loud — no look-alike glyphs. */
+/** A room code that is easy to read out loud — no look-alike glyphs, no
+ *  forced prefix: a room is any word or code the host wants. */
 export function suggestRoomCode(): string {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let tail = "";
-  for (let i = 0; i < 4; i++) tail += alphabet[Math.floor(Math.random() * alphabet.length)];
-  return `F14${tail}`;
+  for (let i = 0; i < 5; i++) tail += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return tail;
 }
 
 /** The callsign to show: the saved one, or a fresh default. */

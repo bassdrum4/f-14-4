@@ -63,17 +63,33 @@ const HULL_MAX = 100; // fallback until the player's spec is known
 // closer, and need more hits to end the fight.
 const BANDIT_HP = 30; // was 34: one good burst now finishes one
 const BANDIT_DAMAGE = 7; // was 9 — about 14 hits to put the player in the water
+// Speed envelope: bandits fly the same F-14 the player flies — same turn
+// authority, same jink — with ONE deliberate handicap: a lower top speed.
+// The afterburner still lights (same plume, still the fastest they can go),
+// but even lit they are slower than the original numbers were. They win the
+// turn, the player wins the chase.
+const BANDIT_MAX_DRY = 240; // m/s (~465 kt) — slower than the original 270 cap
+const BANDIT_MAX_AB = 265; // m/s (~515 kt) — burner lit, still under the old cap
+const BANDIT_AB_TIME = 8; // s of continuous burner before a cooldown
 const MUZZLE_V = 1050; // m/s
 const TRACER_LIFE = 2.0; // s
 const HIT_RADIUS = 9; // m, airframe sphere
 const PLAYER_SPREAD = 0.005; // rad
 const BANDIT_SPREAD = 0.021; // rad — was 0.016: a wider cone means more misses
-const BANDIT_TURN = 0.68; // rad/s — was 0.75: agile but clearly beatable
-// Speeds are left alone. They are what puts the bandits in the fight at all: cut
-// them and the pack cannot close on a player who is running, which reads as the
-// enemies going missing rather than as a fairer fight. The nerf is in lethality
-// (damage, spread, burst length, hit points), not in the geometry of the merge.
-const BANDIT_SPEED = { pursue: 235, close: 215, evade: 270, min: 140 };
+// Maneuverability: the bandits fly the SAME F-14 the player flies. The
+// player's full-elevator pull measures a ~410 m turn radius at any speed
+// (headless probe at 200/240/270/315 m/s — turn rate grows in step with speed),
+// so the AI's kinematic turn cap uses the same radius: identical cornering at
+// equal speed. The floor keeps the steering controller usable right off the
+// cat (a real Tomcat's radius shrinks well below 410 m below corner speed),
+// and at combat speeds the radius rule dominates. The lower top speed above
+// is the ONLY handicap.
+const BANDIT_TURN_RADIUS = 410; // m — the player F-14's full-pull radius
+const BANDIT_TURN_FLOOR = 0.42; // rad/s — low-speed controller floor
+// Target speeds inside the envelope — lower than the original tune (215-235
+// cruise, 270 break) in every state, but fast enough that a merge still happens
+// and a hovering or slow player is still closed on.
+const BANDIT_SPEED = { pursue: 205, close: 190, evade: 255, min: 140 };
 const CEILING = 6000; // m — bandits stay in the fight box (islands reach ~3 km)
 /** Keep the fight with the player: the chain is 60 km across, so the box is a
  *  radius around the player rather than one centred on the world origin. */
@@ -97,6 +113,19 @@ const MAX_FLASHES = 6;
 // over-dragged bullet visibly decelerated and curved, which read as the guns
 // "not shooting straight". The gun cue (see gunSolution) accounts for the drop
 // and the drag that remain, so the crosshair is where the rounds actually go.
+// --- gun aim assist ---
+// A deliberate, very slight pull toward the nearest bandit's lead point when
+// the bore is already nearly on it. The SAME bend is applied to the fired
+// rounds and to the crosshair's ballistic solution, so the pipper shows
+// exactly where the bullets go — and visually snaps that last fraction of a
+// degree onto the target. Deliberately tiny: the assist cone is ~2.6°, the
+// pull is capped under half a degree (comparable to the gun's own spread),
+// and there is no assist beyond 1.5 km — it forgives a hair of error without
+// playing the game for you.
+const ASSIST_CONE = 0.045; // rad (~2.6°): the bore must be this close to assist
+const ASSIST_MAX = 0.0065; // rad (~0.37°): the most a shot can be bent
+const ASSIST_RANGE = 1500; // m: no assist beyond this
+
 const BULLET_MASS = 0.1; // kg (20 mm class)
 const BULLET_CDA = 0.000025; // drag coefficient x frontal area, m^2
 const CARRIER_GUN_DAMAGE = 1; // per round on a 100 hp hull — strafing takes ~10 s
@@ -211,6 +240,9 @@ interface Bandit {
   fireCd: number; // s until next shot / burst decision
   burst: number; // rounds left in the current burst
   evadeT: number; // s of jink remaining
+  /** s until the bandit may break again: after a break it extends and
+   *  re-engages like a real pilot instead of jinking forever. */
+  evadeCd: number;
   phase: number; // per-bandit jink phase
   mesh: TomcatMesh;
   /** >= 0 while the bandit is still rolling on the catapult; -1 in the air. */
@@ -221,6 +253,11 @@ interface Bandit {
   climbT: number;
   /** wing sweep, 0 = spread for the deck, 1 = swept for the merge */
   sweepT: number;
+  /** Afterburner state: lit during the merge and evades, with a cooldown so
+   *  it blinks instead of burning forever. */
+  abOn: boolean;
+  abT: number; // s of burner left in this light
+  abCool: number; // s until the burner may light again
 }
 
 interface Tracer {
@@ -389,6 +426,7 @@ const GUN_V = new THREE.Vector3();
 const GUN_FWD = new THREE.Vector3();
 const GUN_MUZ = new THREE.Vector3();
 const GUN_T = new THREE.Vector3();
+const GUN_B = new THREE.Vector3(); // bandit lead position inside the cue march
 /** Beyond this the crosshair is drawn faded: the burst is out of reach. */
 const GUN_RANGE = 2000;
 /** The gun cue integrates at the sim step so it matches the tracers exactly. */
@@ -1075,15 +1113,18 @@ export class Dogfight {
   /**
    * March the player's rounds from this frame's muzzle state and report where
    * they end up. Evaluated once per rendered frame by the HUD, so the returned
-   * object is reused — read it, do not keep it.
+   * object is reused — read it, do not keep it. Uses the same assisted bore
+   * the fired rounds get, so the pipper shows where the bullets actually go.
    */
   gunSolution(player: AircraftState): GunCue {
     const cue = this.cueOut;
     const fwd = GUN_FWD.set(0, 0, -1).applyQuaternion(player.quat);
     GUN_MUZ.copy(player.pos).addScaledVector(fwd, 8);
     GUN_P.copy(GUN_MUZ);
-    // Rounds leave at muzzle speed along the bore, plus the jet's own velocity.
-    GUN_V.copy(fwd).multiplyScalar(MUZZLE_V).add(player.vel);
+    // Rounds leave at muzzle speed along the (assisted) bore, plus the jet's
+    // own velocity — identical to what fireGuns will actually spawn.
+    const assisted = this.assistBore(player, GUN_MUZ, fwd);
+    GUN_V.copy(assisted).multiplyScalar(MUZZLE_V).add(player.vel);
     // The cue checks a wider tube than the hit test, so the pipper lights up as
     // it touches a wingtip instead of only on a dead-centre hit.
     const airR = HIT_RADIUS * 2;
@@ -1110,7 +1151,15 @@ export class Dogfight {
       }
       for (const b of this.bandits) {
         if (b.catT >= 0) continue;
-        if (segSphere(GUN_PREV, GUN_P, b.pos, airR)) {
+        // The bandit keeps flying while the round is in the air, so test the
+        // path against where the bandit WILL be at this step's flight time —
+        // straight-line along its current velocity (jinks excluded; the tube
+        // is 2x the hit radius, so small weaves stay inside it). Testing the
+        // stale position made the pipper go dark in every merge even when a
+        // burst would connect.
+        const vel = DIR.set(0, 0, -1).applyQuaternion(b.quat).multiplyScalar(b.speed);
+        GUN_B.copy(b.pos).addScaledVector(vel, t);
+        if (segSphere(GUN_PREV, GUN_P, GUN_B, airR)) {
           hit = "bandit";
           break;
         }
@@ -1131,6 +1180,13 @@ export class Dogfight {
         break;
       }
       if (GUN_P.y <= groundAt(GUN_P.x, GUN_P.z).y) {
+        // back the solution up to the actual surface crossing inside this step,
+        // so the pipper sits ON the water/deck instead of one integration step
+        // below it (the round arrives at ~800 m/s of descent: a whole step is
+        // several metres of overshoot)
+        const gy = groundAt(GUN_P.x, GUN_P.z).y;
+        const f = Math.min(1, Math.max(0, (GUN_PREV.y - gy) / (GUN_PREV.y - GUN_P.y)));
+        GUN_P.lerpVectors(GUN_PREV, GUN_P, f);
         hit = "ground";
         break;
       }
@@ -1156,14 +1212,54 @@ export class Dogfight {
   }
 
   /**
+   * The gun's bore with the tiny aim assist applied. Assists only when the
+   * nearest live bandit sits inside a narrow cone of where the nose points,
+   * and then only bends the shot up to ASSIST_MAX toward the bandit's LEAD
+   * point — the spot a burst should actually be aimed at.
+   */
+  private assistBore(
+    _player: AircraftState,
+    muzzle: THREE.Vector3,
+    bore: THREE.Vector3,
+  ): THREE.Vector3 {
+    let best: THREE.Vector3 | null = null;
+    let bestAngle = ASSIST_CONE;
+    for (const b of this.bandits) {
+      if (b.catT >= 0) continue;
+      TMP.copy(b.pos).sub(muzzle);
+      const dist = TMP.length();
+      if (dist > ASSIST_RANGE) continue;
+      // lead the target like a burst should be led
+      const vel = DIR.set(0, 0, -1).applyQuaternion(b.quat).multiplyScalar(b.speed);
+      const tof = Math.min(dist / MUZZLE_V, 1.2);
+      TMP.addScaledVector(vel, tof);
+      TMP.sub(muzzle).normalize();
+      const ang = bore.angleTo(TMP);
+      if (ang < bestAngle) {
+        bestAngle = ang;
+        best = TMP.clone();
+      }
+    }
+    if (!best) return bore;
+    // pull a fraction of the remaining angle toward the lead point
+    const pull = Math.min(bestAngle, ASSIST_MAX);
+    AXIS.crossVectors(bore, best);
+    if (AXIS.lengthSq() < 1e-10) return bore;
+    AXIS.normalize();
+    return bore.clone().applyAxisAngle(AXIS, pull);
+  }
+
+  /**
    * Live bandit positions + velocities, for radar/aim-assist features and
    * headless tests. Allocates; not for per-frame hot loops.
    */
-  targets(): Array<{ pos: THREE.Vector3; vel: THREE.Vector3 }> {
-    const out: Array<{ pos: THREE.Vector3; vel: THREE.Vector3 }> = [];
+  targets(): Array<{ id: number; pos: THREE.Vector3; vel: THREE.Vector3 }> {
+    const out: Array<{ id: number; pos: THREE.Vector3; vel: THREE.Vector3 }> = [];
     for (const b of this.bandits) {
       const vel = new THREE.Vector3(0, 0, -1).applyQuaternion(b.quat).multiplyScalar(b.speed);
-      out.push({ pos: b.pos.clone(), vel });
+      // id: stable per bandit, so callers that track motion (accel estimators)
+      // do not confuse two bandits that swap nearest within a step.
+      out.push({ id: b.id, pos: b.pos.clone(), vel });
     }
     return out;
   }
@@ -1299,6 +1395,7 @@ export class Dogfight {
       fireCd: 2 + hash(id) * 2,
       burst: 0,
       evadeT: 0,
+      evadeCd: 0,
       phase: hash(id * 11.3) * Math.PI * 2,
       mesh,
       catT: 0,
@@ -1306,6 +1403,9 @@ export class Dogfight {
       catDir: new THREE.Vector3(fwd[0], 0, fwd[1]),
       climbT: 0,
       sweepT: 0,
+      abOn: false,
+      abT: 0,
+      abCool: 2,
     };
     this.setCatPose(b, def.deckY);
     this.bandits.push(b);
@@ -1342,6 +1442,10 @@ export class Dogfight {
     b.climbT = CV_CLIMB_TIME;
     b.mesh.gear.visible = false;
     b.mesh.afterburner.visible = false;
+    // the deck shot is full burner: light it as it comes off the bow
+    b.abOn = true;
+    b.abT = 4;
+    b.abCool = 0;
   }
 
   // -------------------------------------------------------------------------
@@ -2055,8 +2159,31 @@ export class Dogfight {
       player.speed > 45 &&
       dist < NOSE_BREAK_DIST &&
       PFWD.dot(TO_P) < -NOSE_CONE_COS * dist;
-    if (b.evadeT > 0) b.evadeT -= dt;
-    else if ((onSix && dist < EVADE_DIST) || nosed) b.evadeT = 4 + hash(b.id + player.time) * 2;
+    if (b.evadeT > 0) {
+      b.evadeT -= dt;
+      if (b.evadeT <= 0) b.evadeCd = 5 + hash(b.id + player.time * 1.3) * 4;
+    } else if (b.evadeCd > 0) {
+      b.evadeCd -= dt;
+    } else if ((onSix && dist < EVADE_DIST) || nosed) {
+      b.evadeT = 4 + hash(b.id + player.time) * 2;
+    }
+
+    // --- afterburner: lit for the merge, the evade and the chase; it cycles
+    // so the plume blinks like a pilot riding the burner in bursts ---
+    const wantsAb = b.evadeT > 0 || (dist > 1200 && b.climbT <= 0) || b.climbT > 0;
+    if (b.abOn) {
+      b.abT -= dt;
+      if (b.abT <= 0 || !wantsAb) {
+        b.abOn = false;
+        b.abCool = 3 + hash(b.id + player.time * 0.7) * 3;
+      }
+    } else if (b.abCool > 0) {
+      b.abCool -= dt;
+    } else if (wantsAb) {
+      b.abOn = true;
+      b.abT = BANDIT_AB_TIME;
+    }
+    b.mesh.afterburner.visible = b.abOn;
 
     if (b.evadeT > 0) {
       // jink: weave around the current heading with a climb bias
@@ -2073,6 +2200,10 @@ export class Dogfight {
       b.speed += ((dist > 3000 ? BANDIT_SPEED.pursue : BANDIT_SPEED.close) - b.speed) *
         (1 - Math.exp(-dt / 1.5));
     }
+    // The burner sets the real ceiling: dry flight tops at the player's own
+    // military thrust numbers, the burner stretches to the AB envelope.
+    const vmax = b.abOn ? BANDIT_MAX_AB : BANDIT_MAX_DRY;
+    if (b.speed > vmax) b.speed = vmax;
     // straight off the bow: climb to a fighting altitude before it hunts
     if (b.climbT > 0) {
       DESIRED.y += 0.55;
@@ -2135,7 +2266,11 @@ export class Dogfight {
       if (AXIS.lengthSq() < 1e-8) AXIS.copy(WORLD_UP);
       else AXIS.normalize();
       turnSign = Math.sign(AXIS.y);
-      FWD.applyAxisAngle(AXIS, Math.min(angle, BANDIT_TURN * dt));
+      const turnCap = Math.max(
+        Math.max(b.speed, BANDIT_SPEED.min) / BANDIT_TURN_RADIUS,
+        BANDIT_TURN_FLOOR,
+      );
+      FWD.applyAxisAngle(AXIS, Math.min(angle, turnCap * dt));
     }
     const bankTarget = angle > 0.05 ? turnSign * Math.min(angle * 1.6, 1.15) : 0;
     b.bank += (bankTarget - b.bank) * (1 - Math.exp(-dt * 2.5));
@@ -2193,13 +2328,19 @@ export class Dogfight {
     while (this.gunCd <= 0) {
       this.gunCd += 1 / rate;
       FWD.set(0, 0, -1).applyQuaternion(player.quat);
-      TMP.copy(player.pos).addScaledVector(FWD, 8);
-      this.scatter(FWD, PLAYER_SPREAD, player.time * 31.7 + this.gunCd * 97);
+      // The cue's dedicated muzzle scratch, not TMP: assistBore recomputes the
+      // lead direction into TMP, so passing TMP as the muzzle zeroed it and
+      // every round spawned from the world origin, 1500 m from the fight.
+      GUN_MUZ.copy(player.pos).addScaledVector(FWD, 8);
+      // the same slight aim assist the crosshair solution uses, so the pipper
+      // and the rounds agree exactly
+      const assisted = this.assistBore(player, GUN_MUZ, FWD);
+      this.scatter(assisted, PLAYER_SPREAD, player.time * 31.7 + this.gunCd * 97);
       // Our own rounds carry the jet's full velocity vector, so a burst fired in
       // a hard turn goes where the gun cue says rather than drifting off the bore.
       // (The bandits keep firing relative to their own frame; they are steered
       // point masses and their gunnery is tuned separately.)
-      this.spawnTracer(TMP, FWD, false, player.vel);
+      this.spawnTracer(GUN_MUZ, assisted, false, player.vel);
       // muzzle flash at the ports: the burst has to read from any camera
       // (no smoke puff here — it read as haze drifting over the nose)
       this.muzzleT = 0.055;

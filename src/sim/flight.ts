@@ -42,20 +42,30 @@ const CL0 = 0.1;
 // Moment coefficients (per unit control input / normalized rates)
 const CM_ALPHA = -0.45; // static stability, per rad
 const TRIM_CM = 0.16; // full trim authority (Cm0 offset)
-// Stability-augmentation pitch damper (rate + vertical-speed feedback). The
-// rate term tightens the short period; the vertical-speed term supplies the
-// phugoid damping the bare airframe lacks. Keep the rate term modest: it adds
-// to Cm_q, and a large Cm_q caps the alpha a sustained pull can hold (the
-// damping grows with the very turn rate the elevator is trying to build), which
-// flattens the turn. /docs: scripts/diag-turnrate.ts pins this.
-const SAS_CM = 0.075; // vertical-speed feedback authority
+// Pitch-rate damper (stability augmentation). It tightens the short period.
+// Keep it modest: it adds to Cm_q, and a large Cm_q caps the alpha a sustained
+// pull can hold (the damping grows with the very turn rate the elevator is
+// trying to build), which flattens the turn. /docs: scripts/diag-turnrate.ts
+// pins this.
+//
+// There is deliberately NO vertical-speed feedback here. An earlier build had
+// a term proportional to absolute climb rate, meant to damp the phugoid; in
+// practice it was a controller with no setpoint — every climb pushed the nose
+// down and every descent pushed it up — so releasing the stick left the jet
+// drifting to whatever attitude cancelled the term instead of settling on
+// trim. Static stability plus rate damping alone returns the nose to the
+// trimmed alpha and STOPS there, which is what a pilot expects on release.
 const SAS_Q = 10; // extra pitch-rate damping, per unit (w * c / 2V)
-const CL_BETA = 0.08; // dihedral effect per rad sideslip
+// Dihedral effect per rad sideslip. It must stay a FRACTION of aileron
+// authority (clAil ≈ 0.055): the earlier 0.08 made a one-second rudder blip
+// roll the jet harder than full aileron, which read as "the plane leans by
+// itself" and left a long spiral after every rudder touch.
+const CL_BETA = 0.018;
 // Yaw damper: a swept wing's roll-yaw coupling gives a lightly damped dutch
 // roll, which in the cockpit reads as the nose swinging side to side.
-const YD_RATE = 1.6; // yaw-rate feedback
+const YD_RATE = 2.0; // yaw-rate feedback
 const YD_BETA = 2.2; // sideslip feedback (drives rudder to kill beta)
-const CN_R = 2.0; // yaw damping per unit (w * b / 2V)
+const CN_R = 2.5; // yaw damping per unit (w * b / 2V)
 const CN_BETA = -0.12; // weathercock stability per rad (sign: beta>0 -> nose right)
 const SWEEP_ROLL_LOSS = 0.35;
 
@@ -604,13 +614,7 @@ export function stepAircraft(st: AircraftState, inp: FlightInput, dt: number): v
 
     const cm0 = (st.trim - 0.5) * TRIM_CM;
     const elev = inp.pitch * (st.stalled ? 0.7 : 1);
-    // Stability-augmentation pitch damper: bleeds off vertical drift so a
-    // nose-up command settles into a climb instead of pitching up until the
-    // wing stalls, then diving — the long-period "porpoising" that reads as
-    // the nose rocking back and forth. The pilot's own input is left alone
-    // near full deflection so the jet still responds when asked.
-    const sas = SAS_CM * clamp(st.vspeed / 22, -1, 1) * (1 - 0.6 * Math.abs(inp.pitch));
-    M.x += qSc * (cm0 + CM_ALPHA * alpha + spec.cmElev * elev - (spec.cmQ + SAS_Q) * ((st.omega.x * cM) / (2 * Math.max(V, 30))) - sas);
+    M.x += qSc * (cm0 + CM_ALPHA * alpha + spec.cmElev * elev - (spec.cmQ + SAS_Q) * ((st.omega.x * cM) / (2 * Math.max(V, 30))));
     M.z +=
       qSb *
       (CL_BETA * beta -

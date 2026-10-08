@@ -84,7 +84,7 @@ export function UiRoot({ sim, settings, onSettings }: {
     <>
       {!introDone && !account && <FirstRun onDone={() => setIntroDone(true)} />}
       {phase === "menu" && (
-        <MainMenu sim={sim} settings={settings} onSettings={onSettings} />
+        <MainMenu sim={sim} settings={settings} onSettings={onSettings} openMultiplayer={sim?.pendingRoomReentry === true} onOpenedMultiplayer={() => sim?.consumeRoomReentry()} />
       )}
       {phase !== "menu" && (
         <Hud sim={sim} daylight={settings.daylight} minimap={settings.minimap} />
@@ -269,10 +269,19 @@ function FirstRun({ onDone }: { onDone: () => void }) {
 
 type Screen = "main" | "settings" | "controls" | "multiplayer" | "feedback" | "account";
 
-function MainMenu({ sim, settings, onSettings }: {
+function MainMenu({ sim, settings, onSettings, openMultiplayer, onOpenedMultiplayer }: {
   sim: Sim | null; settings: Settings; onSettings: (s: Settings) => void;
+  openMultiplayer?: boolean; onOpenedMultiplayer?: () => void;
 }) {
-  const [screen, setScreen] = useState<Screen>("main");
+  // A dead pilot sent back to their room's lobby lands straight on the
+  // multiplayer screen (the room is still linked) instead of the main board.
+  const [screen, setScreen] = useState<Screen>(() => (openMultiplayer ? "multiplayer" : "main"));
+  useEffect(() => {
+    if (openMultiplayer) {
+      setScreen("multiplayer");
+      onOpenedMultiplayer?.();
+    }
+  }, [openMultiplayer, onOpenedMultiplayer]);
   const net = useNet(sim);
   const account = useAccount();
   const craft = AIRCRAFT_LIST.find((a) => a.id === settings.aircraft) ?? AIRCRAFT_LIST[0];
@@ -449,6 +458,7 @@ function PauseMenu({ sim, settings, onSettings }: {
 
 function ResultOverlay({ sim }: { sim: Sim }) {
   const hud = useHud(sim);
+  const live = hud.netStatus === "online" || hud.netStatus === "connecting";
   if (!hud.resultTitle) return null;
   const kind = hud.resultKind;
   // A crash already got its whole cinematic: the screen just closes it out.
@@ -470,7 +480,13 @@ function ResultOverlay({ sim }: { sim: Sim }) {
           </p>
         )}
         <div className="menu-buttons">
-          <Btn primary onClick={() => sim.restart()}>FLY AGAIN</Btn>
+          {live ? (
+            <Btn primary onClick={() => sim.returnToRoom()}>
+              BACK TO THE ROOM
+            </Btn>
+          ) : (
+            <Btn primary onClick={() => sim.restart()}>FLY AGAIN</Btn>
+          )}
           <Btn onClick={() => sim.quitToMenu()}>QUIT TO MENU</Btn>
         </div>
       </div>
@@ -643,6 +659,9 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
   const [room, setRoom] = useState(() => settings.room);
   const code = roomCode(room);
   const canConnect = code.length > 0;
+  // What the roster will actually show: the account name when there is one,
+  // else the typed callsign (falling back to the saved one until it is typed).
+  const name = account ? callsign : normalizeUsername(guest) || callsign;
 
   const online = net.status === "online";
   const connecting = net.status === "connecting";
@@ -651,9 +670,8 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
   // Persist the identity/room as they are edited, so the feedback form and the
   // next session both find them.
   const commit = () => {
-    const next = { ...settings, callsign, room: code };
-    onSettings(next);
-    if (online) sim?.setCallsign(callsign);
+    onSettings({ ...settings, callsign: name, room: code });
+    if (online) sim?.setCallsign(name);
   };
 
   return (
@@ -664,7 +682,7 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
       </p>
 
       <label className="menu-row">
-        <span>Username</span>
+        <span>Callsign</span>
         {account ? (
           <input className="menu-input" value={account.username} readOnly />
         ) : (
@@ -673,17 +691,11 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
             value={guest}
             maxLength={12}
             placeholder="PILOT"
-            onChange={(e) => setGuest(e.target.value)}
+            onChange={(e) => setGuest(normalizeUsername(e.target.value))}
             onBlur={commit}
           />
         )}
       </label>
-      {!account && (
-        <div className="menu-world-note">
-          No account — flying as a guest. Make one on the ACCOUNT screen and it
-          becomes your name everywhere.
-        </div>
-      )}
       <label className="menu-row">
         <span>Room code</span>
         <span className="row-inline">
@@ -691,7 +703,7 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
             className="menu-input"
             value={room}
             maxLength={10}
-            placeholder="F14XXXX"
+            placeholder="ANY WORD OR CODE"
             disabled={live}
             onChange={(e) => setRoom(roomCode(e.target.value))}
             onBlur={commit}
@@ -702,7 +714,7 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
             onClick={() => {
               const generated = suggestRoomCode();
               setRoom(generated);
-              onSettings({ ...settings, callsign, room: generated });
+              onSettings({ ...settings, callsign: name, room: generated });
             }}
           >
             GENERATE
@@ -710,9 +722,7 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
         </span>
       </label>
       <div className="menu-world-note">
-        {canConnect
-          ? `Room ${code} also picks the world — every pilot who types it flies the same islands.`
-          : "Type a code, or hit GENERATE for a new one. The code is what decides the world, so anyone who types it flies with you."}
+        Any word or code — everyone who types it flies the same islands with you.
       </div>
 
       <div className="mp-status">
@@ -727,7 +737,7 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
           disabled={!canConnect}
           onClick={() => {
             commit();
-            sim?.openRoom(callsign, code);
+            sim?.openRoom(name, code);
           }}
         >
           OPEN ROOM
@@ -736,7 +746,7 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
           disabled={!canConnect}
           onClick={() => {
             commit();
-            sim?.joinRoom(callsign, code);
+            sim?.joinRoom(name, code);
           }}
         >
           JOIN ROOM
@@ -747,10 +757,6 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
         <>
           <div className="mp-tally">
             {net.host ? "HOST" : "FLIGHT MEMBER"} · {net.pilots.length} LINKED
-          </div>
-          <div className="menu-world-note">
-            World from code {net.room} — nothing about the terrain is sent, each
-            pilot builds the same islands from the code.
           </div>
           <div className="mp-roster">
             {net.pilots.length === 0 && (
@@ -774,11 +780,61 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
         </>
       )}
 
-      {/* Only the host picks the sortie: the room lifts off together, so a
-          wingman's job is to be in the lobby when it does. */}
+      {/* Only the host picks the sortie and its settings: the room lifts off
+          together, so a wingman's job is to be in the lobby when it does. */}
       {online && net.host && (
         <div className="mp-launch">
-          <span className="menu-world-label">START THE FLIGHT</span>
+          <span className="menu-world-label">LAUNCH SETUP</span>
+          <div className="menu-world">
+            <span className="menu-world-label">MISSION</span>
+            <div className="menu-world-chips">
+              {(Object.keys(MISSION_MODE_LABELS) as MissionMode[]).map((m) => (
+                <button
+                  key={m}
+                  className={"world-chip" + (settings.missionMode === m ? " on" : "")}
+                  title={MISSION_MODE_LABELS[m]}
+                  onClick={() => onSettings({ ...settings, missionMode: m })}
+                >
+                  {MISSION_MODE_CHIPS[m]}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="menu-world">
+            <span className="menu-world-label">AIRCRAFT</span>
+            <div className="menu-world-chips">
+              {AIRCRAFT_LIST.map((a) => (
+                <button
+                  key={a.id}
+                  className={"world-chip" + (a.id === settings.aircraft ? " on" : "")}
+                  onClick={() => onSettings({ ...settings, aircraft: a.id })}
+                >
+                  {a.name}
+                </button>
+              ))}
+            </div>
+          </div>
+          <label className="menu-row">
+            <span>Daylight</span>
+            <select
+              value={settings.daylight}
+              onChange={(e) => onSettings({ ...settings, daylight: e.target.value as DaylightMode })}
+            >
+              {(Object.keys(DAYLIGHT_LABELS) as DaylightMode[]).map((m) => (
+                <option key={m} value={m}>{DAYLIGHT_LABELS[m]}</option>
+              ))}
+            </select>
+          </label>
+          {settings.daylight === "fixed" && (
+            <label className="menu-row">
+              <span>Time of day</span>
+              <input
+                type="range" min={0} max={24} step={0.25}
+                value={settings.timeOfDay}
+                onChange={(e) => onSettings({ ...settings, timeOfDay: Number(e.target.value) })}
+              />
+            </label>
+          )}
           <div className="menu-row-btns">
             <Btn primary onClick={() => sim?.startRoomMission("carrier")}>
               CARRIER LAUNCH
@@ -788,8 +844,7 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
             </Btn>
           </div>
           <div className="menu-world-note">
-            The room lifts off together — every wingman still in the lobby joins
-            your mission, on the same boat.
+            The room lifts off together with these settings.
           </div>
         </div>
       )}
@@ -797,8 +852,7 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
         <div className="mp-launch">
           <span className="menu-world-label">WAITING FOR THE HOST</span>
           <div className="menu-world-note">
-            The host starts the flight — stay in the lobby and you lift off with
-            the room, on the same boat.
+            Stay in the lobby — you lift off with the room when the host launches.
           </div>
         </div>
       )}

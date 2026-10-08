@@ -209,6 +209,63 @@ export class ExplosionField {
     });
   }
 
+  /**
+   * A jet coming apart: the airframe breaks into tumbling grey pieces that
+   * arc away from the break-up, with fire between them. Called at the fatal
+   * break-up so the death screen shows the plane actually blowing apart, not
+   * just a fireball sprite.
+   */
+  spawnBreakup(at: THREE.Vector3, quality: Quality = this.quality): void {
+    // fire puffs between the pieces
+    const puffs = quality === "low" ? 3 : 6;
+    for (let i = 0; i < puffs; i++) {
+      const dir = this.randomDir(0.6);
+      this.emit(this.fire, at, dir.multiplyScalar(9 + this.rnd() * 12), {
+        size0: 6, size1: 17, ttl: 0.5 + this.rnd() * 0.4,
+        opacity: 0.95, rise: 4, drag: 1.1, hot: 0xfff3c4, cool: 0xff4a08,
+      });
+    }
+    // the airframe itself: big flat grey pieces — wings, tail, fuselage
+    // sections — flung outward and tumbling, each burning at the torn edge
+    const pieces = quality === "low" ? 5 : 9;
+    for (let i = 0; i < pieces; i++) {
+      const dir = this.randomDir(0.75);
+      this.emit(this.debris, at, dir.multiplyScalar(14 + this.rnd() * 22), {
+        size0: 1.6 + this.rnd() * 2.6,
+        size1: 1.6 + this.rnd() * 2.6,
+        ttl: 2.2 + this.rnd() * 1.6,
+        opacity: 0.95,
+        gravity: 9.81,
+        drag: 0.1,
+        spin: 4 + this.rnd() * 9,
+        hot: 0x9aa0a6,
+        cool: 0x5b6066,
+      });
+    }
+    // small burning shards
+    const shards = quality === "low" ? 5 : 10;
+    for (let i = 0; i < shards; i++) {
+      const dir = this.randomDir(0.9);
+      this.emit(this.debris, at, dir.multiplyScalar(22 + this.rnd() * 30), {
+        size0: 0.5 + this.rnd() * 0.8,
+        size1: 0.5 + this.rnd() * 0.8,
+        ttl: 1.6 + this.rnd() * 1.2,
+        opacity: 0.9,
+        gravity: 9.81,
+        drag: 0.12,
+        spin: 7 + this.rnd() * 12,
+        hot: 0xffb060,
+        cool: 0x2a2224,
+      });
+    }
+    // a long smoke column so the fall keeps reading
+    this.emit(this.smoke, at, UP.clone().multiplyScalar(5), {
+      size0: 9, size1: 34, ttl: 3.4, opacity: 0.75, rise: 7, drag: 0.4,
+      hot: 0x2c2724, cool: 0x7d7a74,
+    });
+    this.flashLight(at, 26000);
+  }
+
   // -------------------------------------------------------------------------
 
   private fireball(at: THREE.Vector3, air: boolean, scale: number): void {

@@ -48,12 +48,15 @@ function openWater(): Vector3 {
   return new Vector3(0, 1500, 0);
 }
 
-/** A clean player state parked in mid-air, nose north, 200 m/s. */
+/** A clean player state parked in mid-air, nose north, at a realistic 260 m/s
+ *  Tomcat cruise — faster than the bandits' handicapped envelope (240 dry /
+ *  265 burner), which is the whole point of that handicap. */
+const PLAYER_SPEED = 260;
 function airPlayer(): AircraftState {
   const st = spawnAircraft("airfield", 0);
   st.pos.copy(openWater());
-  st.vel.set(0, 0, -200);
-  st.speed = 200; // stepAircraft keeps this in lockstep with vel; tests must too
+  st.vel.set(0, 0, -PLAYER_SPEED);
+  st.speed = PLAYER_SPEED; // stepAircraft keeps this in lockstep with vel; tests must too
   st.gearDown = false;
   st.gearT = 0;
   st.onGround = false;
@@ -65,11 +68,58 @@ function face(st: AircraftState, target: Vector3): void {
   DIR.copy(target).sub(st.pos).normalize();
   MAT4.lookAt(ORIGIN, DIR, UP);
   st.quat.setFromRotationMatrix(MAT4);
-  st.vel.copy(DIR).multiplyScalar(200);
-  st.speed = 200;
+  st.vel.copy(DIR).multiplyScalar(PLAYER_SPEED);
+  st.speed = PLAYER_SPEED;
 }
 
-/** Vector the player at the nearest bandit's lead point (used by two sections). */
+/**
+ * Vector the player at the nearest bandit's intercept point (used by two
+ * sections). The bore solves the actual intercept: the round flies at muzzle
+ * speed along the bore INHERITING the jet's velocity, while the bandit flies at
+ * its own — so the time of flight closes the loop on the RELATIVE velocity and
+ * the aim pre-compensates gravity droop. Aiming at plain `pos + vel * d/v` in
+ * a head-on merge over-leads by tens of metres and every round misses.
+ */
+const MUZZLE_SPEED = 1050;
+/** The nearest target's measured jink acceleration, remembered between calls so
+ *  the intercept can predict a weaving bandit: p(t) = p + v·t + ½a·t². A
+ *  straight-line intercept against a bandit mid-jink misses by tens of metres.
+ *  Tracked PER BANDIT ID: two bandits that swap nearest within a step would
+ *  otherwise read as a single aircraft with a huge spurious acceleration. */
+const lastByBandit = new Map<number, { pos: Vector3; vel: Vector3 }>();
+const targetAccel = new Vector3();
+function updateTargetAccel(
+  target: { id?: number; pos: Vector3; vel: Vector3 },
+): void {
+  const last = target.id !== undefined ? lastByBandit.get(target.id) : undefined;
+  if (
+    last &&
+    last.pos.distanceTo(target.pos) < 50 // same aircraft, one step later
+  ) {
+    targetAccel.copy(target.vel).sub(last.vel).divideScalar(DT);
+  } else {
+    targetAccel.set(0, 0, 0);
+  }
+  if (target.id !== undefined) {
+    lastByBandit.set(target.id, { pos: target.pos.clone(), vel: target.vel.clone() });
+  }
+}
+function interceptDir(
+  player: AircraftState,
+  target: { pos: Vector3; vel: Vector3 },
+): Vector3 {
+  updateTargetAccel(target);
+  const w = target.pos.clone().sub(player.pos);
+  const rel = target.vel.clone().sub(player.vel); // bandit motion in the jet's frame
+  let tof = w.length() / MUZZLE_SPEED;
+  for (let i = 0; i < 4; i++) {
+    tof = w.clone().addScaledVector(rel, tof).length() / MUZZLE_SPEED;
+  }
+  // bore target: the intercept point minus where inheritance carries the round
+  const aim = w.addScaledVector(rel, tof).addScaledVector(targetAccel, 0.5 * tof * tof);
+  aim.y += 0.5 * 9.81 * tof * tof; // gravity droop over the flight
+  return aim;
+}
 function aimAtNearest(df: Dogfight, player: AircraftState): boolean {
   const targets = df.targets();
   if (targets.length === 0) return false;
@@ -82,8 +132,7 @@ function aimAtNearest(df: Dogfight, player: AircraftState): boolean {
       best = t;
     }
   }
-  const tof = bestD / (1000 + player.vel.length());
-  face(player, best.pos.clone().addScaledVector(best.vel, tof));
+  face(player, player.pos.clone().add(interceptDir(player, best)));
   return true;
 }
 
@@ -240,7 +289,12 @@ check("one designator per bandit", spotsMatch);
 check("gun cue leads moving bandits", sawLead);
 
 // --- 5. aimed player scores kills, and wave 2 also comes off the deck ---
+// Same invulnerable hull as section 4: this section validates gunnery and the
+// wave cycle, and the faster merge geometry now produces honest mid-airs (a
+// bandit inside the player's footprint takes BOTH out) that would otherwise
+// end this pilot before the wave cycle is exercised.
 player = airPlayer();
+player.spec = { ...player.spec, hull: 1_000_000 };
 df.begin(player);
 let kills = 0;
 let waveKillsDone = false;
@@ -303,7 +357,7 @@ df.begin(player);
     const t2 = df.targets();
     if (idx >= 0 && idx < t2.length) {
       // once it is inside break range, a threatened bandit should wind up to
-      // its evade speed (270), well above the 215-235 it cruises at otherwise
+      // its evade speed (255), well above the 190-205 it cruises at otherwise
       if (t2[idx].pos.distanceTo(player.pos) < 1400) closed = true;
       if (closed) maxSpeed = Math.max(maxSpeed, t2[idx].vel.length());
     }
@@ -427,9 +481,7 @@ df.begin(player);
 //
 // The crosshair is only useful if it is where the bullets actually go, so this
 // pins the three states the HUD colours: a bandit on the nose, the sea, and the
-// enemy boat's deck. The muzzle speed is a sim constant (1050 m/s); the test
-// only uses it to work out a lead, so a change there just re-aims the test.
-const MUZZLE = 1050;
+// enemy boat's deck. The muzzle speed lives in interceptDir above.
 {
   // A fresh fight: the section above has just sunk its boat, and a sunk boat
   // launches nothing, so the crosshair needs its own live carrier.
@@ -445,7 +497,7 @@ const MUZZLE = 1050;
   let calledBandit = false;
   for (let i = 0; i < Math.round(180 / DT) && !calledBandit; i++) {
     const targets = gdf.targets();
-    let best: { pos: Vector3; vel: Vector3 } | null = null;
+    let best: { id?: number; pos: Vector3; vel: Vector3 } | null = null;
     let bestD = Infinity;
     for (const t of targets) {
       const d = t.pos.distanceTo(player.pos);
@@ -454,14 +506,11 @@ const MUZZLE = 1050;
         best = t;
       }
     }
-    if (best && bestD < 1200) {
-      // lead the bandit, then let the cue report what the burst would hit
-      let aim = best.pos.clone();
-      for (let k = 0; k < 3; k++) {
-        const d = aim.distanceTo(player.pos);
-        aim = best.pos.clone().addScaledVector(best.vel, d / (MUZZLE + player.vel.length()));
-      }
-      face(player, aim);
+    if (best && bestD < 2400) {
+      // fly the intercept the pipper would give, then let the cue report what
+      // the burst would hit (2400 m is the tracer's full 2 s reach, and the
+      // jink-free zone where the solution is clean)
+      face(player, player.pos.clone().add(interceptDir(player, best)));
       const cue = gdf.gunSolution(player);
       if (cue.hit === "bandit") {
         calledBandit = true;
@@ -470,6 +519,11 @@ const MUZZLE = 1050;
           `cue ${cue.range.toFixed(0)} m`);
         check("a bandit in the cone reads as live", cue.live, `${cue.t.toFixed(2)} s`);
       }
+    } else if (best) {
+      // close on the bandits: a pilot steers toward the fight, he does not fly
+      // a blind straight line past it (the carrier's spawn fan can sit well off
+      // the initial heading)
+      face(player, best.pos);
     }
     player.time += DT;
     player.pos.addScaledVector(player.vel, DT);

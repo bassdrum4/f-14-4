@@ -289,6 +289,12 @@ export class Sim {
    * the fireball for a beat before the results take over. Null when alive.
    */
   private crashSeq: { falling: boolean; t: number; smokeT: number } | null = null;
+  /** One-shot: the next menu should open on the multiplayer screen (a dead
+   *  pilot returning to their room's lobby). */
+  private pendingRoom = false;
+  /** The jet broke apart at the fatal hit: the mesh stays hidden for the rest
+   *  of the replay and only reappears on the next flight. */
+  private breakupHide = false;
   private pickOrigin = new THREE.Vector3();
   private pickDir = new THREE.Vector3();
   /** Multiplayer: wingmen meshes, the P2P session, and its latest state. */
@@ -463,6 +469,8 @@ export class Sim {
     this.mission = mission;
     this.endPod();
     this.crashSeq = null;
+    this.pendingRoom = false;
+    this.breakupHide = false;
     this.state = spawnAircraft(mission, carrierIndex, this.settings.aircraft);
     // size the racks and hull for this airframe before the fight is armed
     this.df.setAircraft(this.state);
@@ -516,10 +524,37 @@ export class Sim {
     this.beginMission(this.mission, this.spawnCarrier);
   }
 
+  /**
+   * A dead (or trapped) pilot in a live room goes back to the room's lobby
+   * instead of into a fresh solo flight: the session stays linked, the lobby
+   * opens on the multiplayer screen, and the next room launch — the host's, or
+   * their own if they host — lifts them off with everyone else. Solo death
+   * keeps the plain restart.
+   */
+  returnToRoom(): void {
+    if (this.netState.status !== "online" && this.netState.status !== "connecting") {
+      this.restart();
+      return;
+    }
+    this.pendingRoom = true;
+    this.quitToMenu();
+  }
+
+  /** The menu reads this to open on the multiplayer screen after a death. */
+  get pendingRoomReentry(): boolean {
+    return this.pendingRoom;
+  }
+
+  /** Clear the one-shot reentry flag once the lobby has opened on it. */
+  consumeRoomReentry(): void {
+    this.pendingRoom = false;
+  }
+
   quitToMenu(): void {
     this.dfArmed = false;
     this.endPod();
     this.crashSeq = null;
+    this.breakupHide = false;
     this.df.clear();
     this.state = spawnAircraft(this.mission, this.spawnCarrier, this.settings.aircraft);
     this.rig.resetFollow();
@@ -794,13 +829,19 @@ export class Sim {
 
   /**
    * Start the crash replay: the jet is beyond saving, so the camera pulls out
-   * to a third-person orbit and the airframe is left to fall. The fatal hit
-   * itself flashes once; the big detonation waits for the ground.
+   * to a third-person orbit, the airframe BLOWS APART into tumbling pieces,
+   * and the fireball is left to fall. The big ground detonation still waits
+   * for whatever the wreck hits.
    */
   private beginCrashReplay(): void {
     this.crashSeq = { falling: true, t: 0, smokeT: 0 };
     this.state.crashFall = true;
-    this.explosions.spawn(this.state.pos, "air", 0.55);
+    // the jet visibly comes apart: pieces and fire instead of a rigid airframe
+    this.explosions.spawnBreakup(this.state.pos);
+    this.explosions.spawn(this.state.pos, "air", 0.7);
+    // the intact jet is gone — only the debris cloud falls from here
+    this.breakupHide = true;
+    this.renderer.jetGroup.visible = false;
   }
 
   /**
@@ -1053,7 +1094,8 @@ export class Sim {
     // hide the airframe in the cockpit (you are inside it) and in the target
     // pod (the sensor sees past it)
     const inside = this.rig.mode === "cockpit" || this.rig.mode === "pod";
-    this.renderer.jetGroup.visible = !inside || this.phase === "menu" || this.crashSeq !== null;
+    this.renderer.jetGroup.visible =
+      !this.breakupHide && (!inside || this.phase === "menu" || this.crashSeq !== null);
     // menu attract mode: slow orbit
     if (this.phase === "menu") {
       this.rig.mode = "action";
