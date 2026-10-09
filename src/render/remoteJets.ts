@@ -1,10 +1,14 @@
-// Remote aircraft for multiplayer: one mesh per wingman, interpolated between
-// the packets that arrive from the net layer. The netcode itself lives in
+// Remote aircraft for multiplayer: one mesh per wingman, driven from the
+// packets that arrive from the net layer. The netcode itself lives in
 // ../net/multiplayer.ts; this file only turns decoded poses into smooth motion.
 //
-// Position and orientation are interpolated a little behind the newest packet
-// (a jitter buffer) and extrapolated along the last known velocity when a
-// packet is late, so a wingman crossing at Mach 1 does not stutter.
+// A wingman is drawn at "now", not behind it. Each remote keeps a presented
+// clock that rides real time and is pulled onto the newest packet plus the
+// measured one-way delay, so the aircraft is where the pilot is rather than one
+// send interval in the past. Corrections are eased in a few milliseconds at a
+// time (and a hopelessly stale remote snaps forward), which is what keeps the
+// formation smooth while the link is being chased; between packets the pose is
+// carried along the last known velocity.
 
 import * as THREE from "three";
 import { buildAircraft, type TomcatMesh } from "./geometry";
@@ -34,7 +38,25 @@ export const FLAG_SPEEDBRAKE = 8;
 export const FLAG_STALLED = 16;
 export const FLAG_AB = 32;
 
-const INTERP_MS = 110; // render this far behind the newest packet
+/**
+ * One-way link delay in ms, estimated by the net layer from the peer
+ * connection's own RTT (never from extra traffic). The presented clock targets
+ * the newest packet plus this, i.e. where the wingman is right now. */
+let linkDelayMs = 25;
+export function setLinkDelayMs(ms: number): void {
+  linkDelayMs = Math.min(150, Math.max(6, ms));
+}
+export function getLinkDelayMs(): number {
+  return linkDelayMs;
+}
+
+/** How quickly the presented clock is walked onto its target (ms). */
+const CORR_TAU_MS = 70;
+/** Per-frame limits on a correction, so no packet ever causes a visible pop. */
+const MAX_LURCH_MS = 9; // forward: catching up on a remote that slipped behind
+const MAX_BACKSTEP_MS = 6; // backward: easing off when we are running early
+/** Past this much error the remote is simply out of date: snap it. */
+const MAX_BEHIND_MS = 350;
 const MAX_EXTRAP_MS = 600; // keep flying on velocity this long after a gap
 const STALE_MS = 2500; // dim the label when the peer goes quiet
 const GONE_MS = 12000; // hide a peer that has stopped sending entirely
@@ -58,6 +80,10 @@ interface RemoteEntity {
   tagTex: THREE.CanvasTexture;
   buf: Snapshot[];
   lastAt: number;
+  /** The instant this aircraft is being drawn at, on our clock (ms). */
+  presentT: number;
+  /** False until the first packet places the clock (then it eases, never snaps). */
+  placed: boolean;
 }
 
 /** A callsign label drawn onto a canvas sprite (cached per remote). */
@@ -105,6 +131,8 @@ const Q_B = new THREE.Quaternion();
 export class RemoteFleet {
   private root = new THREE.Group();
   private remotes = new Map<string, RemoteEntity>();
+  /** Wall clock of the previous update, for the presented clock's advance. */
+  private lastUpdateAt = 0;
 
   constructor(scene: THREE.Scene) {
     scene.add(this.root);
@@ -128,7 +156,18 @@ export class RemoteFleet {
     this.root.add(mesh.group);
     const { tag, texture } = makeTag(name);
     this.root.add(tag);
-    this.remotes.set(id, { id, name, aircraft, mesh, tag, tagTex: texture, buf: [], lastAt: 0 });
+    this.remotes.set(id, {
+      id,
+      name,
+      aircraft,
+      mesh,
+      tag,
+      tagTex: texture,
+      buf: [],
+      lastAt: 0,
+      presentT: 0,
+      placed: false,
+    });
   }
 
   /** Update the callsign label (e.g. the pilot renamed themselves). */
@@ -231,8 +270,12 @@ export class RemoteFleet {
     return { id: best.id, name: best.name, km: bestD / 1000, brgDeg: (brg + 360) % 360 };
   }
 
-  /** Interpolate every remote and drive its mesh. Called once per frame. */
+  /** Place every remote at the present moment and drive its mesh. Once a frame. */
   update(nowMs: number): void {
+    // The presented clock rides real time between corrections; clamp the step so
+    // a stalled frame (a tab coming back) cannot fling every remote forward.
+    const dtMs = this.lastUpdateAt === 0 ? 0 : Math.min(Math.max(nowMs - this.lastUpdateAt, 0), 250);
+    this.lastUpdateAt = nowMs;
     for (const r of this.remotes.values()) {
       const buf = r.buf;
       if (!buf.length) continue;
@@ -245,8 +288,27 @@ export class RemoteFleet {
       r.mesh.group.visible = true;
       r.tag.visible = true;
 
-      const rt = nowMs - INTERP_MS;
-      // newest snapshot at or before render time, and the one after it
+      // Where the wingman is now: their newest packet, carried forward by the
+      // one-way delay the net layer measured. The presented clock is walked
+      // onto that target, a few ms at a time, instead of being snapped to it.
+      const newest = buf[buf.length - 1];
+      const target = newest.t + linkDelayMs;
+      if (!r.placed) {
+        r.presentT = target;
+        r.placed = true;
+      } else {
+        r.presentT += dtMs;
+        const err = target - r.presentT;
+        if (err > MAX_BEHIND_MS) {
+          r.presentT = target; // far too stale to ease: this is a rejoin
+        } else {
+          const ease = err * (1 - Math.exp(-dtMs / CORR_TAU_MS));
+          r.presentT += Math.min(MAX_LURCH_MS, Math.max(-MAX_BACKSTEP_MS, ease));
+        }
+      }
+      const rt = r.presentT;
+
+      // newest snapshot at or before the presented time, and the one after it
       let a: Snapshot | null = null;
       let b: Snapshot | null = null;
       for (let i = buf.length - 1; i >= 0; i--) {
@@ -257,8 +319,11 @@ export class RemoteFleet {
         }
       }
       if (!a) {
+        // No packet is old enough: the clock is behind the oldest one in the
+        // buffer (the measured lead just shrank). Start from that packet and
+        // interpolate forward from it.
         a = buf[0];
-        b = buf[1] ?? null;
+        b = buf.length > 1 && buf[1].t <= rt ? buf[1] : null;
       }
 
       if (a && b) {

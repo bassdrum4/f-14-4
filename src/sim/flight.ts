@@ -41,7 +41,34 @@ const CL0 = 0.1;
 
 // Moment coefficients (per unit control input / normalized rates)
 const CM_ALPHA = -0.45; // static stability, per rad
-const TRIM_CM = 0.16; // full trim authority (Cm0 offset)
+
+// --- pitch: the stick points the nose, the elevator holds it there ---
+// The elevator used to command a fixed alpha for each stick position, which is
+// a permanent load factor: at any speed above the one that alpha trims to, a
+// held stick pulled the jet into a climb that never ended (pull a little at
+// cruise and it climbed and climbed until the stall broke it back down). Now the
+// stick walks a commanded ATTITUDE (a rate command, integrated) and the
+// elevator drives the nose to it. Centre the stick and that attitude is frozen,
+// so the jet keeps the attitude it was pointed at instead of rotating on its
+// own, and a stick nobody is holding can never loop it. Holding the attitude is
+// also what restores speed stability: the alpha (attitude minus flight path)
+// shrinks as the path rises, so the phugoid settles instead of wandering.
+// This is NOT an autolevel: the wings are not levelled, no altitude is held and
+// it does not fight the pilot — but static stability still drops the nose when
+// the wing gives up at the stall.
+const PITCH_RATE_MAX = 0.8; // rad/s: as fast as a full stick walks the nose
+const PITCH_ATT_GAIN = 7; // commanded rate per rad of attitude error, 1/s
+const PITCH_RATE_GAIN = 1.1; // full elevator at this rate error, 1/(rad/s)
+const PITCH_REF_LIMIT = 1.1; // rad (~63 deg): the reference cannot wind up
+/** Elevator authority floor, as the dynamic pressure of a 95 m/s (~185 kt) flow.
+ *  Control power scales with q, so without this the flare went mushy exactly
+ *  where the pilot needs it most. Above that speed the aero does the work. */
+const ELEV_Q_FLOOR = 0.5 * 1.225 * 95 * 95;
+/** Trim rides the same command as a slow nose bias (rad/s at full trim). It
+ *  bleeds back to centre when the pilot is not trimming, so a trim left wound
+ *  up cannot leave the jet climbing by itself. */
+const TRIM_RATE_BIAS = 0.07;
+const TRIM_BLEED_TAU = 6; // s
 // Pitch-rate damper (stability augmentation). It tightens the short period.
 // Keep it modest: it adds to Cm_q, and a large Cm_q caps the alpha a sustained
 // pull can hold (the damping grows with the very turn rate the elevator is
@@ -52,9 +79,10 @@ const TRIM_CM = 0.16; // full trim authority (Cm0 offset)
 // a term proportional to absolute climb rate, meant to damp the phugoid; in
 // practice it was a controller with no setpoint — every climb pushed the nose
 // down and every descent pushed it up — so releasing the stick left the jet
-// drifting to whatever attitude cancelled the term instead of settling on
-// trim. Static stability plus rate damping alone returns the nose to the
-// trimmed alpha and STOPS there, which is what a pilot expects on release.
+// drifting to whatever attitude cancelled the term instead of settling.
+// Static stability, the airframe's own rate damping and the elevator's rate
+// loop are all that act on the nose, and none of them has an opinion about
+// altitude: release the stick and the nose simply stops moving.
 const SAS_Q = 10; // extra pitch-rate damping, per unit (w * c / 2V)
 // Dihedral effect per rad sideslip. It must stay a FRACTION of aileron
 // authority (clAil ≈ 0.055): the earlier 0.08 made a one-second rudder blip
@@ -157,6 +185,16 @@ export const CAT_TIME = CAT_V_END / CAT_ACCEL;
 
 const ARREST_DECEL = 27; // m/s^2 (~2.75 g)
 
+// --- the trap ---
+/** How hard a jet may arrive before the gear gives way (m/s of sink, negative
+ *  = descending). 7.5 m/s is ~1480 fpm: a punishing but recoverable arrival,
+ *  and it leaves the 4 deg glideslope (about 4.5 m/s at on-speed) plenty of
+ *  room to be flown imperfectly. Anything gentler than this lands. */
+const HARD_SINK = -7.5;
+/** A touchdown counts as a trap if the jet is at least this descending — a
+ *  fraction of a metre a second, so a greased-on landing still catches a wire. */
+const TRAP_MAX_CLIMB = -0.05;
+
 // --- approach guidance (the boat's own MEZ/IFLOLS, simulated) ---
 /** The glideslope the landing area expects: 4 degrees, real CVN practice. */
 export const GLIDE_DEG = 4;
@@ -180,6 +218,28 @@ export interface GlideState {
   lineupM: number;
   /** Deck of the boat being flown onto. */
   carrier: CarrierDef;
+  /** The speed the approach is flown at (knots) in this configuration, at the
+   *  jet's altitude. The answer to "what speed do I land this at?" */
+  onSpeedKt: number;
+  /** The angle of attack that goes with it (degrees) — the indexer's on-speed. */
+  onSpeedAoaDeg: number;
+}
+
+/**
+ * The landing configuration's on-speed: the level-flight speed the wing holds at
+ * the approach alpha (80% of the stall) with gear and flaps down. It is what the
+ * ball is flown at and what the touch-down sink comes from (4 deg of glide at
+ * this speed is about 4.5 m/s of descent). Airframe-dependent, in knots.
+ */
+export function approachSpeed(
+  spec: AircraftSpec,
+  altM: number,
+): { onSpeedKt: number; onSpeedAoaDeg: number } {
+  const aoa = spec.alphaStall * 0.8;
+  const cl = CL0 + spec.flapLift + spec.clAlpha * aoa;
+  const rho = atmosphere(altM).rho;
+  const v = Math.sqrt((spec.mass * GRAVITY) / (0.5 * rho * spec.sWing * cl));
+  return { onSpeedKt: v * 1.94384, onSpeedAoaDeg: (aoa * 180) / Math.PI };
 }
 
 // ---------------------------------------------------------------------------
@@ -237,6 +297,9 @@ export interface AircraftState {
   sbT: number; // 0..1
   brakeOn: boolean;
   trim: number; // 0..1 (0.5 = neutral)
+  /** Commanded pitch attitude (rad). The stick walks it, the elevator holds
+   *  the nose on it; it only moves when the pilot asks. See PITCH_RATE_MAX. */
+  pitchRef: number;
   sweepT: number; // 0..1 (0 = 20deg, 1 = 68deg)
   sweep: number; // smoothed degrees
 
@@ -335,11 +398,14 @@ export function glideStateFor(st: AircraftState): GlideState | null {
   const pathY = c.deckY + groundRange * Math.tan((GLIDE_DEG * Math.PI) / 180);
   // d is measured perpendicular to the angled centreline (the strip frame the
   // deck paint and the wires use), so it *is* the lineup error; + = starboard.
+  const speed = approachSpeed(st.spec, st.pos.y);
   return {
     rangeM,
     deviationM: st.pos.y - pathY,
     lineupM: d,
     carrier: c,
+    onSpeedKt: speed.onSpeedKt,
+    onSpeedAoaDeg: speed.onSpeedAoaDeg,
   };
 }
 
@@ -391,6 +457,7 @@ export function spawnAircraft(
     sbT: 0,
     brakeOn: false,
     trim: 0.5,
+    pitchRef: 0,
     sweepT: 0,
     sweep: spec.sweepMin,
     speed: 0,
@@ -473,8 +540,12 @@ export function stepAircraft(st: AircraftState, inp: FlightInput, dt: number): v
   // --- systems ---
   if (inp.throttleUp) st.throttle = clamp(st.throttle + dt * 0.5, 0, 1);
   if (inp.throttleDown) st.throttle = clamp(st.throttle - dt * 0.5, 0, 1);
+  // Trim walks the nose at a slow rate while held (see TRIM_RATE_BIAS) and
+  // bleeds back to centre when it is not, so a forgotten trim cannot leave the
+  // jet climbing on its own.
   if (inp.trimUp) st.trim = clamp(st.trim + dt * 0.35, 0, 1);
-  if (inp.trimDown) st.trim = clamp(st.trim - dt * 0.35, 0, 1);
+  else if (inp.trimDown) st.trim = clamp(st.trim - dt * 0.35, 0, 1);
+  else st.trim += (0.5 - st.trim) * (1 - Math.exp(-dt / TRIM_BLEED_TAU));
   st.brakeOn = inp.brake || st.catPhase === "ready" || st.catPhase === "charging";
 
   const rpmTau = st.throttle > st.rpm ? 1.2 : 1.8;
@@ -519,6 +590,9 @@ export function stepAircraft(st: AircraftState, inp: FlightInput, dt: number): v
     // off the deck and the 6 deg launch rotate are both ramped in over the
     // first third of the stroke instead of being set on the first step.
     const rise = smooth01(st.catProgress / 0.35);
+    // The launch rotates the jet: the commanded attitude rides with it, so the
+    // bridle-off attitude is the one the jet holds as it leaves the deck.
+    st.pitchRef = 0.105 * rise;
     st.pos.y = c.deckY + 2.4 - (2.4 - rideHeight(st.spec)) * (1 - rise);
     st.quat.copy(headingQuat(c.headingDeg)).multiply(
       CAT_ROT.setFromAxisAngle(AXIS_X, 0.105 * rise),
@@ -551,6 +625,8 @@ export function stepAircraft(st: AircraftState, inp: FlightInput, dt: number): v
   st.vspeed = st.vel.y;
   BFWD.set(0, 0, -1).applyQuaternion(st.quat);
   st.headingDeg = ((Math.atan2(BFWD.x, -BFWD.z) * 180) / Math.PI + 360) % 360;
+  // Pitch attitude: what the pitch command holds the nose on (see PITCH_RATE_MAX).
+  const pitchAtt = Math.asin(clamp(BFWD.y, -1, 1));
 
   // wing sweep (auto, mach-linked). Fixed-wing types hold their sweep.
   const spec = st.spec;
@@ -612,9 +688,40 @@ export function stepAircraft(st: AircraftState, inp: FlightInput, dt: number): v
     const qSb = qbar * spec.sWing * bM;
     const rollAuth = 1 - SWEEP_ROLL_LOSS * sweepN;
 
-    const cm0 = (st.trim - 0.5) * TRIM_CM;
-    const elev = inp.pitch * (st.stalled ? 0.7 : 1);
-    M.x += qSc * (cm0 + CM_ALPHA * alpha + spec.cmElev * elev - (spec.cmQ + SAS_Q) * ((st.omega.x * cM) / (2 * Math.max(V, 30))));
+    // Elevator + pitch damper authority gets a floor at low speed (the flare),
+    // while static stability stays physical: it is the wing's answer, not the
+    // pilot's, and it is what drops the nose at the stall.
+    const qScCtrl = Math.max(qSc, ELEV_Q_FLOOR * spec.sWing * cM);
+    const qHat = (st.omega.x * cM) / (2 * Math.max(V, 30));
+    // 1. the stick (and the trim wheel) walks the commanded attitude
+    st.pitchRef +=
+      inp.pitch * PITCH_RATE_MAX * clamp(110 / Math.max(V, 110), 0.42, 1) * dt;
+    st.pitchRef += (st.trim - 0.5) * TRIM_RATE_BIAS * dt;
+    const path = Math.asin(clamp(st.vel.y / Math.max(V, 1), -1, 1));
+    // The reference may never sit past the stall, or chasing it would hold the
+    // nose up in a deep stall. The limit rides the flight path, so a stall that
+    // drops the nose drags the reference down with it.
+    st.pitchRef = clamp(
+      st.pitchRef,
+      Math.max(-PITCH_REF_LIMIT, path - spec.alphaStall * 1.4),
+      Math.min(PITCH_REF_LIMIT, path + spec.alphaStall * 1.25),
+    );
+    // 2. the elevator drives the nose to it: attitude error asks for a rate,
+    //    the airframe's own rate damping (below) holds the short period.
+    let qCmd = clamp(
+      PITCH_ATT_GAIN * (st.pitchRef - pitchAtt),
+      -PITCH_RATE_MAX,
+      PITCH_RATE_MAX,
+    );
+    // AoA limiter: past the buffer the tail can no longer keep pulling, which is
+    // what still lets a stall drop the nose even with the stick held back.
+    if (qCmd > 0) {
+      qCmd *= clamp((spec.alphaStall * 1.25 - alpha) / (spec.alphaStall * 0.45), 0, 1);
+    }
+    const elev = clamp(PITCH_RATE_GAIN * (qCmd - st.omega.x), -1, 1) * (st.stalled ? 0.7 : 1);
+    M.x +=
+      qSc * CM_ALPHA * alpha +
+      qScCtrl * (spec.cmElev * elev - (spec.cmQ + SAS_Q) * qHat);
     M.z +=
       qSb *
       (CL_BETA * beta -
@@ -765,7 +872,12 @@ function applyGroundContact(
   let contacts = 0;
   let kind: SurfaceKind = st.groundKind;
   let bellyHit = false;
-  let touchdownVy = 0; // most-negative contact descent this frame
+  // The aircraft's OWN descent at the moment of first contact, not the contact
+  // point's: the point velocity carries the flare's rotation, and the wire and
+  // the gear both answer to how hard the aeroplane arrives, not to how fast a
+  // tyre is moving through a nose-up rotation. It is also the number the HUD's
+  // vertical speed shows, so the pilot's readout matches the check.
+  const touchdownVy = st.vel.y;
   let maxWheelPen = 0; // deepest tyre compression (renderer lifts the gear)
   const torque = TORQUE.set(0, 0, 0);
   let hitDeck = false;
@@ -833,7 +945,6 @@ function applyGroundContact(
       }
     }
 
-    touchdownVy = Math.min(touchdownVy, vPoint.y);
   }
 
   // --- crash conditions (first-contact only; st.onGround is last step's value) ---
@@ -847,7 +958,7 @@ function applyGroundContact(
       fail(st, "BELLY IMPACT", "Structure hit the ground. Gear was not down (or down hard).");
     } else if (hitTerrain && firstTouch) {
       fail(st, "TERRAIN IMPACT", "Only the runway and the carrier deck are survivable surfaces.");
-    } else if (firstTouch && touchdownVy < -6) {
+    } else if (firstTouch && touchdownVy < HARD_SINK) {
       fail(st, "HARD IMPACT", `Touchdown at ${Math.round(-touchdownVy * 196.85)} fpm — the gear gave way.`);
     }
   }
@@ -858,10 +969,10 @@ function applyGroundContact(
     hitDeck &&
     st.airborne &&
     st.catCooldown <= 0 &&
-    touchdownVy < -0.8 &&
-    touchdownVy > -6 &&
-    st.speed > 20 &&
-    st.gearT > 0.6
+    touchdownVy < TRAP_MAX_CLIMB &&
+    touchdownVy > HARD_SINK &&
+    st.speed > 15 &&
+    st.gearT > 0.5
   ) {
     const c = carrierAt(st.pos.x, st.pos.z) ?? nearestCarrier(st.pos.x, st.pos.z);
     const { s, d } = stripCoords(c, st.pos.x, st.pos.z);

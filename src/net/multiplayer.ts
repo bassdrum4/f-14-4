@@ -23,12 +23,21 @@
 // the same islands on their own machines: no terrain payload, no seed handover,
 // and nothing about the world on the wire at any point.
 //
-// Send rate is decoupled from the render loop: `publish()` is called every
-// frame and only records the latest pose; a 15 Hz timer does the sending, so a
-// 144 Hz display does not put 144 packets a second on the wire. Poses carry
-// velocity, and the renderer (../render/remoteJets.ts) interpolates ~110 ms
-// behind the newest packet and extrapolates along that velocity when one is
-// late, which is what keeps a wingman crossing at Mach 1 from stuttering.
+// Send rate is decoupled from the render loop, but not from the pose: `publish()`
+// is called every frame with the local aircraft, and the moment that pose is
+// newer than the one on the wire it goes out (see flushPose) — bounded by a
+// ~30 Hz floor and a ~80 Hz guard for a hard manoeuvre, so a 144 Hz display
+// cannot flood the link but a jink never waits for a tick. A 15 Hz heartbeat
+// still sends whatever the last pose was, which is what keeps a page with no
+// animation frames (a hidden tab) and the headless flow harness in step.
+// Poses carry velocity, and the renderer (../render/remoteJets.ts) draws each
+// wingman at "now": their newest packet carried forward by the one-way delay
+// measured from the peer connection's own RTT, with corrections eased in.
+//
+// The fight rides the same channel: the host's snapshot goes on every other
+// heartbeat beat, and on a frame flush when the fight has changed and its own
+// floor allows, so a mirroring wingman sees the bandits move at the pace the
+// host is flying them rather than at the heartbeat.
 //
 // Background tabs: rAF and setInterval both throttle to ~1 Hz when the page is
 // hidden. Rather than let a hidden pilot's aircraft keep flying on stale
@@ -43,7 +52,9 @@ import { Peer, type DataConnection } from "peerjs";
 import type { AircraftId } from "../sim/aircraft";
 import { DEFAULT_AIRCRAFT } from "../sim/aircraft";
 import type { MissionKind } from "../sim/flight";
-import type { RemotePose } from "../render/remoteJets";
+import { setLinkDelayMs, type RemotePose } from "../render/remoteJets";
+import type { CarrierStatus, EnemySnapshot } from "../sim/dogfight";
+import type { MissionMode } from "../settings";
 
 export type NetStatus = "idle" | "connecting" | "online" | "error";
 
@@ -74,6 +85,12 @@ export interface NetState {
   error?: string;
 }
 
+/** One radio transmission, as the lobby chat log sees it. */
+export interface ChatMsg {
+  from: string;
+  text: string;
+}
+
 export interface NetHandlers {
   onState?: (s: NetState) => void;
   /** A pilot we have not seen before (or one who changed airframe). */
@@ -82,6 +99,16 @@ export interface NetHandlers {
   onPose?: (id: string, pose: RemotePose) => void;
   /** A wingman started a sortie; everyone still in the lobby is invited along. */
   onLaunch?: (mission: MissionKind, carrier: number) => void;
+  /** The room's fight, streamed by the host. */
+  onEnemies?: (snap: EnemySnapshot) => void;
+  /** The room's mission profile changed — the host is the one who set it. */
+  onMode?: (mode: MissionMode) => void;
+  /** A wingman's rounds landed on an enemy the host owns. */
+  onHit?: (id: number, dmg: number) => void;
+  /** A wingman's weapon landed on the hostile boat. */
+  onCarrierHit?: (dmg: number) => void;
+  /** A pilot spoke on the room's radio. */
+  onChat?: (msg: ChatMsg) => void;
 }
 
 /**
@@ -170,6 +197,115 @@ export function emptyPose(): RemotePose {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Enemy stream (the host-authoritative fight)
+// ---------------------------------------------------------------------------
+//
+// The enemies are not simulated on every machine: one pilot — the room host —
+// runs the hostile carrier and its bandits and broadcasts them, and everyone
+// else flies in that fight. Sending a second packet per pose tick would be
+// wasted traffic, so the fight goes out every other tick (~7.5 Hz) down the same
+// channel and the receiver leads each packet slightly and eases onto every
+// correction (see sim/dogfight.ts). That keeps a bandit crossing at 250 m/s
+// smooth with no jitter buffer, which is the least lag this can be done with.
+// Damage travels the other way as a rare JSON message, so a wingman's kill
+// still lands on the pilot who owns the aircraft.
+
+/** Marks an enemy snapshot, at both ends of the buffer. */
+const ENEMY_MAGIC = 0xf14b;
+/** Bytes per bandit on the wire. */
+const ENEMY_STRIDE = 40;
+/** Header (28 B) + tail (2 B). */
+const ENEMY_FIXED = 28 + 2;
+/** Most bandits a wave holds; a packet never grows past this. */
+const ENEMY_MAX = 12;
+
+const CARRIER_STATUS: CarrierStatus[] = ["closing", "on station", "sinking", "sunk"];
+
+/**
+ * Pack the fight: header, the boat (when there is one), then every bandit as
+ * position, orientation, hull and id — little-endian floats, like a pose.
+ *
+ *   0  u16 magic          8  f32 carrier x     28  bandits, 40 B each:
+ *   2  u8  boat present  12  f32 carrier z        0 f32 x, y, z
+ *   3  u8  bandit count  16  f32 carrier hdg     12 f32 qx, qy, qz, qw
+ *   4  u16 wave          20  f32 carrier hull    28 f32 hull
+ *   6  u16 seq           24  u8  boat status     32 u16 id, 34 u8 on deck
+ *                       last 2 bytes: magic
+ */
+export function packEnemies(snap: EnemySnapshot, seq: number): ArrayBuffer {
+  const n = Math.min(snap.bandits.length, ENEMY_MAX);
+  const buf = new ArrayBuffer(ENEMY_FIXED + n * ENEMY_STRIDE);
+  const v = new DataView(buf);
+  v.setUint16(0, ENEMY_MAGIC);
+  v.setUint8(2, snap.carrier ? 1 : 0);
+  v.setUint8(3, n);
+  v.setUint16(4, snap.wave & 0xffff);
+  v.setUint16(6, seq & 0xffff);
+  const c = snap.carrier;
+  if (c) {
+    v.setFloat32(8, c.x);
+    v.setFloat32(12, c.z);
+    v.setFloat32(16, c.headingDeg);
+    v.setFloat32(20, c.hp);
+    v.setUint8(24, Math.max(0, CARRIER_STATUS.indexOf(c.status)));
+  }
+  let o = 28;
+  for (let i = 0; i < n; i++, o += ENEMY_STRIDE) {
+    const b = snap.bandits[i];
+    v.setFloat32(o, b.x);
+    v.setFloat32(o + 4, b.y);
+    v.setFloat32(o + 8, b.z);
+    v.setFloat32(o + 12, b.qx);
+    v.setFloat32(o + 16, b.qy);
+    v.setFloat32(o + 20, b.qz);
+    v.setFloat32(o + 24, b.qw);
+    v.setFloat32(o + 28, b.hp);
+    v.setUint16(o + 32, b.id & 0xffff);
+    v.setUint8(o + 34, b.onDeck ? 1 : 0);
+  }
+  v.setUint16(o, ENEMY_MAGIC);
+  return buf;
+}
+
+/** Decode an enemy snapshot, or null when the payload is not one. */
+export function unpackEnemies(buf: ArrayBuffer): EnemySnapshot | null {
+  if (buf.byteLength < ENEMY_FIXED) return null;
+  const v = new DataView(buf);
+  if (v.getUint16(0) !== ENEMY_MAGIC) return null;
+  const n = v.getUint8(3);
+  // A pose packet is 52 bytes, which no enemy packet can be: the sizes are
+  // exact, so the two formats cannot be confused for one another.
+  if (buf.byteLength !== ENEMY_FIXED + n * ENEMY_STRIDE) return null;
+  if (v.getUint16(buf.byteLength - 2) !== ENEMY_MAGIC) return null;
+  const snap: EnemySnapshot = { carrier: null, bandits: [], wave: v.getUint16(4) };
+  if ((v.getUint8(2) & 1) !== 0) {
+    snap.carrier = {
+      x: v.getFloat32(8),
+      z: v.getFloat32(12),
+      headingDeg: v.getFloat32(16),
+      hp: v.getFloat32(20),
+      status: CARRIER_STATUS[v.getUint8(24)] ?? "closing",
+    };
+  }
+  let o = 28;
+  for (let i = 0; i < n; i++, o += ENEMY_STRIDE) {
+    snap.bandits.push({
+      id: v.getUint16(o + 32),
+      x: v.getFloat32(o),
+      y: v.getFloat32(o + 4),
+      z: v.getFloat32(o + 8),
+      qx: v.getFloat32(o + 12),
+      qy: v.getFloat32(o + 16),
+      qz: v.getFloat32(o + 20),
+      qw: v.getFloat32(o + 24),
+      hp: v.getFloat32(o + 28),
+      onDeck: (v.getUint8(o + 34) & 1) !== 0,
+    });
+  }
+  return snap;
+}
+
 /** Normalise whatever the data channel hands us into an ArrayBuffer. */
 function toArrayBuffer(data: unknown): ArrayBuffer | null {
   if (data instanceof ArrayBuffer) return data;
@@ -192,23 +328,46 @@ interface RosterEntry {
 }
 
 type Control =
-  | { t: "hello"; name: string; aircraft: AircraftId; host: boolean }
-  | { t: "roster"; peers: RosterEntry[] }
+  | { t: "hello"; name: string; aircraft: AircraftId; host: boolean; mode: MissionMode }
+  | { t: "roster"; peers: RosterEntry[]; mode: MissionMode }
   | { t: "join"; peer: RosterEntry }
   | { t: "bye"; id: string }
   | { t: "name"; name: string; aircraft: AircraftId }
-  | { t: "launch"; mission: MissionKind; carrier: number };
+  | { t: "mode"; mode: MissionMode }
+  | { t: "hit"; id: number; dmg: number }
+  | { t: "cvhit"; dmg: number }
+  | { t: "launch"; mission: MissionKind; carrier: number }
+  | { t: "chat"; from: string; text: string };
 
 // ---------------------------------------------------------------------------
 // Tunables
 // ---------------------------------------------------------------------------
 
-/** Pose sends per second. 15 Hz is the sweet spot for a jet sim: fast enough
- *  that interpolation hides the gaps at fighter speeds, cheap enough that a
- *  full mesh stays trivial on a home uplink. */
+/** Pose sends per second on the heartbeat. A timer is the fallback rate, not
+ *  the flying rate: the frame flush below is what carries the pose in flight,
+ *  and this keeps a page with no animation frames (a hidden tab, the headless
+ *  flow harness) in step. Cheap enough that a full mesh stays trivial. */
 export const SEND_HZ = 15;
 const SEND_INTERVAL_MS = 1000 / SEND_HZ;
-/** How long a dialled link may sit un-answered before we give up on it. */
+/** Fastest the frame flush may repeat, in ms: the sustained rate while flying
+ *  is ~30 Hz instead of the old fixed 15 Hz. */
+const FLUSH_MIN_GAP_MS = 1000 / 30;
+/** A hard manoeuvre does not wait for the floor: down to this guard, then send.
+ *  A packet is 52 bytes, so a short burst costs nothing. */
+const BURST_MIN_GAP_MS = 12;
+/** What counts as "the pilot did something" for the burst path: metres of
+ *  travel, m/s of speed change, or a switch (gear/flaps/brake/AB) moving. */
+const BURST_POS_M = 6;
+const BURST_SPEED_MS = 18;
+const BURST_SWEEP = 0.06;
+/** Floor between fight snapshots on the fast path (the heartbeat sends them on
+ *  every other beat whatever happens). */
+/** Beat-to-beat the fight rides half the poses (7.5 Hz); a frame flush that
+ *  finds the fight dirty carries it at once (up to the flush rate). Gating that
+ *  by the clock would silence the fight on any page whose timers are throttled
+ *  or virtualised, so this is a beat count, not a time. */
+const ENEMY_BEATS = 2;
+/** How long a dialed link may sit unanswered before we give up on it. */
 const HANDSHAKE_TIMEOUT_MS = 8000;
 /**
  * Dialling the host can fail simply because the host's own peer has not finished
@@ -233,6 +392,23 @@ function sanitizeRoom(raw: string): string {
 export function sanitizeName(raw: string): string {
   const s = raw.trim().replace(/[^\w .\-]/g, "").slice(0, 12);
   return s || "PILOT";
+}
+
+/** Longest chat line the wire will carry; anything past it is cut. */
+export const CHAT_MAX = 160;
+
+/**
+ * A chat line: collapse the runs of blank lines, then strip the remaining
+ * control characters (real newlines survive both), and cut it at the cap.
+ * Emptiness is the caller's decision — the sender drops it, a receiver still
+ * hears it as silence.
+ */
+export function sanitizeChat(raw: string): string {
+  return raw
+    .replace(/\s*\n\s*/g, "\n")
+    .replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, " ")
+    .trim()
+    .slice(0, CHAT_MAX);
 }
 
 /**
@@ -299,8 +475,14 @@ export class Multiplayer {
   private selfId = "";
   private name = "PILOT";
   private aircraft: AircraftId = DEFAULT_AIRCRAFT;
+  /** The room's mission profile. The host owns it; everyone else follows. */
+  private mode: MissionMode = "cruise";
   private status: NetStatus = "idle";
   private error: string | undefined;
+  /** Host: the newest fight state, picked up by every other sender tick. */
+  private enemy: EnemySnapshot | null = null;
+  private enemySeq = 0;
+  private enemyFlip = false;
 
   /** Live data links, keyed by the remote peer id. */
   private conns = new Map<string, DataConnection>();
@@ -320,6 +502,30 @@ export class Multiplayer {
   private sentWindow: number[] = [];
   /** Counts sender ticks so the lobby's tallies refresh about once a second. */
   private tickCount = 0;
+  /** True once a frame flush has put a pose on the wire since the last beat.
+   *  Tracked as a flag, not by comparing clocks: a throttled, virtualised or
+   *  coarse timer must never be able to silence the link entirely. */
+  private sentSinceBeat = false;
+
+  // --- fast path state ----------------------------------------------------
+  /** A pose written by publish() that has not gone on the wire yet. */
+  private poseDirty = false;
+  /** When the last pose packet left, and what was in it. */
+  private lastSendAt = 0;
+  private lastSentX = 0;
+  private lastSentY = 0;
+  private lastSentZ = 0;
+  private lastSentSpeed = 0;
+  private lastSentSweep = 0;
+  private lastSentFlags = 0;
+  /** The fight: when it last went out, and whether it has moved since. */
+  /** Beats since the fight last went out (see ENEMY_BEATS). */
+  private enemySinceBeat = ENEMY_BEATS;
+  private enemyDirty = false;
+  /** One-way delay estimate for the receivers, from the link's own RTT. */
+  private rttMs = 0;
+  private rttPolledAt = 0;
+  private rttPending = false;
 
   constructor(
     handlers: NetHandlers = {},
@@ -382,6 +588,8 @@ export class Multiplayer {
     this.aircraft = aircraft;
     this.host = asHost;
     this.error = undefined;
+    this.enemy = null;
+    this.enemySeq = 0;
     this.status = "connecting";
     this.emit();
 
@@ -482,8 +690,18 @@ export class Multiplayer {
     this.recv = 0;
     this.sentWindow = [];
     this.tickCount = 0;
+    this.poseDirty = false;
+    this.lastSendAt = 0;
+    this.enemySinceBeat = ENEMY_BEATS;
+    this.enemyDirty = false;
+    this.rttMs = 0;
+    this.rttPolledAt = 0;
+    this.rttPending = false;
     this.seq = 0;
     this.hostRetries = 0;
+    this.enemy = null;
+    this.enemySeq = 0;
+    this.enemyFlip = false;
   }
 
   private fail(err: unknown): void {
@@ -609,6 +827,14 @@ export class Multiplayer {
       this.dialing.delete(conn.peer);
       this.conns.set(conn.peer, conn);
       if (conn.peer === hostPeerId(this.room)) this.hostRetries = 0;
+      // A fresh channel starts its own sequence, so any remembered "newest"
+      // from a previous link to this pilot must not drop it. The next published
+      // pose flushes at once and, when we run the fight, it goes too: a
+      // reconnected wingman is back in the room's state on the next frame rather
+      // than on the next heartbeat.
+      this.lastSeq.delete(conn.peer);
+      this.lastSendAt = 0;
+      this.enemyDirty = true;
       // Announce ourselves. The host answers with the roster; a mesh peer
       // already knows us from the roster it got earlier.
       this.send(conn, {
@@ -616,6 +842,7 @@ export class Multiplayer {
         name: this.name,
         aircraft: this.aircraft,
         host: this.host || this.hostDuty !== null,
+        mode: this.mode,
       } satisfies Control);
       if (known) this.adopt(conn.peer, known);
       this.emit();
@@ -640,7 +867,12 @@ export class Multiplayer {
     if (!buf) return;
     const pose = emptyPose();
     const seq = unpackPose(buf, pose);
-    if (seq === null) return;
+    if (seq === null) {
+      // Not a pose: the other binary format on this channel is the fight.
+      const snap = unpackEnemies(buf);
+      if (snap) this.handlers.onEnemies?.(snap);
+      return;
+    }
     const prev = this.lastSeq.get(conn.peer);
     if (prev !== undefined && seq <= prev) return; // reordered or duplicated
     this.lastSeq.set(conn.peer, seq);
@@ -665,20 +897,26 @@ export class Multiplayer {
         this.adopt(conn.peer, entry);
         if (this.host || this.hostDuty) {
           // Tell the newcomer who else is here, and everyone else about them.
+          // The room's mission profile rides the roster: a pilot joining an
+          // attack room flies the attack, not whatever they last flew solo.
           const roster: RosterEntry[] = [
             { id: this.rosterId(), name: this.name, aircraft: this.aircraft, host: true },
             ...this.pilots.values(),
           ].filter((p) => p.id !== conn.peer);
-          this.send(conn, { t: "roster", peers: roster } satisfies Control);
+          this.send(conn, { t: "roster", peers: roster, mode: this.mode } satisfies Control);
           for (const other of this.conns.values()) {
             if (other === conn || !other.open) continue;
             this.send(other, { t: "join", peer: entry } satisfies Control);
           }
+        } else {
+          // Someone else is hosting: their profile is the room's.
+          this.adoptMode(msg.mode);
         }
         if (!known) this.emit();
         break;
       }
       case "roster": {
+        this.adoptMode(msg.mode);
         for (const entry of msg.peers) {
           if (entry.id === this.selfId) continue;
           const known = this.pilots.has(entry.id);
@@ -705,9 +943,25 @@ export class Multiplayer {
           this.handlers.onLaunch?.(msg.mission, msg.carrier);
         }
         break;
+      case "mode":
+        this.adoptMode(msg.mode);
+        break;
+      case "hit":
+        if (typeof msg.id === "number" && typeof msg.dmg === "number") {
+          this.handlers.onHit?.(msg.id, msg.dmg);
+        }
+        break;
+      case "cvhit":
+        if (typeof msg.dmg === "number") this.handlers.onCarrierHit?.(msg.dmg);
+        break;
       case "bye":
         if (msg.id) this.drop(msg.id, false);
         break;
+      case "chat": {
+        const text = sanitizeChat(msg.text);
+        if (text) this.handlers.onChat?.({ from: sanitizeName(msg.from), text });
+        break;
+      }
       case "name":
         if (this.pilots.has(conn.peer)) {
           const p = this.pilots.get(conn.peer)!;
@@ -720,6 +974,19 @@ export class Multiplayer {
       default:
         break;
     }
+  }
+
+  /**
+   * Adopt the room's mission profile. The host is the one who decides it, so a
+   * host never takes a mode off the wire; everyone else follows the moment a
+   * hello, a roster or a mode change says so.
+   */
+  private adoptMode(mode: MissionMode | undefined): void {
+    if (!mode || this.host) return;
+    if (mode !== "cruise" && mode !== "dogfight" && mode !== "strike") return;
+    if (mode === this.mode) return;
+    this.mode = mode;
+    this.handlers.onMode?.(mode);
   }
 
   /** Record a pilot, telling the renderer when they are new or changed. */
@@ -791,6 +1058,63 @@ export class Multiplayer {
     }
   }
 
+  /**
+   * Set the room's mission profile. Only the host does this — which is exactly
+   * what stops two pilots flying "attack" and "peaceful" at each other.
+   */
+  setMode(mode: MissionMode): void {
+    if (mode === this.mode) return;
+    this.mode = mode;
+    this.sendAll(JSON.stringify({ t: "mode", mode } satisfies Control));
+  }
+
+  /**
+   * Host: hand the fight to the room. Nothing is sent here — the sender picks
+   * the newest state up on its own schedule (see tick) and the frame flush
+   * carries it sooner when the fight has moved (see flushPose).
+   */
+  publishEnemies(snap: EnemySnapshot | null): void {
+    this.enemy = snap;
+    if (snap) this.enemyDirty = true;
+  }
+
+  /** Mirror: our rounds landed on an aircraft the host owns. */
+  hitBandit(id: number, dmg: number): void {
+    this.sendAll(JSON.stringify({ t: "hit", id, dmg } satisfies Control));
+  }
+
+  /** Mirror: our weapon landed on the hostile boat. */
+  hitCarrier(dmg: number): void {
+    this.sendAll(JSON.stringify({ t: "cvhit", dmg } satisfies Control));
+  }
+
+  /**
+   * Say something on the room's radio. The mesh is full, so this is one fan-out
+   * of a small JSON string on the same channel the lobby traffic already uses —
+   * every pilot hears it directly, nobody relays for anyone.
+   */
+  sendChat(text: string): void {
+    const msg = sanitizeChat(text);
+    if (!msg) return;
+    this.sendAll(JSON.stringify({ t: "chat", from: this.name, text: msg } satisfies Control));
+  }
+
+  /** Our own callsign, so the chat log can mark our own transmissions. */
+  get callsign(): string {
+    return this.name;
+  }
+
+  private sendAll(msg: string): void {
+    for (const conn of this.conns.values()) {
+      if (!conn.open) continue;
+      try {
+        conn.send(msg);
+      } catch {
+        /* channel is being torn down; the close handler will clean up */
+      }
+    }
+  }
+
   /** Change our callsign; the roster is updated in place. */
   setName(name: string): void {
     this.name = sanitizeName(name);
@@ -813,9 +1137,11 @@ export class Multiplayer {
   }
 
   /**
-   * Called every frame with the local aircraft's state. Nothing is sent here:
-   * the newest pose is kept and the 15 Hz sender picks it up. That decouples
-   * the network rate from the display refresh rate.
+   * Called every frame with the local aircraft's state. The pose is recorded and
+   * then pushed at once if the wire has been quiet for the floor (see
+   * flushPose): the network rate still does not follow the display refresh rate,
+   * but it no longer waits for the heartbeat either, which is the difference
+   * between a wingman drawn where he is and one drawn a tick behind.
    */
   publish(pose: RemotePose): void {
     const p = this.pose;
@@ -825,6 +1151,29 @@ export class Multiplayer {
     p.speed = pose.speed;
     p.sweepT = pose.sweepT;
     p.flags = pose.flags;
+    this.poseDirty = true;
+    this.flushPose();
+  }
+
+  /**
+   * The frame wrote a newer pose: send it unless the wire is still warm. A hard
+   * change (a jink, a cat shot, a switch moving) may skip the floor down to the
+   * burst guard, so the far end hears about it on this frame, not the next tick.
+   */
+  private flushPose(): void {
+    if (!this.poseDirty || this.status !== "online" || this.conns.size === 0) return;
+    const now = performance.now();
+    const since = now - this.lastSendAt;
+    const big =
+      Math.abs(this.pose.x - this.lastSentX) +
+        Math.abs(this.pose.y - this.lastSentY) +
+        Math.abs(this.pose.z - this.lastSentZ) >
+        BURST_POS_M ||
+      Math.abs(this.pose.speed - this.lastSentSpeed) > BURST_SPEED_MS ||
+      Math.abs(this.pose.sweepT - this.lastSentSweep) > BURST_SWEEP ||
+      this.pose.flags !== this.lastSentFlags;
+    if (since < (big ? BURST_MIN_GAP_MS : FLUSH_MIN_GAP_MS)) return;
+    this.sendPose(now, this.enemyDirty);
   }
 
   private startSender(): void {
@@ -839,6 +1188,12 @@ export class Multiplayer {
     }
   }
 
+  /**
+   * The heartbeat: a pose every SEND_INTERVAL_MS whatever else happens, so a
+   * page that produces no frames still reports itself, plus the fight on every
+   * other beat. In flight the flush above is the faster path; this is the floor
+   * under it.
+   */
   private tick = (): void => {
     if (this.status !== "online" || this.conns.size === 0) return;
     // A hidden tab is throttled to ~1 Hz by the browser; zeroing velocity makes
@@ -848,29 +1203,100 @@ export class Multiplayer {
       this.pose.vy = 0;
       this.pose.vz = 0;
     }
+    this.enemyFlip = !this.enemyFlip;
+    const now = performance.now();
+    // The beat carries a pose unless a frame flush already did since the last
+    // one. In flight the flushes are the fast path and this is only the floor
+    // under them; on a page that produces no frames (a hidden tab, a headless
+    // harness) it is the whole sender, so it must never be skipped on a guess
+    // about how much real time has passed.
+    if (!this.sentSinceBeat) this.sendPose(now, this.enemyFlip);
+    this.sentSinceBeat = false;
+    // The link already measures its own RTT; read it for the receivers' lead.
+    this.pollRtt(now);
+  };
+
+  /**
+   * Put the newest pose on the wire, now, optionally with the fight behind it.
+   * Both the heartbeat and the frame flush end up here so the tallies, the
+   * sequence number and the "what we last sent" record cannot drift apart.
+   */
+  private sendPose(now: number, withEnemy: boolean): boolean {
+    let enemyBuf: ArrayBuffer | null = null;
+    if (withEnemy && this.enemy && ++this.enemySinceBeat >= ENEMY_BEATS) {
+      enemyBuf = packEnemies(this.enemy, ++this.enemySeq);
+      this.enemyDirty = false;
+      this.enemySinceBeat = 0;
+    }
     const buf = packPose(this.pose, ++this.seq);
     let any = false;
     for (const conn of this.conns.values()) {
       if (!conn.open) continue;
       try {
         conn.send(buf);
+        if (enemyBuf) conn.send(enemyBuf);
         any = true;
       } catch {
         /* channel is being torn down; the close handler will clean up */
       }
     }
-    if (!any) return;
+    if (!any) return false;
+    this.poseDirty = false;
+    this.sentSinceBeat = true;
+    this.lastSendAt = now;
+    this.lastSentX = this.pose.x;
+    this.lastSentY = this.pose.y;
+    this.lastSentZ = this.pose.z;
+    this.lastSentSpeed = this.pose.speed;
+    this.lastSentSweep = this.pose.sweepT;
+    this.lastSentFlags = this.pose.flags;
     this.sent++;
-    const now = performance.now();
     this.sentWindow.push(now);
-    if (this.sentWindow.length > 120) this.sentWindow.splice(0, this.sentWindow.length - 120);
+    if (this.sentWindow.length > 240) this.sentWindow.splice(0, this.sentWindow.length - 240);
     // The send rate and packet tallies are only interesting while they move, so
     // republish them roughly once a second rather than on every packet.
     if (++this.tickCount >= SEND_HZ) {
       this.tickCount = 0;
       this.emit();
     }
-  };
+    return true;
+  }
+
+  /**
+   * Read the data link's own round-trip time off the peer connection. The
+   * browser measures it already, so this adds no traffic at all — the flow
+   * harness's mock links simply have no stats and are skipped. Half of it is the
+   * one-way delay the renderer leads every remote by.
+   */
+  private pollRtt(now: number): void {
+    if (this.rttPending || now - this.rttPolledAt < 1000) return;
+    this.rttPolledAt = now;
+    for (const conn of this.conns.values()) {
+      if (!conn.open) continue;
+      const pc = (conn as unknown as { peerConnection?: RTCPeerConnection }).peerConnection;
+      if (!pc || typeof pc.getStats !== "function") continue;
+      this.rttPending = true;
+      pc.getStats().then(
+        (report) => {
+          let best = 0;
+          report.forEach((stat) => {
+            const r = stat as { currentRoundTripTime?: number };
+            const v = r.currentRoundTripTime;
+            if (typeof v === "number" && Number.isFinite(v) && v > best) best = v;
+          });
+          if (best > 0) {
+            this.rttMs = best * 1000;
+            setLinkDelayMs(this.rttMs / 2);
+          }
+          this.rttPending = false;
+        },
+        () => {
+          this.rttPending = false;
+        },
+      );
+      return;
+    }
+  }
 
   private measuredHz(): number {
     const now = performance.now();

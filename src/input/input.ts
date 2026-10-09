@@ -63,17 +63,14 @@ export class InputManager {
   private onUpBound = (e: MouseEvent) => this.onMouseUp(e);
   private onMoveBound = (e: MouseEvent) => this.onMouseMove(e);
   private onBlurBound = () => {
-    // A key-up event can be lost when the page loses focus; clear all
-    // pressed/released latches as well as held keys.
     this.down.clear();
     this.pressedQueue.clear();
     this.consumed.clear();
     this.dragging = false;
-    this.pressStart = null;
-    this.pressTravel = 0;
     this.mouseDX = 0;
     this.mouseDY = 0;
-    this.clicks = [];
+    this.pressStart = null;
+    this.clicks.length = 0;
   };
 
   constructor(settings: Settings) {

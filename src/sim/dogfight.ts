@@ -258,6 +258,14 @@ interface Bandit {
   abOn: boolean;
   abT: number; // s of burner left in this light
   abCool: number; // s until the burner may light again
+  /** Wingman mirroring: this bandit is flown by the room host, not by us. It
+   *  still shoots (a mirrored fight bites) but its pose comes off the wire. */
+  remote: boolean;
+  /** Newest streamed pose, the velocity two packets imply, and the orientation
+   *  they arrived with — the mesh is eased onto these between packets. */
+  netPos: THREE.Vector3;
+  netQuat: THREE.Quaternion;
+  netVel: THREE.Vector3;
 }
 
 interface Tracer {
@@ -275,6 +283,52 @@ interface Flash {
 }
 
 export type CarrierStatus = "closing" | "on station" | "sinking" | "sunk";
+
+/** One bandit as it travels between pilots. */
+export interface EnemyPose {
+  id: number;
+  x: number;
+  y: number;
+  z: number;
+  qx: number;
+  qy: number;
+  qz: number;
+  qw: number;
+  hp: number;
+  /** Still rolling on the hostile deck: no shooting and no mid-airs yet. */
+  onDeck: boolean;
+}
+
+/** The hostile boat as it travels between pilots. */
+export interface EnemyCarrierState {
+  x: number;
+  z: number;
+  headingDeg: number;
+  hp: number;
+  status: CarrierStatus;
+}
+
+/**
+ * The room's fight, as the host streams it: the boat, every bandit and the wave
+ * they flew from. The host owns the enemies and everyone else mirrors their
+ * positions, so two pilots always shoot at the same aeroplanes. Damage flows the
+ * other way (see EnemyHit), which is the least lag this can be done with: a
+ * wingman sees the fight live and only a kill needs the host.
+ */
+export interface EnemySnapshot {
+  carrier: EnemyCarrierState | null;
+  bandits: EnemyPose[];
+  wave: number;
+}
+
+/** A burst of a wingman's rounds that landed on an enemy the host owns. */
+export interface EnemyHit {
+  id: number;
+  dmg: number;
+}
+
+/** Nothing to report: returned instead of a fresh array on an idle frame. */
+const NO_HITS: EnemyHit[] = [];
 
 /** The hostile boat: a live CarrierDef whose x/z/heading the sim drives. */
 interface EnemyCarrier {
@@ -417,6 +471,16 @@ const HQ = new THREE.Quaternion();
 const PITCH_Q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.105);
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
+const SYNC = new THREE.Vector3(); // the mirrored pose target
+
+/**
+ * Mirroring: how far past the newest packet a wingman's enemies are flown, and
+ * how fast a correction is eased in. Packets arrive at ~7.5 Hz, so running a
+ * little ahead of the last one keeps motion smooth — and costs less lag than
+ * sitting a whole packet interval behind it.
+ */
+const MIRROR_LEAD = 0.07; // s
+const MIRROR_EASE = 0.09; // s
 const ORIGIN = new THREE.Vector3();
 // Dedicated scratch for the gun cue: it is evaluated from the render loop, so
 // it must not share vectors with the fixed-step sim.
@@ -492,11 +556,12 @@ export class Dogfight {
   private bombCd = 0;
   /** Releases asked for by the target pod, waiting on the release cooldown. */
   private releaseQueue = 0;
-  // laser designation: a live aim point (bombs in flight follow it) + its HUD
-  // marker and the beam drawn from the jet to the spot
+  // laser designation: a live aim point (bombs in flight follow it) + the ring
+  // marker on the ground under it. There is deliberately no beam from the jet to
+  // the spot: the line read as a stray laser sweeping the canopy the moment a
+  // weapon left the rack, and the ring already says where the pod is looking.
   private designation: THREE.Vector3 | null = null;
   private designator: THREE.Mesh;
-  private beam: THREE.Line;
   /** Where/how the last weapon actually detonated (diagnostics/tests). */
   readonly lastImpact = new THREE.Vector3();
   lastImpactKind: BlastKind | null = null;
@@ -504,6 +569,21 @@ export class Dogfight {
   private impactAge = Infinity;
   private releaseAge = Infinity;
   private releaseMarker = new THREE.Vector3();
+  // -------------------------------------------------------------------------
+  // Multiplayer: one pilot runs the fight, the room flies in it
+  /** A wingman's client: the enemies are the host's, not ours. */
+  private mirror = false;
+  /** Host: the fight as it goes on the wire. Reused — never kept. */
+  private snapOut: EnemySnapshot = { carrier: null, bandits: [], wave: 1 };
+  /** Mirror: the damage our weapons did, waiting on the host to be told. */
+  private hitsOut: EnemyHit[] = [];
+  private carrierHitOut = 0;
+  /** Mirror: bandits we took down locally, so a packet that still lists them (it
+   *  was in the air when they died) cannot pop them back into the sky. */
+  private takenDown = new Map<number, number>();
+  /** Mirror: when the last packet landed, and the gap it implies. */
+  private snapAt = 0;
+  private snapDt = 0.14;
 
   constructor(scene: THREE.Scene, private blasts: ExplosionField) {
     // tracers: short additive slugs, colour-coded by side
@@ -634,22 +714,6 @@ export class Dogfight {
     this.designator.visible = false;
     this.designator.frustumCulled = false;
     this.root.add(this.designator);
-    // and the laser itself, drawn from the jet to the spot
-    const beamGeom = new THREE.BufferGeometry();
-    beamGeom.setAttribute(
-      "position",
-      new THREE.BufferAttribute(new Float32Array(6), 3).setUsage(THREE.DynamicDrawUsage),
-    );
-    this.beam = new THREE.Line(
-      beamGeom,
-      new THREE.LineBasicMaterial({
-        color: 0xff6a44, transparent: true, opacity: 0.4, depthWrite: false,
-        blending: THREE.AdditiveBlending, fog: false, toneMapped: false,
-      }),
-    );
-    this.beam.visible = false;
-    this.beam.frustumCulled = false;
-    this.root.add(this.beam);
     scene.add(this.root);
   }
 
@@ -677,7 +741,8 @@ export class Dogfight {
   prepare(player: AircraftState): void {
     this.setAircraft(player);
     this.clear();
-    this.spawnEnemyCarrier(player);
+    // A wingman never owns the boat: the host's arrives on the wire.
+    if (!this.mirror) this.spawnEnemyCarrier(player);
   }
 
   /**
@@ -698,7 +763,7 @@ export class Dogfight {
     if (this.cv) this.clearFight();
     else {
       this.clear();
-      this.spawnEnemyCarrier(player);
+      if (!this.mirror) this.spawnEnemyCarrier(player);
     }
     this.active = true;
     this.hull = this.hullMax;
@@ -791,6 +856,277 @@ export class Dogfight {
     return this.cv ? this.cv.def : null;
   }
 
+  // -------------------------------------------------------------------------
+  // Multiplayer: the room's fight
+  // -------------------------------------------------------------------------
+
+  /**
+   * Hand the fight to the room, or take it back. A wingman mirrors the host's
+   * enemies instead of running its own; the host runs them and streams them.
+   * Switching authority drops the other pilot's bandits, so the two sims never
+   * mix into one sky.
+   */
+  setMirror(on: boolean, player: AircraftState): void {
+    if (this.mirror === on) return;
+    this.mirror = on;
+    this.clearBandits();
+    this.takenDown.clear();
+    this.hitsOut = [];
+    this.carrierHitOut = 0;
+    if (on) {
+      // Our own boat is the host's business now; theirs arrives on the next
+      // packet. Our wave queue goes with it.
+      this.releaseCarrier();
+      this.launchQueued = 0;
+    } else if (!this.cv && this.scenario === "dogfight") {
+      // Promoted to lead mid-flight: the boat is ours again, and stepWaves will
+      // spot the next wave on it.
+      this.spawnEnemyCarrier(player);
+    }
+  }
+
+  /** True while the room's host owns the enemies (this client only mirrors). */
+  get mirroring(): boolean {
+    return this.mirror;
+  }
+
+  /**
+   * The fight for the wire, as the host sees it. The object is reused: the net
+   * layer packs it on the spot, so it must not be stored.
+   */
+  enemySnapshot(): EnemySnapshot {
+    const s = this.snapOut;
+    const cv = this.cv;
+    if (cv) {
+      const c = s.carrier ?? (s.carrier = { x: 0, z: 0, headingDeg: 0, hp: 0, status: "closing" });
+      c.x = cv.def.x;
+      c.z = cv.def.z;
+      c.headingDeg = cv.def.headingDeg;
+      c.hp = cv.hp;
+      c.status = cv.status;
+    } else {
+      s.carrier = null;
+    }
+    s.wave = this.wave;
+    const n = this.bandits.length;
+    s.bandits.length = n;
+    for (let i = 0; i < n; i++) {
+      const b = this.bandits[i];
+      const p = s.bandits[i];
+      const e: EnemyPose = p ?? {
+        id: 0, x: 0, y: 0, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, hp: 0, onDeck: false,
+      };
+      e.id = b.id;
+      e.x = b.pos.x;
+      e.y = b.pos.y;
+      e.z = b.pos.z;
+      e.qx = b.quat.x;
+      e.qy = b.quat.y;
+      e.qz = b.quat.z;
+      e.qw = b.quat.w;
+      e.hp = b.hp;
+      e.onDeck = b.catT >= 0;
+      s.bandits[i] = e;
+    }
+    return s;
+  }
+
+  /**
+   * A packet from the host: put the room's enemies where the host says they are.
+   * Bandits are matched by id, so one that joins or dies on the host simply
+   * appears or disappears here.
+   */
+  applyRemoteSnapshot(snap: EnemySnapshot, nowMs: number): void {
+    if (!this.mirror) return;
+    this.snapDt = this.snapAt > 0
+      ? THREE.MathUtils.clamp((nowMs - this.snapAt) / 1000, 0.05, 0.6)
+      : 0.14;
+    this.snapAt = nowMs;
+    this.wave = snap.wave;
+    this.applyRemoteCarrier(snap.carrier);
+    const seen = new Set<number>();
+    for (const p of snap.bandits) {
+      seen.add(p.id);
+      const down = this.takenDown.get(p.id);
+      if (down !== undefined) {
+        if (nowMs - down < 4000) continue;
+        this.takenDown.delete(p.id);
+      }
+      const b = this.findBandit(p.id) ?? this.spawnMirrorBandit(p);
+      b.hp = p.hp;
+      b.catT = p.onDeck ? 0 : -1;
+      // The velocity two packets imply lets the mesh run a little ahead of the
+      // stream; on a brand new bandit it is zero, which is exactly right.
+      b.netVel.set(
+        (p.x - b.netPos.x) / this.snapDt,
+        (p.y - b.netPos.y) / this.snapDt,
+        (p.z - b.netPos.z) / this.snapDt,
+      );
+      b.speed = b.netVel.length();
+      b.netPos.set(p.x, p.y, p.z);
+      b.netQuat.set(p.qx, p.qy, p.qz, p.qw);
+    }
+    for (let i = this.bandits.length - 1; i >= 0; i--) {
+      const b = this.bandits[i];
+      if (!seen.has(b.id)) this.removeBandit(b);
+    }
+  }
+
+  /** Host side: a wingman's rounds landed on a bandit of ours. */
+  applyRemoteHit(id: number, dmg: number, player: AircraftState): void {
+    const b = this.findBandit(id);
+    if (!b) return;
+    this.hitT = HIT_FLASH;
+    this.damageBandit(b, dmg, player);
+  }
+
+  /** Host side: a wingman's weapon landed on the hostile boat. */
+  applyRemoteCarrierHit(dmg: number, player: AircraftState): void {
+    const cv = this.cv;
+    if (!cv) return;
+    CVPT.set(cv.def.x, cv.def.deckY, cv.def.z);
+    this.damageCarrier(CVPT.clone(), player, dmg);
+  }
+
+  /** Mirror: the hits our weapons just landed, for the host (clears them). */
+  takeHits(): EnemyHit[] {
+    if (this.hitsOut.length === 0) return NO_HITS;
+    const out = this.hitsOut;
+    this.hitsOut = [];
+    return out;
+  }
+
+  /** Mirror: the damage our weapons just did to the boat (clears it). */
+  takeCarrierHit(): number {
+    const d = this.carrierHitOut;
+    this.carrierHitOut = 0;
+    return d;
+  }
+
+  /** Drop the hostile boat (mirroring hands it over to the host). */
+  private releaseCarrier(): void {
+    if (!this.cv) return;
+    this.cv.mesh.removeFromParent();
+    disposeSubtree(this.cv.mesh);
+    this.cv = null;
+    this.fightOver = false;
+  }
+
+  /** Wire a mirrored boat into place, or move the one we already have. */
+  private applyRemoteCarrier(c: EnemyCarrierState | null): void {
+    if (!c) {
+      this.releaseCarrier();
+      return;
+    }
+    if (!this.cv) {
+      const def = makeCarrier(CV_NAME, c.x, c.z, c.headingDeg);
+      const mesh = buildCarrier(def);
+      this.root.add(mesh);
+      this.cv = { def, mesh, hp: c.hp, status: c.status, speed: 0, sinkT: 0 };
+    }
+    const cv = this.cv;
+    cv.def.x = c.x;
+    cv.def.z = c.z;
+    cv.def.headingDeg = c.headingDeg;
+    cv.hp = c.hp;
+    if (cv.status !== c.status) {
+      // The host's boat is going down: run our own sinking from here, so the
+      // waterline animation is ours rather than a number in a packet.
+      if (c.status === "sinking") cv.sinkT = 0;
+      cv.status = c.status;
+    }
+    if (c.status !== "sinking" && c.status !== "sunk") {
+      cv.mesh.position.set(c.x, 0, c.z);
+      cv.mesh.rotation.y = ((90 - c.headingDeg) * Math.PI) / 180;
+    }
+  }
+
+  /** The bandit with this id. Packs are tiny, so a scan costs nothing. */
+  private findBandit(id: number): Bandit | null {
+    for (const b of this.bandits) if (b.id === id) return b;
+    return null;
+  }
+
+  /**
+   * Build a bandit the host owns: same airframe, same tracer colour, no local
+   * steering. Used when a packet names an aircraft we have no mesh for yet.
+   */
+  private spawnMirrorBandit(p: EnemyPose): Bandit {
+    const mesh = buildTomcat("bandit");
+    mesh.gear.visible = p.onDeck;
+    mesh.afterburner.visible = false;
+    mesh.wings[0].rotation.y = 0;
+    mesh.wings[1].rotation.y = 0;
+    const pos = new THREE.Vector3(p.x, p.y, p.z);
+    const quat = new THREE.Quaternion(p.qx, p.qy, p.qz, p.qw);
+    mesh.group.position.copy(pos);
+    mesh.group.quaternion.copy(quat);
+    this.root.add(mesh.group);
+    const b: Bandit = {
+      id: p.id,
+      hp: p.hp,
+      pos,
+      quat,
+      bank: 0,
+      speed: 200,
+      fireCd: 1.5 + hash(p.id) * 2,
+      burst: 0,
+      evadeT: 0,
+      evadeCd: 0,
+      phase: hash(p.id * 11.3) * Math.PI * 2,
+      mesh,
+      catT: p.onDeck ? 0 : -1,
+      catStart: pos.clone(),
+      catDir: new THREE.Vector3(0, 0, -1),
+      climbT: 0,
+      sweepT: 1,
+      abOn: false,
+      abT: 0,
+      abCool: 2,
+      remote: true,
+      netPos: pos.clone(),
+      netQuat: quat.clone(),
+      netVel: new THREE.Vector3(),
+    };
+    this.bandits.push(b);
+    return b;
+  }
+
+  /**
+   * Fly a mirrored bandit: ease onto the newest packet, led by the velocity the
+   * last two packets imply. Nothing here steers — the host is flying it.
+   */
+  private stepMirrorBandit(b: Bandit, dt: number): void {
+    SYNC.set(
+      b.netPos.x + b.netVel.x * MIRROR_LEAD,
+      b.netPos.y + b.netVel.y * MIRROR_LEAD,
+      b.netPos.z + b.netVel.z * MIRROR_LEAD,
+    );
+    const k = 1 - Math.exp(-dt / MIRROR_EASE);
+    b.pos.lerp(SYNC, k);
+    b.quat.slerp(b.netQuat, k);
+    b.sweepT = Math.min(1, b.sweepT + dt / 6);
+    b.mesh.wings[0].rotation.y = -1.0 * b.sweepT;
+    b.mesh.wings[1].rotation.y = 1.0 * b.sweepT;
+    b.mesh.gear.visible = b.catT >= 0;
+    b.mesh.group.position.copy(b.pos);
+    b.mesh.group.quaternion.copy(b.quat);
+  }
+
+  /**
+   * A round or a warhead landed on a bandit. On a mirror client the damage is
+   * applied here and predicted (the hit has to read instantly) and is also sent
+   * to the host, who owns the aircraft and settles the kill.
+   */
+  private damageBandit(b: Bandit, dmg: number, player: AircraftState): void {
+    b.hp -= dmg;
+    if (this.mirror) this.hitsOut.push({ id: b.id, dmg });
+    if (b.hp <= 0) {
+      if (this.mirror) this.takenDown.set(b.id, performance.now());
+      this.killBandit(b, player);
+    }
+  }
+
   /** Stop fighting and clear everything (menu / cruise mode). */
   clear(): void {
     this.clearFight();
@@ -846,7 +1182,6 @@ export class Dogfight {
     this.releaseAge = Infinity;
     this.setDesignation(null);
     this.designator.visible = false;
-    this.beam.visible = false;
   }
 
   dispose(): void {
@@ -870,8 +1205,6 @@ export class Dogfight {
     this.designation = null;
     this.designator.geometry.dispose();
     (this.designator.material as THREE.Material).dispose();
-    this.beam.geometry.dispose();
-    (this.beam.material as THREE.Material).dispose();
   }
 
   /**
@@ -907,6 +1240,15 @@ export class Dogfight {
     // The guns are live in every scenario — plinking at the sea on a cruise
     // leg is half the fun — so the trigger is read before the mode branches.
     this.playerGuns(dt, player, fireHeld);
+    // A mirror flies the room's aircraft whether or not our own fight is armed:
+    // a wingman watching the host's battle should see it even before their own
+    // wheels leave the deck. Their guns only open up once we are in it.
+    if (this.mirror) {
+      for (const b of this.bandits) {
+        this.stepMirrorBandit(b, dt);
+        if (this.active && b.catT < 0) this.banditGuns(b, dt, player);
+      }
+    }
     // The boat motors in whether or not the shooting has started: with the
     // fight prepared, it closes while the player is still on the deck.
     if (!this.active) {
@@ -927,18 +1269,24 @@ export class Dogfight {
       return false;
     }
     this.stepCarrier(dt, player);
-    this.stepLaunches(dt, player);
-    // Walk the bandits backwards: one that flies into the ground is removed on
-    // the spot, and splicing the current index is only safe that way.
-    for (let i = this.bandits.length - 1; i >= 0; i--) {
-      const b = this.bandits[i];
-      if (!this.stepBandit(b, dt, player)) continue;
-      this.banditGuns(b, dt, player);
+    // A mirror owns no launches and no waves: those aircraft are the host's, and
+    // they were already flown by the packets above. Its guns, though, are still
+    // ours — so a wingman is shot at, and shoots back, with nothing in the middle
+    // of it. That is the least lag a shared fight can have.
+    if (!this.mirror) {
+      this.stepLaunches(dt, player);
+      // Walk the bandits backwards: one that flies into the ground is removed on
+      // the spot, and splicing the current index is only safe that way.
+      for (let i = this.bandits.length - 1; i >= 0; i--) {
+        const b = this.bandits[i];
+        if (!this.stepBandit(b, dt, player)) continue;
+        this.banditGuns(b, dt, player);
+      }
     }
     this.stepCollisions(player);
     this.stepTracers(dt, player);
     this.stepFlashes(dt);
-    this.stepWaves(dt, player);
+    if (!this.mirror) this.stepWaves(dt, player);
     return false;
   }
 
@@ -1312,6 +1660,8 @@ export class Dogfight {
       if (cv.status === "sinking" && cv.sinkT > 60) cv.status = "sunk";
       return;
     }
+    // A wingman's boat is steered by the host's packets, not by our own AI.
+    if (this.mirror) return;
     const def = cv.def;
     const toX = player.pos.x - def.x;
     const toZ = player.pos.z - def.z;
@@ -1406,6 +1756,11 @@ export class Dogfight {
       abOn: false,
       abT: 0,
       abCool: 2,
+      // Ours: this one is steered here, not by a packet.
+      remote: false,
+      netPos: start.clone(),
+      netQuat: new THREE.Quaternion(),
+      netVel: new THREE.Vector3(),
     };
     this.setCatPose(b, def.deckY);
     this.bandits.push(b);
@@ -1512,10 +1867,9 @@ export class Dogfight {
       for (const bandit of this.bandits) {
         if (bandit.catT >= 0) continue;
         if (bandit.pos.distanceTo(b.pos) < BOMB_AIR_RADIUS) {
-          bandit.hp -= BOMB_HP * 2;
           this.hitT = HIT_FLASH;
           this.blasts.spawn(bandit.pos.clone(), "air", 1);
-          if (bandit.hp <= 0) this.killBandit(bandit, player);
+          this.damageBandit(bandit, BOMB_HP * 2, player);
           hitAir = true;
           break;
         }
@@ -1785,9 +2139,8 @@ export class Dogfight {
       for (const b of this.bandits) {
         if (b.catT >= 0) continue;
         if (b.pos.distanceTo(m.pos) < MISSILE_AIR_R) {
-          b.hp -= MISSILE_HP;
           this.hitT = HIT_FLASH;
-          if (b.hp <= 0) this.killBandit(b, player);
+          this.damageBandit(b, MISSILE_HP, player);
           hit = "air";
           break;
         }
@@ -1849,8 +2202,7 @@ export class Dogfight {
     for (const b of this.bandits) {
       if (b.catT >= 0) continue;
       if (b.pos.distanceTo(at) < MISSILE_AIR_R * 1.5 && b.hp > 0) {
-        b.hp -= MISSILE_HP * 0.5;
-        if (b.hp <= 0) this.killBandit(b, player);
+        this.damageBandit(b, MISSILE_HP * 0.5, player);
       }
     }
     const cv = this.cv;
@@ -1873,6 +2225,9 @@ export class Dogfight {
   private damageCarrier(at: THREE.Vector3, player: AircraftState, dmg: number): void {
     const cv = this.cv;
     if (!cv || cv.status === "sinking" || cv.status === "sunk") return;
+    // A wingman's hit goes to the host as well: the host owns the hull, and the
+    // snapshot it sends back settles the damage a packet later.
+    if (this.mirror) this.carrierHitOut += dmg;
     cv.hp = Math.max(0, cv.hp - dmg);
     this.hitT = HIT_FLASH;
     this.flash(at);
@@ -2404,10 +2759,9 @@ export class Dogfight {
           for (const b of this.bandits) {
             if (b.catT >= 0) continue; // still on the cat, not a valid target
             if (segSphere(prev, t.pos, b.pos, HIT_RADIUS)) {
-              b.hp -= player.spec.gunDamage;
               this.hitT = HIT_FLASH;
               dead = true;
-              if (b.hp <= 0) this.killBandit(b, player);
+              this.damageBandit(b, player.spec.gunDamage, player);
               break;
             }
           }
@@ -2501,6 +2855,7 @@ export class Dogfight {
       if (b.catT >= 0) continue; // rolling on the cat is not a mid-air
       if (b.pos.distanceTo(player.pos) > PLAYER_HIT_R) continue;
       const at = b.pos.clone();
+      if (this.mirror) this.takenDown.set(b.id, performance.now());
       this.removeBandit(b);
       this.kills++;
       this.blasts.spawn(at, "air", 1.3);
@@ -2534,21 +2889,16 @@ export class Dogfight {
   }
 
   /**
-   * Keep the laser marker and beam on the designation. Driven by sim time, so
-   * the pulse freezes on pause and the beam tracks the jet every step.
+   * Keep the laser marker on the designation. Driven by sim time, so the pulse
+   * freezes on pause.
    */
   private stepDesignator(player: AircraftState): void {
     const d = this.designation;
     const on = d !== null && !player.result;
     this.designator.visible = on;
-    this.beam.visible = on;
     if (!d || !on) return;
     this.designator.position.set(d.x, d.y + 3, d.z);
     this.designator.scale.setScalar(1 + 0.12 * Math.sin(player.time * 7));
-    const pos = this.beam.geometry.attributes.position as THREE.BufferAttribute;
-    pos.setXYZ(0, player.pos.x, player.pos.y - 1.2, player.pos.z);
-    pos.setXYZ(1, d.x, d.y + 2, d.z);
-    pos.needsUpdate = true;
   }
 
   private damagePlayer(player: AircraftState, dmg: number): void {

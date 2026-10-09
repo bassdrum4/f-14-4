@@ -1,7 +1,7 @@
 // UI chrome: main menu, pause, settings, controls, flight results.
 // React only; the canvas keeps rendering behind these overlays.
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Sim, Phase } from "../sim/engine";
 import { AIRCRAFT_LIST } from "../sim/aircraft";
 import { worldSeedForRoom } from "../sim/world";
@@ -18,7 +18,7 @@ import {
   type Account,
 } from "../accounts";
 import { gamestateConfigured } from "../gamestate";
-import type { NetState } from "../net/multiplayer";
+import type { ChatMsg, NetState } from "../net/multiplayer";
 import { APP_VERSION } from "../version";
 import { Hud, useHud } from "./Hud";
 import {
@@ -55,6 +55,19 @@ function useNet(sim: Sim | null): NetState {
     subscribe,
     () => (sim ? sim.netSnapshot : IDLE_NET),
     () => IDLE_NET,
+  );
+}
+
+/** Shown before any session exists, so the store read stays referentially stable. */
+const EMPTY_CHAT: readonly ChatMsg[] = [];
+
+function useChat(sim: Sim | null): readonly ChatMsg[] {
+  const subscribe = (cb: () => void) =>
+    sim ? sim.subscribeChat(cb) : () => {};
+  return useSyncExternalStore(
+    subscribe,
+    () => (sim ? sim.chat : EMPTY_CHAT),
+    () => EMPTY_CHAT,
   );
 }
 
@@ -731,27 +744,42 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
       </div>
       {net.error && <div className="menu-world-note err">{net.error}</div>}
 
-      <div className="menu-row-btns">
-        <Btn
-          primary
-          disabled={!canConnect}
-          onClick={() => {
-            commit();
-            sim?.openRoom(name, code);
-          }}
-        >
-          OPEN ROOM
-        </Btn>
-        <Btn
-          disabled={!canConnect}
-          onClick={() => {
-            commit();
-            sim?.joinRoom(name, code);
-          }}
-        >
-          JOIN ROOM
-        </Btn>
-      </div>
+      {/* In a room there is nothing to open or join: the door buttons only
+          make sense while the pilot is still on the ground outside one. */}
+      {!live && (
+        <div className="menu-row-btns">
+          <Btn
+            primary
+            disabled={!canConnect}
+            onClick={() => {
+              commit();
+              sim?.openRoom(name, code);
+            }}
+          >
+            OPEN ROOM
+          </Btn>
+          <Btn
+            disabled={!canConnect}
+            onClick={() => {
+              commit();
+              sim?.joinRoom(name, code);
+            }}
+          >
+            JOIN ROOM
+          </Btn>
+        </div>
+      )}
+
+      {live && (
+        <>
+          <div className="menu-row-btns">
+            <Btn primary onClick={() => sim?.leaveRoom()}>LEAVE ROOM</Btn>
+          </div>
+          <div className="menu-world-note">
+            Room {net.room} joined — leave to open or join another.
+          </div>
+        </>
+      )}
 
       {live && (
         <>
@@ -777,6 +805,7 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
               </div>
             ))}
           </div>
+          <ChatPanel sim={sim} online={online} />
         </>
       )}
 
@@ -852,14 +881,73 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
         <div className="mp-launch">
           <span className="menu-world-label">WAITING FOR THE HOST</span>
           <div className="menu-world-note">
-            Stay in the lobby — you lift off with the room when the host launches.
+            The room's mission is {MISSION_MODE_LABELS[settings.missionMode]} — the host sets it,
+            and everyone in the room flies it. Stay in the lobby: you lift off with the room.
           </div>
         </div>
       )}
 
       <div className="menu-row-btns">
-        {live && <Btn onClick={() => sim?.leaveRoom()}>LEAVE ROOM</Btn>}
         <Btn onClick={onBack}>BACK</Btn>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Room radio (lobby chat over the same data channel as everything else)
+// ---------------------------------------------------------------------------
+
+function ChatPanel({ sim, online }: { sim: Sim | null; online: boolean }) {
+  const log = useChat(sim);
+  const [draft, setDraft] = useState("");
+  // The log grows downward, so the newest line is the one to keep on screen.
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const box = boxRef.current;
+    if (box) box.scrollTop = box.scrollHeight;
+  }, [log.length]);
+
+  const send = () => {
+    const text = draft.trim();
+    if (!text) return;
+    sim?.sendChat(text);
+    setDraft("");
+  };
+
+  return (
+    <div className="mp-chat">
+      <span className="menu-world-label">RADIO</span>
+      <div className="mp-chat-log" ref={boxRef}>
+        {log.length === 0 && (
+          <div className="mp-chat-empty">
+            Radio silence — say something to the flight.
+          </div>
+        )}
+        {log.map((m, i) => (
+          <div className="mp-chat-line" key={i}>
+            <span className={"mp-chat-from" + (m.from ? "" : " unknown")}>
+              {m.from ? m.from.toUpperCase() : "??"}
+            </span>
+            <span className="mp-chat-text">{m.text}</span>
+          </div>
+        ))}
+      </div>
+      <div className="mp-chat-row">
+        <input
+          className="menu-input"
+          value={draft}
+          maxLength={160}
+          placeholder={online ? "TRANSMIT TO THE FLIGHT" : "RADIO OFFLINE"}
+          disabled={!online}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") send();
+          }}
+        />
+        <button className="world-chip chip-inline" disabled={!online || !draft.trim()} onClick={send}>
+          SEND
+        </button>
       </div>
     </div>
   );

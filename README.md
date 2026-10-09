@@ -1,55 +1,56 @@
-# F-14 Tomcat Simulator
+# F-14 Carrier Simulator
 
-The full production simulator is now maintained in TypeScript, recovered from
-the more advanced `fix/dogfight-gun-and-bandits` branch. This is the actual
-source project behind the three-aircraft, multiplayer, dogfight/strike edition,
-not the earlier stripped-down `src/game/game.ts` prototype.
+The **current** simulator lives in typed TypeScript/React modules in `src/`.
+This source was recovered from the newest feature-complete project
+(commit `63a9e17`), not the early F-14-only prototype.
 
-## Workflow
+## Run locally
 
 ```bash
 npm install
 npm run dev
+```
+
+## Build the same kind of self-contained HTML used by GitHub Pages and the web app
+
+```bash
 npm run typecheck
 npm run build
 ```
 
-**`npm run build` produces `dist/index.html`, a single self-contained
-HTML page built from `src/main.tsx` and the TypeScript modules.** Copy that
-file to any static web host.
+The Vite build uses **`app/index.html` and `src/main.tsx`** as its entry,
+**not** the precompiled `index.html` at the repo root.
+`vite-plugin-singlefile` bundles the full source application into one
+HTML file at `dist/index.html`. Only after a successful build, the publish
+plugin copies it to `index.html` and `isolate/index.html` (for both hosts).
+It also refreshes `src/restored/runtime.js` and `runtime.css` as generated
+outputs, although those files are **not the build inputs**.
 
-For a GitHub Pages site that serves the repository root:
+To deploy GitHub Pages from the repository root, commit the updated
+`index.html` after building:
 
 ```bash
-npm run build:publish
-git add index.html
-git commit -m "Publish rebuilt simulator"
+git add index.html isolate/index.html src/restored
+git commit -m "Publish TypeScript build"
 git push
 ```
 
-The existing root `index.html` is kept untouched until you explicitly run
-`build:publish`. During development/build, a Vite HTML pre-transform swaps
-its precompiled inline contents for the *current* `src/main.tsx` entry,
-and `vite-plugin-singlefile` inlines the fresh output again.
+The result preserves the existing *features and deployment format*, but its
+HTML need not be byte-for-byte identical to the old build because this source
+contains newer fixes and has been rebuilt from source.
 
-### Where the newer features live
+## Source layout
 
-- `src/sim/aircraft.ts`: F-14A, F/A-18C, A-6E specifications
-- `src/sim/flight.ts`: per-aircraft aerodynamics and carrier operations
-- `src/sim/dogfight.ts`: aggressors, strike mission, missiles, ordnance
-- `src/sim/engine.ts`: fixed-timestep orchestrator, missions, and HUD feed
-- `src/net/multiplayer.ts`: peer-to-peer lobby and room synchronization
-- `src/render/`: aircraft, effects, terrain, targeting, lights, remote jets
-- `src/ui/`: menus, controls, HUD, targeting and multiplayer screens
-- `src/accounts.ts`, `src/gamestate.ts`, `src/feedback/`: pilot profile,
-  game-state integration and feedback
+- `src/sim/aircraft.ts` — F-14A, F/A-18C, A-6E
+- `src/sim/flight.ts` — aircraft handling, carrier launches and recovery
+- `src/sim/dogfight.ts` — bandits, shared host fight, bombs/missiles, strike
+- `src/sim/engine.ts` — flight loop, missions, HUD, chat, world sync
+- `src/net/multiplayer.ts` — peer-to-peer rooms, roster, chat, pose exchange
+- `src/render/` — terrain, aircraft geometry, remote aircraft, visual effects
+- `src/ui/` — HUD, menus, target pod, multiplayer screens
+- `src/accounts.ts`, `src/gamestate.ts`, `src/feedback/` — profiles,
+  persisted flight preferences, feedback
+- `scripts/diag-*.ts` — offline/diagnostic tests (Bun required)
 
-**Build equivalence:** This produces the same self-contained *kind* of HTML
-page and preserves the feature set. Byte-for-byte equality with an existing
-production bundle is not expected: minification hashes, dependency versions,
-and later source fixes can change its bytes. Treat the current root HTML as a
-known-working artifact until the rebuilt output is smoke-tested.
-
-The `test:*` scripts run with Bun; no GitHub Actions are configured.
-Some networked account/feedback/multiplayer workflows depend on their
-respective external services and configuration.
+Some cloud and networking functionality depends on external services.
+There are no GitHub Actions workflows configured.

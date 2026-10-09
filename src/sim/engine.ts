@@ -12,6 +12,7 @@ import {
   spawnAircraft,
   stepAircraft,
   type AircraftState,
+  type FlightInput,
   type MissionKind,
 } from "../sim/flight";
 import {
@@ -27,7 +28,7 @@ import {
   worldSeedForRoom,
 } from "../sim/world";
 import type { TerrainPaint } from "../render/scene";
-import { CYCLE_MINUTES_PER_DAY, type Settings } from "../settings";
+import { CYCLE_MINUTES_PER_DAY, type MissionMode, type Settings } from "../settings";
 import { HOME_SITE, dayPhase, sunPosition, sunVector, type DayPhase } from "../sim/sun";
 import { Dogfight, type CarrierStatus, type GunCue } from "../sim/dogfight";
 import { ExplosionField } from "../render/effects";
@@ -42,7 +43,13 @@ import {
   RemoteFleet,
   type RemotePose,
 } from "../render/remoteJets";
-import { Multiplayer, type NetState, type NetStatus } from "../net/multiplayer";
+import {
+  Multiplayer,
+  sanitizeChat,
+  type ChatMsg,
+  type NetState,
+  type NetStatus,
+} from "../net/multiplayer";
 
 export type Phase = "menu" | "flying" | "paused" | "result";
 
@@ -76,7 +83,13 @@ export interface HudSnapshot {
   wire?: number;
   /** Carrier-approach guidance (the boat's simulated IFLOLS), null when the
    *  jet is parked, out of the ball-call window, or past the glide origin. */
-  glide: { rangeM: number; deviationM: number; lineupM: number } | null;
+  glide: {
+    rangeM: number;
+    deviationM: number;
+    lineupM: number;
+    onSpeedKt: number;
+    onSpeedAoaDeg: number;
+  } | null;
   resultTitle?: string;
   resultDetail?: string;
   resultKind?: "wire" | "bolter" | "crash";
@@ -301,6 +314,12 @@ export class Sim {
   private net: Multiplayer;
   private netState: NetState = idleNetState();
   private netListeners = new Set<(s: NetState) => void>();
+  /** The room radio: newest last, capped so a long session cannot grow it. */
+  private chatLog: ChatMsg[] = [];
+  private chatListeners = new Set<() => void>();
+  /** Settings the room asks for (the host's mission profile), for the UI to
+   *  apply and persist — the sim does not own where settings live. */
+  private settingsListeners = new Set<(s: Settings) => void>();
 
   /** Reused each frame: packing a pose should not allocate. */
   private poseOut: RemotePose = {
@@ -344,6 +363,13 @@ export class Sim {
       onPilotLeave: (id) => this.remoteFleet.remove(id),
       onPose: (id, pose) => this.remoteFleet.push(id, pose, performance.now()),
       onLaunch: (mission, carrier) => this.followLaunch(mission, carrier),
+      // The room's fight, from whoever is hosting it. Our guns are still ours;
+      // only the aircraft are theirs.
+      onEnemies: (snap) => this.df.applyRemoteSnapshot(snap, performance.now()),
+      onMode: (mode) => this.applyRoomMode(mode),
+      onHit: (id, dmg) => this.df.applyRemoteHit(id, dmg, this.state),
+      onCarrierHit: (dmg) => this.df.applyRemoteCarrierHit(dmg, this.state),
+      onChat: (msg) => this.addChat(msg),
     });
     this.input.attach(canvas);
     window.addEventListener("resize", this.onResize);
@@ -380,6 +406,9 @@ export class Sim {
     // Toggling a mission mode mid-flight starts or clears it; toggling it on
     // the ground arms the launch instead, so nothing starts while parked.
     if (modeChanged) {
+      // A mission profile is the room's profile: tell everyone the moment the
+      // host (the only pilot with these chips) changes it.
+      this.net.setMode(s.missionMode);
       const flying = this.phase === "flying" || this.phase === "paused";
       const combat = s.missionMode === "dogfight" || s.missionMode === "strike";
       const strike = s.missionMode === "strike";
@@ -686,6 +715,26 @@ export class Sim {
     };
   }
 
+  /**
+   * Settings the room asks for (today: the host's mission profile). The UI owns
+   * settings, so the sim asks for a change and the UI applies and stores it —
+   * that way a wingman's mission picker shows the room's fight, not their own.
+   */
+  subscribeSettings(fn: (s: Settings) => void): () => void {
+    this.settingsListeners.add(fn);
+    return () => {
+      this.settingsListeners.delete(fn);
+    };
+  }
+
+  /** The host picked a mission profile: follow it, and remember it. */
+  private applyRoomMode(mode: MissionMode): void {
+    if (this.settings.missionMode === mode) return;
+    const next: Settings = { ...this.settings, missionMode: mode };
+    this.settings = next;
+    for (const fn of this.settingsListeners) fn(next);
+  }
+
   get netSnapshot(): NetState {
     return this.netState;
   }
@@ -696,6 +745,7 @@ export class Sim {
    */
   openRoom(callsign: string, room: string): void {
     this.remoteFleet.clear();
+    this.chatLog = [];
     // Open/join set the room code, and the room code is the world: the terrain
     // follows automatically through syncWorldToRoom().
     this.net.open(room, callsign, this.settings.aircraft);
@@ -703,17 +753,51 @@ export class Sim {
 
   joinRoom(callsign: string, room: string): void {
     this.remoteFleet.clear();
+    this.chatLog = [];
     this.net.join(room, callsign, this.settings.aircraft);
   }
 
   leaveRoom(): void {
     this.remoteFleet.clear();
+    this.chatLog = [];
     this.net.leave();
   }
 
   /** Rename ourselves mid-session; the roster updates in place. */
   setCallsign(callsign: string): void {
     this.net.setName(callsign);
+  }
+
+  // --- room radio ----------------------------------------------------------
+
+  /** The chat log, newest last. Stable reference between messages. */
+  get chat(): readonly ChatMsg[] {
+    return this.chatLog;
+  }
+
+  subscribeChat(fn: () => void): () => void {
+    this.chatListeners.add(fn);
+    return () => {
+      this.chatListeners.delete(fn);
+    };
+  }
+
+  /**
+   * Transmit on the room radio. The line is sanitised once here, appended to
+   * our own log immediately (the wire would loop it back otherwise never —
+   * the mesh is full, so senders are not their own audience) and fanned out.
+   */
+  sendChat(text: string): void {
+    const msg = sanitizeChat(text);
+    if (!msg || !this.net.online) return;
+    this.net.sendChat(msg);
+    this.addChat({ from: this.net.callsign, text: msg });
+  }
+
+  private addChat(msg: ChatMsg): void {
+    this.chatLog.push(msg);
+    if (this.chatLog.length > 60) this.chatLog.splice(0, this.chatLog.length - 60);
+    for (const fn of this.chatListeners) fn();
   }
 
   /**
@@ -775,8 +859,6 @@ export class Sim {
 
     if (this.phase === "flying") {
       if (!this.crashSeq) this.handleEdges(); // a dead stick answers nothing
-      // The fixed-step loop samples the controls, not the render loop.
-      // An Escape press may have switched the phase to paused.
       if (this.phase === "flying") this.stepSim(frameDt);
     } else if (this.phase === "paused") {
       if (this.input.take("pause")) this.resume();
@@ -795,10 +877,32 @@ export class Sim {
     // layer, which sends it at its own fixed rate rather than per frame.
     this.remoteFleet.update(nowMs);
     this.net.publish(this.buildPose());
+    this.syncFight();
     this.updateCamera(frameDt);
     this.updateSun();
     this.renderer.render();
   };
+
+  /**
+   * Keep this sim and the room in step about the enemies. One pilot (the room
+   * host) runs the hostile carrier and its bandits and streams them, so every
+   * pilot in the room shoots at the same aeroplanes; a wingman mirrors what it
+   * is told and reports the damage it did. Called once per frame.
+   */
+  private syncFight(): void {
+    const online = this.netState.status === "online";
+    const mirror = online && !this.netState.host;
+    this.df.setMirror(mirror, this.state);
+    if (!online) return;
+    if (mirror) {
+      const hits = this.df.takeHits();
+      for (const h of hits) this.net.hitBandit(h.id, h.dmg);
+      const cv = this.df.takeCarrierHit();
+      if (cv > 0) this.net.hitCarrier(cv);
+    } else {
+      this.net.publishEnemies(this.df.enemySnapshot());
+    }
+  }
 
   /**
    * The local aircraft as the net layer sends it: position, orientation,
@@ -882,8 +986,33 @@ export class Sim {
       }
     } else {
       seq.t += frameDt;
-      if (seq.t > 1.9) this.setPhase("result");
+      // Dying in a live room drops the pilot straight back into the fight on
+      // the deck nearest their wingman; only a pilot with nobody to join falls
+      // back to the room's lobby.
+      if (seq.t > 1.9 && !this.respawnNearWingman()) this.setPhase("result");
     }
+  }
+
+  /**
+   * Put a dead pilot back in the fight, immediately, on the carrier nearest the
+   * closest live wingman — "get back in formation" without a trip to the lobby
+   * while the room flies on. Returns false when there is nobody to join, which
+   * is when the room's lobby is the right answer instead.
+   */
+  private respawnNearWingman(): boolean {
+    if (this.netState.status !== "online") return false;
+    const contacts = this.remoteFleet.contacts(this.state.pos.x, this.state.pos.y, this.state.pos.z);
+    if (contacts.length === 0) return false;
+    const wing = contacts[0]; // nearest live wingman first
+    const def = nearestCarrier(wing.x, wing.z);
+    const idx = carriers().indexOf(def);
+    if (idx < 0) return false;
+    // Take off from there for the rest of the session too, so a restart from
+    // the pause menu does not throw the pilot back across the map.
+    this.spawnCarrier = idx;
+    this.beginMission("carrier", idx);
+    this.pushBanner(`RESPAWN — ${wing.name.toUpperCase()}'S CARRIER · ${def.name.toUpperCase()}`);
+    return true;
   }
 
   private handleEdges(): void {
@@ -1176,7 +1305,15 @@ export class Sim {
       wire: st.wire,
       glide: (() => {
         const g = glideStateFor(st);
-        return g ? { rangeM: g.rangeM, deviationM: g.deviationM, lineupM: g.lineupM } : null;
+        return g
+          ? {
+              rangeM: g.rangeM,
+              deviationM: g.deviationM,
+              lineupM: g.lineupM,
+              onSpeedKt: g.onSpeedKt,
+              onSpeedAoaDeg: g.onSpeedAoaDeg,
+            }
+          : null;
       })(),
       resultTitle: st.result?.title,
       resultDetail: st.result?.detail,

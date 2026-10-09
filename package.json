@@ -21,10 +21,13 @@
     "test:flaps": "bun scripts/diag-flaps.ts",
     "test:net": "bun scripts/diag-net.ts",
     "test:mp": "bun scripts/diag-mp-flow.ts",
+    "test:chat": "bun scripts/diag-chat.ts",
+    "test:enemysync": "bun scripts/diag-enemy-sync.ts",
+    "test:landing": "bun scripts/diag-landing.ts",
+    "test:climb": "bun scripts/diag-climb.ts",
     "test:feedback": "bun scripts/diag-feedback.ts",
     "test:feedback:gs": "bun scripts/diag-feedback-gs.ts",
-    "build:publish": "npm run build && node scripts/publish-singlefile.mjs",
-    "build:standalone": "npm run build:publish",
+    "build:standalone": "npm run build",
     "check:standalone": "node scripts/check-singlefile.mjs"
   },
   "dependencies": {

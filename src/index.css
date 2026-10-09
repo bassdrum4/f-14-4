@@ -225,15 +225,19 @@ html, body, #root {
 .hud-gauge-value em { font-style: normal; font-size: 11px; margin-left: 4px; opacity: 0.7; }
 .hud-gauge.warn .hud-gauge-value { color: var(--hud-amber); text-shadow: 0 0 8px rgba(255, 210, 80, 0.5); }
 
+/* Bottom strip: throttle + switch tags + the nav/store readouts. Deliberately
+   small — it sits under the gunsight and must stay out of the way, so the type
+   is compact and the lines are packed tight. */
 .hud-bottom {
-  position: absolute; left: 50%; bottom: 3.2%;
+  position: absolute; left: 50%; bottom: 2.6%;
   transform: translateX(-50%);
-  display: flex; gap: 26px; align-items: flex-end;
-  font-size: 12px;
+  display: flex; gap: 16px; align-items: flex-end;
+  font-size: 10px;
+  line-height: 1.25;
 }
-.hud-eng { display: flex; flex-direction: column; gap: 4px; min-width: 200px; }
+.hud-eng { display: flex; flex-direction: column; gap: 3px; min-width: 148px; }
 .hud-throttle {
-  position: relative; height: 10px; width: 200px;
+  position: relative; height: 8px; width: 148px;
   border: 1px solid rgba(120, 255, 140, 0.5); border-radius: 2px;
   overflow: hidden; background: rgba(0, 20, 8, 0.45);
 }
@@ -241,18 +245,22 @@ html, body, #root {
 .hud-throttle-ab { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, rgba(80, 160, 255, 0.5), rgba(160, 210, 255, 0.85)); mix-blend-mode: screen; }
 .hud-rpm { opacity: 0.8; }
 
-.hud-toggles { display: flex; gap: 8px; }
+.hud-toggles { display: flex; gap: 5px; flex-wrap: wrap; max-width: 190px; }
 .hud-tag {
   border: 1px solid rgba(120, 255, 140, 0.35); border-radius: 3px;
-  padding: 3px 8px; font-size: 10px; letter-spacing: 0.14em;
+  padding: 2px 6px; font-size: 9px; letter-spacing: 0.1em;
   color: rgba(120, 255, 140, 0.45);
 }
 .hud-tag.on { color: var(--hud-green); border-color: var(--hud-green); background: rgba(80, 255, 120, 0.10); }
 .hud-tag.warn { color: var(--hud-amber); border-color: var(--hud-amber); background: rgba(255, 210, 80, 0.08); }
 
-.hud-nav { display: flex; flex-direction: column; gap: 3px; opacity: 0.85; }
+.hud-nav {
+  display: flex; flex-direction: column; gap: 1px; opacity: 0.85;
+  letter-spacing: 0.02em;
+  max-width: min(560px, 52vw);
+}
 .hud-cv { color: #ff8f7d; letter-spacing: 0.04em; }
-.hud-cam { opacity: 0.6; font-size: 10px; letter-spacing: 0.18em; }
+.hud-cam { opacity: 0.6; font-size: 9px; letter-spacing: 0.1em; }
 
 .hud-stall {
   position: absolute; top: 22%; left: 50%; transform: translate(-50%, 0);
@@ -462,6 +470,41 @@ html, body, #root {
   border-radius: 2px; padding: 2px 6px;
 }
 
+/* The room radio: pilot-to-pilot chat over the same data channel. */
+.mp-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+.mp-chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 170px;
+  overflow-y: auto;
+  background: rgba(12, 20, 28, 0.6);
+  border: 1px solid var(--panel-line);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+}
+.mp-chat-line { display: flex; gap: 8px; line-height: 1.45; }
+.mp-chat-from {
+  flex: 0 0 auto;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: #7fb8dd;
+}
+.mp-chat-text {
+  color: #cfe2ef;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.mp-chat-empty { color: #587082; font-size: 11.5px; letter-spacing: 0.08em; }
+.mp-chat-row { display: flex; gap: 8px; }
+.mp-chat-row .menu-input { flex: 1 1 auto; }
+
 .feedback-chips { display: flex; gap: 8px; }
 .feedback-chips .world-chip { flex: 1 1 0; text-align: center; }
 
@@ -522,6 +565,13 @@ html, body, #root {
   .result-panel { padding: 20px 18px 16px; }
   .result-title { font-size: 26px; }
   .result-detail { font-size: 14px; }
+
+  /* the bottom readout strip shrinks a step further on short viewports */
+  .hud-bottom { font-size: 9px; gap: 11px; bottom: 2%; }
+  .hud-nav { max-width: 58vw; }
+  .hud-eng, .hud-throttle { min-width: 108px; width: 108px; }
+  .hud-toggles { max-width: 150px; }
+  .hud-cam { font-size: 8px; }
 }
 
 .hud-net { color: #8fdcff; letter-spacing: 0.05em; }

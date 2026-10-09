@@ -22,10 +22,21 @@
 // Usage: bun scripts/diag-mp-flow.ts
 
 import type { Peer } from "peerjs";
-import { Multiplayer, emptyPose, hostPeerId, type NetState } from "../src/net/multiplayer";
+import {
+  Multiplayer,
+  emptyPose,
+  hostPeerId,
+  packEnemies,
+  packPose,
+  unpackEnemies,
+  unpackPose,
+  type NetState,
+} from "../src/net/multiplayer";
 import type { RemotePose } from "../src/render/remoteJets";
 import type { AircraftId } from "../src/sim/aircraft";
+import type { EnemySnapshot } from "../src/sim/dogfight";
 import type { MissionKind } from "../src/sim/flight";
+import type { MissionMode } from "../src/settings";
 import { DEFAULT_SEED, setWorldSeed, terrainHeight, worldSeedForRoom } from "../src/sim/world";
 
 let failures = 0;
@@ -264,6 +275,14 @@ interface Pilot {
   left: string[];
   /** Sorties the room asked us to join. */
   launches: Array<{ mission: MissionKind; carrier: number }>;
+  /** Mission profiles the room pushed at us. */
+  modes: MissionMode[];
+  /** Fight snapshots, as they arrived. */
+  enemies: EnemySnapshot[];
+  /** Hits another pilot reported landing on an enemy we run. */
+  hits: Array<{ id: number; dmg: number }>;
+  /** Damage another pilot reported landing on the hostile boat. */
+  carrierHits: number[];
 }
 
 function makePilot(): Pilot {
@@ -276,6 +295,10 @@ function makePilot(): Pilot {
     poseCount: 0,
     left: [],
     launches: [],
+    modes: [],
+    enemies: [],
+    hits: [],
+    carrierHits: [],
   };
   rec.net = new Multiplayer(
     {
@@ -299,6 +322,10 @@ function makePilot(): Pilot {
       onLaunch: (mission, carrier) => {
         rec.launches.push({ mission, carrier });
       },
+      onMode: (mode) => rec.modes.push(mode),
+      onEnemies: (snap) => rec.enemies.push(snap),
+      onHit: (id, dmg) => rec.hits.push({ id, dmg }),
+      onCarrierHit: (dmg) => rec.carrierHits.push(dmg),
     },
     (id) => {
       const peer = new MockPeer(broker, id);
@@ -583,7 +610,141 @@ await advance(1000);
 check("poses keep flowing", wingTwo.poseCount > beforePoses + 8, `${beforePoses} -> ${wingTwo.poseCount}`);
 check("and no world traffic appears in flight", controlLog.length === 0, controlLog.join(" | "));
 
-for (const p of [host, wing, third, late, early, lateHost, clash, lead, numberTwo, scout, wingTwo]) p.net.dispose();
+// ---------------------------------------------------------------------------
+// 12. the mission profile is the room's: the host decides, everyone flies it
+// ---------------------------------------------------------------------------
+console.log("\n[mission profile]");
+const skipper = makePilot();
+skipper.net.open("ECHO", "MAVERICK", "tomcat");
+await flush();
+
+// Picked in the lobby before anyone joined: the roster has to carry it.
+skipper.net.setMode("dogfight");
+await flush();
+const joiner = makePilot();
+joiner.net.join("ECHO", "GOOSE", "tomcat");
+await flush();
+check("a joiner is told the room's profile", joiner.modes.includes("dogfight"),
+  JSON.stringify(joiner.modes));
+check("the host does not take a profile off the wire", skipper.modes.length === 0,
+  JSON.stringify(skipper.modes));
+
+skipper.net.setMode("strike");
+await flush();
+check("a later change reaches the linked wingman",
+  joiner.modes[joiner.modes.length - 1] === "strike", JSON.stringify(joiner.modes));
+const modesBeforeRepeat = joiner.modes.length;
+skipper.net.setMode("strike");
+await flush();
+check("setting the profile it already has sends nothing",
+  joiner.modes.length === modesBeforeRepeat, JSON.stringify(joiner.modes));
+
+const lateEnemy = makePilot();
+lateEnemy.net.join("echo", "ICEMAN", "tomcat");
+await flush();
+check("the profile rides the roster to a newcomer",
+  lateEnemy.modes.includes("strike"), JSON.stringify(lateEnemy.modes));
+
+// ---------------------------------------------------------------------------
+// 13. the fight: the host streams it, the room mirrors it
+// ---------------------------------------------------------------------------
+console.log("\n[enemy stream]");
+const fight: EnemySnapshot = {
+  carrier: { x: 1200, z: -3400, headingDeg: 210.5, hp: 74, status: "closing" },
+  bandits: [
+    { id: 7, x: 900, y: 1400, z: -3000, qx: 0.1, qy: 0.2, qz: 0.3, qw: 0.9273618, hp: 60, onDeck: false },
+    { id: 8, x: 880, y: 1410, z: -2990, qx: 0, qy: 0, qz: 0, qw: 1, hp: 100, onDeck: true },
+  ],
+  wave: 3,
+};
+const enemiesBefore = joiner.enemies.length;
+const posesBefore = joiner.poseCount;
+skipper.net.publishEnemies(fight);
+await advance(1000);
+const got = joiner.enemies[joiner.enemies.length - 1];
+check("the wingman received the fight", joiner.enemies.length > enemiesBefore,
+  `${joiner.enemies.length}`);
+const gc = got?.carrier ?? null;
+check("the boat survived the wire",
+  gc !== null && Math.abs(gc.x - 1200) < 1e-3 && gc.hp === 74 && gc.status === "closing" &&
+    Math.abs(gc.headingDeg - 210.5) < 1e-3,
+  JSON.stringify(gc));
+const gb = got?.bandits ?? [];
+check("the bandits survived the wire, ids and all",
+  gb.length === 2 && gb[0].id === 7 && gb[1].id === 8, JSON.stringify(gb));
+check("a bandit keeps its pose, hull and deck state",
+  !!gb[0] && Math.abs(gb[0].x - 900) < 1e-3 && Math.abs(gb[0].y - 1400) < 1e-3 &&
+    Math.abs(gb[0].z + 3000) < 1e-3 && Math.abs(gb[0].qw - 0.9273618) < 1e-6 &&
+    gb[0].hp === 60 && !gb[0].onDeck && gb[1].onDeck,
+  JSON.stringify(gb[0]));
+check("the wave rides along", got?.wave === 3, `${got?.wave}`);
+check("the fight goes out at half the pose rate",
+  joiner.enemies.length - enemiesBefore < (joiner.poseCount - posesBefore) * 0.75,
+  `${joiner.enemies.length - enemiesBefore} fights vs ${joiner.poseCount - posesBefore} poses`);
+
+// A wave that clears arrives as an empty fight, not as a stale one.
+skipper.net.publishEnemies({ carrier: null, bandits: [], wave: 4 });
+await advance(300);
+const cleared = joiner.enemies[joiner.enemies.length - 1];
+check("a cleared fight arrives empty",
+  !!cleared && cleared.bandits.length === 0 && cleared.carrier === null && cleared.wave === 4,
+  JSON.stringify(cleared));
+
+// Nobody is running the fight any more (the host went solo): nothing is sent.
+const quiet = joiner.enemies.length;
+skipper.net.publishEnemies(null);
+await advance(400);
+check("no fight is sent once the host stops publishing",
+  joiner.enemies.length === quiet, `${quiet} -> ${joiner.enemies.length}`);
+
+// ---------------------------------------------------------------------------
+// 14. damage flows the other way, to the pilot who owns the aircraft
+// ---------------------------------------------------------------------------
+console.log("\n[wingman damage]");
+joiner.net.hitBandit(7, 42.5);
+joiner.net.hitCarrier(11);
+await flush();
+check("the host hears a wingman's hit on a bandit",
+  skipper.hits.length === 1 && skipper.hits[0].id === 7 && skipper.hits[0].dmg === 42.5,
+  JSON.stringify(skipper.hits));
+check("and a wingman's hit on the boat",
+  skipper.carrierHits.length === 1 && skipper.carrierHits[0] === 11,
+  JSON.stringify(skipper.carrierHits));
+check("a wingman's own report is not echoed back at it", joiner.hits.length === 0);
+
+// ---------------------------------------------------------------------------
+// 15. the wire format: a fight packet and a pose packet cannot be confused
+// ---------------------------------------------------------------------------
+console.log("\n[wire format]");
+const roundTrip = unpackEnemies(packEnemies(fight, 9));
+check("a fight packet survives a round trip",
+  roundTrip !== null && roundTrip.bandits.length === 2 && roundTrip.wave === 3 &&
+    roundTrip.bandits[1].onDeck === true,
+  JSON.stringify(roundTrip));
+{
+  const pose = emptyPose();
+  pose.x = 1234.5;
+  pose.y = -200;
+  pose.z = 77.25;
+  pose.qw = 1;
+  pose.speed = 250;
+  pose.flags = 5;
+  const poseBuf = packPose(pose, 1);
+  check("a pose packet is not read as a fight", unpackEnemies(poseBuf) === null);
+  check("a fight packet is not read as a pose", unpackPose(packEnemies(fight, 1), emptyPose()) === null);
+}
+check("a truncated packet is refused", unpackEnemies(new ArrayBuffer(20)) === null);
+check("a corrupted packet is refused", (() => {
+  const buf = packEnemies(fight, 2);
+  new DataView(buf).setUint16(buf.byteLength - 2, 0);
+  return unpackEnemies(buf) === null;
+})());
+check("a fight packet carries the codec sequence", (() => {
+  const buf = packEnemies(fight, 513);
+  return new DataView(buf).getUint16(6) === (513 & 0xffff);
+})());
+
+for (const p of [host, wing, third, late, early, lateHost, clash, lead, numberTwo, scout, wingTwo, skipper, joiner, lateEnemy]) p.net.dispose();
 
 console.log(failures === 0 ? "\nALL MULTIPLAYER FLOW CHECKS PASSED" : `\n${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);

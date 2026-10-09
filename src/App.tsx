@@ -22,6 +22,18 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // The room can ask for a setting — today the host's mission profile, so every
+  // pilot in a room flies the same fight. The UI owns settings, so apply it and
+  // persist it here rather than letting the sim rewrite them behind the menu.
+  useEffect(() => {
+    if (!sim) return;
+    return sim.subscribeSettings((s) => {
+      setSettings(s);
+      saveSettings(s);
+      sim.applySettings(s);
+    });
+  }, [sim]);
+
   const updateSettings = (s: Settings) => {
     setSettings(s);
     saveSettings(s);
