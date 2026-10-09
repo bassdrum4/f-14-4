@@ -43,7 +43,16 @@ export class InputManager {
   private onDownBound = (e: MouseEvent) => this.onMouseDown(e);
   private onUpBound = () => (this.dragging = false);
   private onMoveBound = (e: MouseEvent) => this.onMouseMove(e);
-  private onBlurBound = () => this.down.clear();
+  private onBlurBound = () => {
+    // Key-up can be lost when focus leaves the tab. Clear the edge latch as
+    // well as held keys, or the next press of a toggle can be ignored.
+    this.down.clear();
+    this.pressedQueue.clear();
+    this.consumed.clear();
+    this.dragging = false;
+    this.mouseDX = 0;
+    this.mouseDY = 0;
+  };
 
   constructor(settings: Settings) {
     this.bindings = { ...settings.bindings };

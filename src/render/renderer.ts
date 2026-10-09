@@ -27,6 +27,7 @@ export class WorldRenderer {
   sun: THREE.DirectionalLight;
   oceanMat: THREE.MeshStandardMaterial;
   private quality: Quality;
+  private terrainPaint!: TerrainPaint;
   private worldRoot = new THREE.Group();
   private nightRoot = new THREE.Group();
   private nightLights: THREE.MeshStandardMaterial;
@@ -41,7 +42,9 @@ export class WorldRenderer {
     this.quality = quality;
     this.renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: quality !== "low",
+      // Context antialiasing cannot be changed after WebGL creation.
+      // Keep it consistent across runtime quality selections.
+      antialias: true,
       powerPreference: "high-performance",
     });
     this.renderer.shadowMap.enabled = quality !== "low";
@@ -144,6 +147,7 @@ export class WorldRenderer {
 
   /** Rebuild terrain + airfield + carriers for the currently active world. */
   applyWorld(paint: TerrainPaint): void {
+    this.terrainPaint = paint;
     disposeTree(this.worldRoot);
     this.worldRoot.clear();
     this.worldRoot.add(buildTerrain(this.quality, paint));
@@ -160,6 +164,7 @@ export class WorldRenderer {
   }
 
   applyQuality(q: Quality): void {
+    const geometryChanged = q !== this.quality;
     this.quality = q;
     const shadows = q !== "low";
     // These are only set in the constructor today, so switching quality at
@@ -174,6 +179,9 @@ export class WorldRenderer {
           : Math.min(window.devicePixelRatio, 2);
     this.renderer.setPixelRatio(pr);
     this.resize();
+    // Rebuild terrain at the requested segment count. The saved paint
+    // includes any live-terrain satellite canvas and height sampler.
+    if (geometryChanged && this.terrainPaint) this.applyWorld(this.terrainPaint);
   }
 
   resize(): void {

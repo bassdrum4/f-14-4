@@ -10,7 +10,6 @@ import {
   spawnAircraft,
   stepAircraft,
   type AircraftState,
-  type FlightInput,
   type MissionKind,
 } from "../sim/flight";
 import {
@@ -428,11 +427,8 @@ export class Game {
 
     if (this.phase === "flying") {
       this.handleEdges();
-      const inp = this.input.sample(FIXED_DT);
-      this.inputPitch = inp.pitch;
-      this.inputRoll = inp.roll;
-      this.inputYaw = inp.yaw;
-      this.stepSim(inp, frameDt);
+      // An edge action may have paused the game; do not advance that frame.
+      if (this.phase === "flying") this.stepSim(frameDt);
     } else if (this.phase === "paused") {
       if (this.input.take("pause")) this.resume();
     } else if (this.phase === "result") {
@@ -466,10 +462,16 @@ export class Game {
     this.input.take("cat"); // sim uses catHold from sampled input
   }
 
-  private stepSim(inp: FlightInput, frameDt: number): void {
+  private stepSim(frameDt: number): void {
     this.acc = Math.min(this.acc + frameDt, 0.25);
     let steps = 0;
     while (this.acc >= FIXED_DT && steps < 8) {
+      // Advance control ramps at the same fixed rate as the flight model.
+      // Sampling once per rendered frame changes handling with display FPS.
+      const inp = this.input.sample(FIXED_DT);
+      this.inputPitch = inp.pitch;
+      this.inputRoll = inp.roll;
+      this.inputYaw = inp.yaw;
       this.prevPos.copy(this.state.pos);
       this.prevQuat.copy(this.state.quat);
       stepAircraft(this.state, inp, FIXED_DT);
