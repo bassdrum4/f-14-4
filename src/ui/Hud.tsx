@@ -108,7 +108,7 @@ export function Hud({ sim, daylight, minimap }: {
           <div>FIELD {hud.distFieldKm.toFixed(1)} KM · {Math.round(hud.bearingFieldDeg)}°</div>
           {hud.dfActive && (
             <div>
-              {hud.dfStrike ? "TARGETS" : "BANDITS"} {hud.dfBandits} · {hud.dfStrike ? "CLEARED" : "TAGGED"} {hud.dfKills} · WAVE {hud.dfWave} · NEAR {hud.dfNearestKm.toFixed(1)} KM {Math.round(hud.dfNearestBrgDeg)}°
+              {hud.dfStrike ? "TARGETS" : "BANDITS"} {hud.dfBandits} · {hud.dfStrike ? "CLEARED" : "TAGGED"} {hud.dfKills} · WAVE {hud.dfWave} · NEAREST {hud.dfNearestKm.toFixed(1)} KM {Math.round(hud.dfNearestBrgDeg)}°
             </div>
           )}
           {hud.dfCarrier && (
@@ -129,21 +129,21 @@ export function Hud({ sim, daylight, minimap }: {
           )}
           <div>
             {hud.dfBombs > 0
-              ? `LGB ${hud.dfBombs}/${hud.dfBombsMax}${hud.dfBombsAway > 0 ? ` · ${hud.dfBombsAway} AWAY` : ""}${hud.dfBombsTracking > 0 ? ` · ${hud.dfBombsTracking} TRACKING` : ""} · [R] POD`
+              ? `LGB ${hud.dfBombs}/${hud.dfBombsMax}${hud.dfBombsAway > 0 ? ` · ${hud.dfBombsAway} IN THE AIR` : ""}${hud.dfBombsTracking > 0 ? ` · ${hud.dfBombsTracking} TRACKING` : ""} · [R] TARGET POD`
               : "STORES EMPTY"}
           </div>
           {hud.dfMissilesMax > 0 && (
             <div className={hud.dfMissiles > 0 ? "hud-laser" : undefined}>
-              MSL {hud.dfMissiles}/{hud.dfMissilesMax} · [E] FIRE · SEEKS NEAREST
+              MSL {hud.dfMissiles}/{hud.dfMissilesMax} · [E] FIRE — SEEKS NEAREST TARGET
             </div>
           )}
           {hud.dfDesignated && (
             <div className="hud-laser">
-              LASER {hud.dfDesignated.km.toFixed(1)} KM · RELEASE AGAIN TO RE-ENGAGE
+              LASER DESIGNATED · {hud.dfDesignated.km.toFixed(1)} KM · RELEASE OVER A NEW SPOT TO RE-ENGAGE
             </div>
           )}
           <div className="hud-cam">
-            {hud.aircraftName} · {hud.cameraMode.toUpperCase()} · [C] CAM · {formatClock(hud.localHour)} {daylight === "live" ? "HST" : "LOCAL"}
+            {hud.aircraftName} · {hud.cameraMode.toUpperCase()} CAM · C to cycle · {formatClock(hud.localHour)} {daylight === "live" ? "HST" : "LOCAL"}
           </div>
         </div>
       </div>
@@ -641,17 +641,8 @@ function drawApproach(
         ? `HIGH ${Math.round(dev)} M`
         : `LOW ${Math.round(-dev)} M`;
   ctx.fillText(call, cx, cy + unit * runCount * 0.55 + 26);
-  // The speed call: the approach is flown on AoA, so the call is the AoA error
-  // against the on-speed indexer (with the knots beside it, since that is the
-  // number a pilot actually flies).
-  const aoaErr = hud.aoaDeg - g.onSpeedAoaDeg;
-  const speedErr = hud.speedKt - g.onSpeedKt;
-  const speedCall =
-    Math.abs(aoaErr) < 1.2
-      ? `ON SPEED ${Math.round(g.onSpeedKt)} KT`
-      : `${speedErr > 0 ? "FAST" : "SLOW"} ${Math.abs(Math.round(speedErr))} KT`;
   ctx.fillText(
-    `CV ${g.lineupM >= 0 ? "R" : "L"} ${Math.abs(Math.round(g.lineupM))} M · ${rangeKm.toFixed(2)} KM · ${speedCall}`,
+    `CV ${g.lineupM >= 0 ? "R" : "L"} ${Math.abs(Math.round(g.lineupM))} M · ${rangeKm.toFixed(2)} KM · ${Math.round(hud.aoaDeg)}° AOA`,
     cx,
     cy + unit * runCount * 0.55 + 42,
   );

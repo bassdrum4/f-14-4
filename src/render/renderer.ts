@@ -54,6 +54,7 @@ export class WorldRenderer {
     this.quality = quality;
     this.renderer = new THREE.WebGLRenderer({
       canvas,
+      // The WebGL antialias context flag cannot be switched at runtime.
       antialias: true,
       powerPreference: "high-performance",
     });
@@ -208,6 +209,7 @@ export class WorldRenderer {
           : Math.min(window.devicePixelRatio, 2);
     this.renderer.setPixelRatio(pr);
     this.resize();
+    // Rebuild mesh resolution when changing graphics quality.
     if (geometryChanged && this.terrainPaint) this.applyWorld(this.terrainPaint);
   }
 
@@ -230,10 +232,7 @@ export class WorldRenderer {
     // slow swell drift: gives motion cues when judging height over water
     const t = performance.now() / 1000;
     const waves = this.oceanMat.bumpMap;
-    // Wrapped into one tile: the same drift speed, without letting the offset
-    // grow into the range where float32 UV precision starts to quantise and
-    // the swell stutters on a long flight.
-    if (waves) waves.offset.set((t * 0.006) % 1, (t * 0.0025) % 1);
+    if (waves) waves.offset.set(t * 0.006, t * 0.0025);
     // Lights blink on wall-clock time, not sim time, so a paused night scene
     // still reads as a living one.
     updateAirLights(this.dark, t);

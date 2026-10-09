@@ -133,7 +133,7 @@ const KEY = "f14sim.settings.v1";
 export function defaultSettings(): Settings {
   return {
     volume: 0.7,
-    sensitivity: 1.35,
+    sensitivity: 1,
     quality: "medium",
     aircraft: DEFAULT_AIRCRAFT,
     missionMode: "cruise",

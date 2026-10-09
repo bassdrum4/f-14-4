@@ -167,18 +167,8 @@ export function buildOcean(): THREE.Mesh {
     transparent: true,
     opacity: 0.9, // shallow shelves read faintly through the surface
     bumpMap: waves,
-    // Wave height in shading terms only. Pushed much past this the normal
-    // perturbation outruns the surface and the sea reads as if it were
-    // heaving, instead of as a flat sheet with wavetops on it.
-    bumpScale: 0.5,
+    bumpScale: 1.6,
     roughnessMap: waves,
-    // The sea is a single 2-triangle sheet 240 km across, and the seabed
-    // shelves up close under it. Depth precision collapses over those
-    // distances, so without a bias the two surfaces trade the depth test
-    // frame by frame and the water appears to jump and flicker.
-    polygonOffset: true,
-    polygonOffsetFactor: -4,
-    polygonOffsetUnits: -8,
   });
   const mesh = new THREE.Mesh(geom, mat);
   mesh.position.y = 0;
