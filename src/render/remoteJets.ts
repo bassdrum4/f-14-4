@@ -37,6 +37,7 @@ export const FLAG_FLAPS = 4;
 export const FLAG_SPEEDBRAKE = 8;
 export const FLAG_STALLED = 16;
 export const FLAG_AB = 32;
+export const FLAG_ACTIVE = 128;
 
 /**
  * One-way link delay in ms, estimated by the net layer from the peer
@@ -87,7 +88,7 @@ interface RemoteEntity {
 }
 
 /** A callsign label drawn onto a canvas sprite (cached per remote). */
-function makeTag(name: string): { tag: THREE.Sprite; texture: THREE.CanvasTexture } {
+function makeTag(name: string, hostile = false): { tag: THREE.Sprite; texture: THREE.CanvasTexture } {
   const canvas = document.createElement("canvas");
   canvas.width = TAG_TEXTURE_W;
   canvas.height = TAG_TEXTURE_H;
@@ -102,10 +103,10 @@ function makeTag(name: string): { tag: THREE.Sprite; texture: THREE.CanvasTextur
     ctx.beginPath();
     ctx.roundRect(x, 18, w, 92, 18);
     ctx.fill();
-    ctx.strokeStyle = "rgba(120, 255, 140, 0.55)";
+    ctx.strokeStyle = hostile ? "rgba(255, 120, 90, 0.7)" : "rgba(120, 255, 140, 0.55)";
     ctx.lineWidth = 3;
     ctx.stroke();
-    ctx.fillStyle = "rgba(214, 255, 226, 0.95)";
+    ctx.fillStyle = hostile ? "rgba(255, 210, 185, 0.95)" : "rgba(214, 255, 226, 0.95)";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(text, TAG_TEXTURE_W / 2, TAG_TEXTURE_H / 2 + 2);
@@ -133,9 +134,18 @@ export class RemoteFleet {
   private remotes = new Map<string, RemoteEntity>();
   /** Wall clock of the previous update, for the presented clock's advance. */
   private lastUpdateAt = 0;
+  private combatPilots: Set<string> | null = null;
 
   constructor(scene: THREE.Scene) {
     scene.add(this.root);
+  }
+
+  setCombatPilots(ids: string[] | null): void {
+    const changed = (ids === null) !== (this.combatPilots === null);
+    this.combatPilots = ids === null ? null : new Set(ids);
+    if (changed) for (const r of this.remotes.values()) {
+      const name = r.name; r.name = ""; this.setName(r.id, name);
+    }
   }
 
   /** Create (or reset) the mesh for a peer as soon as its hello arrives. */
@@ -154,7 +164,7 @@ export class RemoteFleet {
     const mesh = buildAircraft(aircraft, "gray");
     mesh.group.position.set(0, -8000, 0); // parked below the water until the first frame
     this.root.add(mesh.group);
-    const { tag, texture } = makeTag(name);
+    const { tag, texture } = makeTag(name, this.combatPilots !== null);
     this.root.add(tag);
     this.remotes.set(id, {
       id,
@@ -179,7 +189,7 @@ export class RemoteFleet {
     r.tag.material.map = null;
     (r.tag.material as THREE.SpriteMaterial).dispose();
     r.tagTex.dispose();
-    const { tag, texture } = makeTag(name);
+    const { tag, texture } = makeTag(name, this.combatPilots !== null);
     r.tag = tag;
     r.tagTex = texture;
     this.root.add(tag);
@@ -224,6 +234,17 @@ export class RemoteFleet {
       if (!r.buf.length || performance.now() - r.lastAt > GONE_MS) continue;
       const p = r.buf[r.buf.length - 1].p;
       out.push({ id: r.id, name: r.name, x: p.x, z: p.z });
+    }
+    return out;
+  }
+
+  combatTargets(): Array<{ id: string; pos: THREE.Vector3; vel: THREE.Vector3 }> {
+    const out: Array<{ id: string; pos: THREE.Vector3; vel: THREE.Vector3 }> = [];
+    for (const r of this.remotes.values()) {
+      if (!r.buf.length || performance.now() - r.lastAt > 800) continue;
+      const p = r.buf[r.buf.length - 1].p;
+      if (!(p.flags & FLAG_ACTIVE)) continue;
+      out.push({ id: r.id, pos: r.mesh.group.position.clone(), vel: new THREE.Vector3(p.vx, p.vy, p.vz) });
     }
     return out;
   }
@@ -280,7 +301,7 @@ export class RemoteFleet {
       const buf = r.buf;
       if (!buf.length) continue;
       const silent = nowMs - r.lastAt;
-      if (silent > GONE_MS) {
+      if (silent > GONE_MS || (this.combatPilots !== null && (!this.combatPilots.has(r.id) || !(buf[buf.length - 1].p.flags & FLAG_ACTIVE)))) {
         r.mesh.group.visible = false;
         r.tag.visible = false;
         continue;

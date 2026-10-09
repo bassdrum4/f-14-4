@@ -54,3 +54,46 @@ contains newer fixes and has been rebuilt from source.
 
 Some cloud and networking functionality depends on external services.
 There are no GitHub Actions workflows configured.
+
+## Flight operations update
+
+The home screen starts with Fly Solo, Fly Together and Head-to-head. Solo
+sortie setup contains aircraft, mission and launch choices; settings use Flight,
+Controls, Graphics, Audio and Interface tabs.
+
+- Guns assist up to **5° within 1.5 km**, lead relative motion, and use the same
+  hit radius as the illuminated gun cue. Aggressors make shorter evasive breaks.
+- Gear/flaps-down approach pitch inputs are gentler. Recoveries tolerate up to
+  11 m/s sink, modest lineup errors and early touchdowns that roll into the
+  wire area. A missed wire leaves the aircraft controllable for a go-around.
+  Runway landings are confirmed after slowing below 12 m/s: idle throttle and
+  hold the wheel-brake binding (B by default).
+- Bombing keeps **R → designate/release by click**, including release after a
+  pod drag and retargeting bombs already in flight. A shared trajectory predictor
+  checks each queued release and warns without spending a bomb if the spot
+  cannot be reached. Guidance, racks and release cadence stay the same.
+- Head-to-head uses the existing room codes and PeerJS connection. Open a room,
+  have another pilot join, then the host selects Head-to-head and Start Air Battle.
+  Pilots spawn airborne apart, have five seconds of protection, and respawn
+  three seconds after a death. Incoming tracers and missile plumes are visible, with a missile warning.
+  Guns and missiles damage player aircraft; the
+  host owns hull, kills, deaths and life numbers. Late arrivals can join an
+  active battle from the lobby. Host takeover preserves the scoreboard.
+- Trees, rocks and airbase details are procedural. Instanced scenery is split
+  into chunks for culling and scaled by graphics quality, with no external assets.
+
+Head-to-head uses client-reported projectile hits with host checks for range,
+weapon cadence, duplicates, shield status and life numbers. It is intended for
+casual rooms, rather than competitive anti-cheat. Peer-to-peer connectivity
+still depends on signalling/STUN (and configured TURN on restrictive networks).
+
+Local diagnostics (Bun required, **not connected to GitHub Actions**):
+
+```bash
+npm run test:aim
+npm run test:landing
+npm run test:bomb-envelope
+npm run test:versus
+npm run test:mp
+npm run check:standalone
+```

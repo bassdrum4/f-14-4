@@ -36,6 +36,7 @@ import type { RemotePose } from "../src/render/remoteJets";
 import type { AircraftId } from "../src/sim/aircraft";
 import type { EnemySnapshot } from "../src/sim/dogfight";
 import type { MissionKind } from "../src/sim/flight";
+import type { BattleAction, BattleSnapshot, BattleShot } from "../src/net/versus";
 import type { MissionMode } from "../src/settings";
 import { DEFAULT_SEED, setWorldSeed, terrainHeight, worldSeedForRoom } from "../src/sim/world";
 
@@ -283,6 +284,9 @@ interface Pilot {
   hits: Array<{ id: number; dmg: number }>;
   /** Damage another pilot reported landing on the hostile boat. */
   carrierHits: number[];
+  battleActions: Array<{ sender: string; action: BattleAction }>;
+  battleStates: BattleSnapshot[];
+  battleShots: Array<{ sender: string; shot: BattleShot }>;
 }
 
 function makePilot(): Pilot {
@@ -299,6 +303,9 @@ function makePilot(): Pilot {
     enemies: [],
     hits: [],
     carrierHits: [],
+    battleActions: [],
+    battleStates: [],
+    battleShots: [],
   };
   rec.net = new Multiplayer(
     {
@@ -326,6 +333,9 @@ function makePilot(): Pilot {
       onEnemies: (snap) => rec.enemies.push(snap),
       onHit: (id, dmg) => rec.hits.push({ id, dmg }),
       onCarrierHit: (dmg) => rec.carrierHits.push(dmg),
+      onBattleAction: (sender, action) => rec.battleActions.push({ sender, action }),
+      onBattleState: (snapshot) => rec.battleStates.push(snapshot),
+      onBattleShot: (sender, shot) => rec.battleShots.push({ sender, shot }),
     },
     (id) => {
       const peer = new MockPeer(broker, id);
@@ -481,6 +491,7 @@ await flush();
 check("a newcomer can still join after the host left",
   rosterOf(late).length === 1 && rosterOf(late)[0]?.name === "GOOSE 2",
   JSON.stringify(rosterOf(late)));
+check("a promoted host keeps its pilot identity for new arrivals", rosterOf(late)[0]?.id === wing.net.snapshot.self, JSON.stringify(rosterOf(late)));
 check("the newcomer is linked to the survivor",
   rosterOf(late)[0]?.linked === true, JSON.stringify(rosterOf(late)));
 check("the survivor sees the newcomer", byName(wing, "SLIDER") !== undefined,
@@ -520,7 +531,7 @@ check("and says why", (clash.net.snapshot.error ?? "").includes("already in use"
   clash.net.snapshot.error);
 
 // ---------------------------------------------------------------------------
-// 10. whoever launches takes the room with them
+// 10. the host launches the room together
 // ---------------------------------------------------------------------------
 console.log("\n[launch]");
 const lead = makePilot();
@@ -541,17 +552,17 @@ check("with the mission and the boat",
   JSON.stringify(numberTwo.launches[0]));
 check("the launcher does not hear their own call", lead.launches.length === 0,
   JSON.stringify(lead.launches));
-// The direction does not matter: whoever takes off announces it.
+// Only the host may launch the room.
 numberTwo.net.launch("airfield", 0);
 await flush();
-check("a member can call the launch too",
-  lead.launches[0]?.mission === "airfield" && lead.launches[0]?.carrier === 0,
+check("a member cannot change the host launch",
+  lead.launches.length === 0,
   JSON.stringify(lead.launches));
 
 // A peer cannot talk the room into a mission that does not exist.
 numberTwo.net.launch("submarine" as MissionKind, 0);
 await flush();
-check("an unknown mission is dropped", lead.launches.length === 1,
+check("an unknown mission is dropped", lead.launches.length === 0,
   JSON.stringify(lead.launches));
 
 // ---------------------------------------------------------------------------
@@ -743,6 +754,29 @@ check("a fight packet carries the codec sequence", (() => {
   const buf = packEnemies(fight, 513);
   return new DataView(buf).getUint16(6) === (513 & 0xffff);
 })());
+
+console.log("\n[head-to-head room traffic]");
+skipper.net.setMode("versus");
+await flush();
+check("head-to-head mode follows the host", joiner.modes[joiner.modes.length - 1] === "versus");
+const battleAction: BattleAction = { kind: "hit", match: 29, seq: 4, life: 1, victim: skipper.net.snapshot.self, victimLife: 2, weapon: "gun" };
+joiner.net.sendBattleAction(battleAction);
+await flush();
+check("player hits arrive at the host with the actual sender", skipper.battleActions.length === 1 && skipper.battleActions[0].sender === joiner.net.snapshot.self && skipper.battleActions[0].action.victimLife === 2);
+const battleState: BattleSnapshot = { match: 29, pilots: [{ id: joiner.net.snapshot.self, name: "JOINER", hp: 93, kills: 1, deaths: 0, life: 2, ready: true, shield: false, respawnIn: 0 }] };
+skipper.net.publishBattle(battleState);
+await flush();
+check("authoritative hull and scores reach the other pilot", joiner.battleStates[joiner.battleStates.length - 1]?.pilots[0].hp === 93);
+joiner.net.sendBattleShot({ weapon: "missile", match: 29, life: 2, seq: 9, pos: [100, 1400, 200], vel: [0, 0, -260] });
+await flush();
+check("weapon launch visuals reach the opponent with pilot identity", skipper.battleShots.length === 1 && skipper.battleShots[0].sender === joiner.net.snapshot.self && skipper.battleShots[0].shot.weapon === "missile");
+const statesBefore = skipper.battleStates.length;
+joiner.net.publishBattle({ match: 99, pilots: [] });
+await flush();
+check("a non-host cannot publish battle scores", skipper.battleStates.length === statesBefore);
+joiner.net.setMode("cruise");
+await flush();
+check("a non-host cannot change the room mission", skipper.modes[skipper.modes.length - 1] !== "cruise");
 
 for (const p of [host, wing, third, late, early, lateHost, clash, lead, numberTwo, scout, wingTwo, skipper, joiner, lateEnemy]) p.net.dispose();
 

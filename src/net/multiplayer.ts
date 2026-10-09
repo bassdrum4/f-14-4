@@ -1,3 +1,4 @@
+import type { BattleAction, BattleSnapshot, BattleShot } from "./versus";
 // Multiplayer over WebRTC data channels.
 //
 // There is no hosted server. Two browsers meet through the PeerJS signalling
@@ -109,6 +110,9 @@ export interface NetHandlers {
   onCarrierHit?: (dmg: number) => void;
   /** A pilot spoke on the room's radio. */
   onChat?: (msg: ChatMsg) => void;
+  onBattleAction?: (sender: string, action: BattleAction) => void;
+  onBattleState?: (snapshot: BattleSnapshot) => void;
+  onBattleShot?: (sender: string, shot: BattleShot) => void;
 }
 
 /**
@@ -322,20 +326,25 @@ function toArrayBuffer(data: unknown): ArrayBuffer | null {
 
 interface RosterEntry {
   id: string;
+  owner?: string; // stable pilot identity behind a promoted host's room alias
   name: string;
   aircraft: AircraftId;
   host: boolean;
 }
 
 type Control =
-  | { t: "hello"; name: string; aircraft: AircraftId; host: boolean; mode: MissionMode }
+  | { t: "hello"; name: string; aircraft: AircraftId; host: boolean; mode: MissionMode; owner?: string }
   | { t: "roster"; peers: RosterEntry[]; mode: MissionMode }
   | { t: "join"; peer: RosterEntry }
   | { t: "bye"; id: string }
   | { t: "name"; name: string; aircraft: AircraftId }
   | { t: "mode"; mode: MissionMode }
+  | { t: "host" }
   | { t: "hit"; id: number; dmg: number }
   | { t: "cvhit"; dmg: number }
+  | { t: "battleAction"; action: BattleAction }
+  | { t: "battleState"; snapshot: BattleSnapshot }
+  | { t: "battleShot"; shot: BattleShot }
   | { t: "launch"; mission: MissionKind; carrier: number }
   | { t: "chat"; from: string; text: string };
 
@@ -547,7 +556,7 @@ export class Multiplayer {
       host: this.host,
       pilots: [...this.pilots.values()]
         .map((p) => ({
-          id: p.id,
+          id: p.owner ?? p.id,
           name: p.name,
           aircraft: p.aircraft,
           host: p.host,
@@ -769,6 +778,7 @@ export class Multiplayer {
     this.hostDuty = peer;
     peer.on("open", () => {
       this.host = true;
+      this.sendAll(JSON.stringify({ t: "host" } satisfies Control));
       this.error = "You are the room host now — new wingmen can join with the same code.";
       this.emit();
     });
@@ -843,6 +853,7 @@ export class Multiplayer {
         aircraft: this.aircraft,
         host: this.host || this.hostDuty !== null,
         mode: this.mode,
+        owner: this.selfId,
       } satisfies Control);
       if (known) this.adopt(conn.peer, known);
       this.emit();
@@ -877,7 +888,7 @@ export class Multiplayer {
     if (prev !== undefined && seq <= prev) return; // reordered or duplicated
     this.lastSeq.set(conn.peer, seq);
     this.recv++;
-    this.handlers.onPose?.(conn.peer, pose);
+    this.handlers.onPose?.(this.pilots.get(conn.peer)?.owner ?? conn.peer, pose);
   }
 
   private onControl(conn: DataConnection, msg: Control): void {
@@ -885,6 +896,7 @@ export class Multiplayer {
       case "hello": {
         const entry: RosterEntry = {
           id: conn.peer,
+          owner: conn.peer === hostPeerId(this.room) && typeof msg.owner === "string" && msg.owner.startsWith(`f14sim-${idSlug(this.room)}-`) ? msg.owner : undefined,
           name: sanitizeName(msg.name),
           aircraft: msg.aircraft,
           // The room host is the only predictable peer id, and it announces
@@ -900,7 +912,7 @@ export class Multiplayer {
           // The room's mission profile rides the roster: a pilot joining an
           // attack room flies the attack, not whatever they last flew solo.
           const roster: RosterEntry[] = [
-            { id: this.rosterId(), name: this.name, aircraft: this.aircraft, host: true },
+            { id: this.rosterId(), owner: this.selfId, name: this.name, aircraft: this.aircraft, host: true },
             ...this.pilots.values(),
           ].filter((p) => p.id !== conn.peer);
           this.send(conn, { t: "roster", peers: roster, mode: this.mode } satisfies Control);
@@ -938,13 +950,34 @@ export class Multiplayer {
         if (!known) this.emit();
         break;
       }
+      case "host": {
+        const candidate = [this.selfId, ...this.pilots.keys()].sort()[0];
+        const liveHost = [...this.pilots.values()].some(p => p.host && this.conns.get(p.id)?.open);
+        if (!this.host && !liveHost && conn.peer === candidate) {
+          for (const p of this.pilots.values()) p.host = p.id === conn.peer;
+          this.emit();
+        }
+        break;
+      }
       case "launch":
+        if (conn.peer !== hostPeerId(this.room) && !this.pilots.get(conn.peer)?.host) break;
         if (msg.mission === "carrier" || msg.mission === "airfield") {
           this.handlers.onLaunch?.(msg.mission, msg.carrier);
         }
         break;
       case "mode":
-        this.adoptMode(msg.mode);
+        if (conn.peer === hostPeerId(this.room) || this.pilots.get(conn.peer)?.host) this.adoptMode(msg.mode);
+        break;
+      case "battleShot": {
+        const shot = msg.shot;
+        if (this.pilots.has(conn.peer) && shot && (shot.weapon === "gun" || shot.weapon === "missile") && Array.isArray(shot.pos) && shot.pos.length === 3 && Array.isArray(shot.vel) && shot.vel.length === 3 && [...shot.pos, ...shot.vel].every(Number.isFinite)) this.handlers.onBattleShot?.(this.pilots.get(conn.peer)?.owner ?? conn.peer, shot);
+        break;
+      }
+      case "battleAction":
+        if (this.host && this.pilots.has(conn.peer) && msg.action && typeof msg.action === "object") this.handlers.onBattleAction?.(conn.peer, msg.action);
+        break;
+      case "battleState":
+        if (!this.host && (conn.peer === hostPeerId(this.room) || this.pilots.get(conn.peer)?.host) && msg.snapshot && Array.isArray(msg.snapshot.pilots) && msg.snapshot.pilots.length <= 32) this.handlers.onBattleState?.(msg.snapshot);
         break;
       case "hit":
         if (typeof msg.id === "number" && typeof msg.dmg === "number") {
@@ -967,7 +1000,7 @@ export class Multiplayer {
           const p = this.pilots.get(conn.peer)!;
           p.name = sanitizeName(msg.name);
           p.aircraft = msg.aircraft;
-          this.handlers.onPilot?.(conn.peer, p.name, p.aircraft);
+          this.handlers.onPilot?.(p.owner ?? conn.peer, p.name, p.aircraft);
           this.emit();
         }
         break;
@@ -983,7 +1016,7 @@ export class Multiplayer {
    */
   private adoptMode(mode: MissionMode | undefined): void {
     if (!mode || this.host) return;
-    if (mode !== "cruise" && mode !== "dogfight" && mode !== "strike") return;
+    if (mode !== "cruise" && mode !== "dogfight" && mode !== "strike" && mode !== "versus") return;
     if (mode === this.mode) return;
     this.mode = mode;
     this.handlers.onMode?.(mode);
@@ -997,8 +1030,9 @@ export class Multiplayer {
     this.pilots.set(id, next);
     // The renderer only needs to hear about a pilot it has not built a mesh
     // for yet, or one whose callsign/airframe actually changed.
-    const changed = !prev || prev.name !== next.name || prev.aircraft !== next.aircraft;
-    if (changed) this.handlers.onPilot?.(id, next.name, next.aircraft);
+    const changed = !prev || prev.name !== next.name || prev.aircraft !== next.aircraft || prev.owner !== next.owner;
+    if (prev && prev.owner !== next.owner) this.handlers.onPilotLeave?.(prev.owner ?? id);
+    if (changed) this.handlers.onPilot?.(next.owner ?? id, next.name, next.aircraft);
   }
 
   private drop(id: string, tellHost: boolean): void {
@@ -1014,15 +1048,16 @@ export class Multiplayer {
     }
     this.dialing.delete(id);
     this.lastSeq.delete(id);
+    const departing = this.pilots.get(id);
     const had = this.pilots.delete(id);
-    const wasHost = id === hostPeerId(this.room);
+    const wasHost = id === hostPeerId(this.room) || departing?.host === true;
     if (wasHost && this.status === "online") {
       this.error = "The room host left. You are still linked to the others.";
       // Somebody has to answer the room's door; see maybePromote().
       this.maybePromote();
     }
     if (had) {
-      this.handlers.onPilotLeave?.(id);
+      this.handlers.onPilotLeave?.(departing?.owner ?? id);
       if (this.host && tellHost) {
         const bye = JSON.stringify({ t: "bye", id } satisfies Control);
         for (const other of this.conns.values()) {
@@ -1076,6 +1111,17 @@ export class Multiplayer {
   publishEnemies(snap: EnemySnapshot | null): void {
     this.enemy = snap;
     if (snap) this.enemyDirty = true;
+  }
+
+  sendBattleShot(shot: BattleShot): void { this.sendAll(JSON.stringify({ t: "battleShot", shot } satisfies Control)); }
+
+  sendBattleAction(action: BattleAction): void {
+    if (this.host) this.handlers.onBattleAction?.(this.selfId, action);
+    else this.sendAll(JSON.stringify({ t: "battleAction", action } satisfies Control));
+  }
+
+  publishBattle(snapshot: BattleSnapshot): void {
+    if (this.host) this.sendAll(JSON.stringify({ t: "battleState", snapshot } satisfies Control));
   }
 
   /** Mirror: our rounds landed on an aircraft the host owns. */

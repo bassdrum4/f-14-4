@@ -19,10 +19,10 @@ function shot(offset: Vector3, angle: number, distance = 500, onDeck = false): V
   const relative = new Vector3(Math.sin(angle * rad), 0, -Math.cos(angle * rad))
     .multiplyScalar(distance);
   const bandit = { pos: offset.clone().add(relative), quat: new Quaternion(), speed: 0, catT: onDeck ? 0 : -1 };
-  return assist.call({ bandits: [bandit] } as unknown as AssistHarness, player, offset, bore);
+  return assist.call({ bandits: [bandit], opponents: [] } as unknown as AssistHarness, player, offset, bore);
 }
 const originShot = shot(new Vector3(), 4.9);
-check("assist corrects a 4.9-degree aim error", Math.abs(bore.angleTo(originShot) / rad - 4.9) < 1e-7);
+check("assist corrects a 4.9-degree aim error", Math.abs(Math.atan2(originShot.x, -originShot.z) / rad - 4.9) < 1e-7);
 for (const offset of [new Vector3(0, 1500, 0), new Vector3(6000, 1500, -4000), new Vector3(-17000, 4000, 8000)]) {
   check(`same shot at ${offset.toArray()} has the same correction`, shot(offset, 4.9).distanceTo(originShot) < 1e-10);
 }

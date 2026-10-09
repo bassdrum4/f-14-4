@@ -11,6 +11,16 @@ export default defineConfig({
   root: projectPath("./app"),
   plugins: [
     react(),
+    {
+      name: "editable-dev-entry",
+      apply: "serve",
+      transformIndexHtml: {
+        order: "pre",
+        handler(html) {
+          return html.replace('../src/main.tsx', `/@fs${projectPath("./src/main.tsx")}`);
+        },
+      },
+    },
     viteSingleFile(),
     {
       name: "publish-single-file",
@@ -36,6 +46,7 @@ export default defineConfig({
   ],
   server: {
     host: true,
+    fs: { allow: [projectPath(".")] },
     hmr: false,
     strictPort: false,
   },

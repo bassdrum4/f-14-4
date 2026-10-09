@@ -1,3 +1,4 @@
+import { buildScenery, buildAirbaseDetails } from "./details";
 // Three.js renderer wrapper: scene graph, lighting, resize, quality scaling.
 // The world root (terrain + airfield + carriers) is rebuilt at runtime whenever
 // the terrain seed changes, so the mesh always follows the physics heightfield.
@@ -181,6 +182,8 @@ export class WorldRenderer {
     this.worldRoot.clear();
     this.worldRoot.add(buildTerrain(this.quality, paint));
     this.worldRoot.add(buildAirfield());
+    this.worldRoot.add(buildAirbaseDetails());
+    this.worldRoot.add(buildScenery(this.quality));
     for (const c of carriers()) this.worldRoot.add(buildCarrier(c));
 
     // Deck and runway lights follow the active layout too, or they would stay
@@ -274,6 +277,7 @@ function disposeGeometryTree(root: THREE.Object3D): void {
 function disposeTree(root: THREE.Object3D): void {
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
+    if ((mesh as THREE.InstancedMesh).isInstancedMesh) (mesh as THREE.InstancedMesh).dispose();
     if (mesh.geometry) mesh.geometry.dispose();
     const mat = mesh.material as THREE.Material | THREE.Material[] | undefined;
     if (Array.isArray(mat)) {

@@ -187,16 +187,15 @@ const ARREST_DECEL = 27; // m/s^2 (~2.75 g)
 
 // --- the trap ---
 /** How hard a jet may arrive before the gear gives way (m/s of sink, negative
- *  = descending). 7.5 m/s is ~1480 fpm: a punishing but recoverable arrival,
+ *  = descending). 11 m/s is ~2165 fpm: a punishing but recoverable arrival,
  *  and it leaves the 4 deg glideslope (about 4.5 m/s at on-speed) plenty of
  *  room to be flown imperfectly. Anything gentler than this lands. */
-const HARD_SINK = -7.5;
-/** A touchdown counts as a trap if the jet is at least this descending — a
- *  fraction of a metre a second, so a greased-on landing still catches a wire. */
-const TRAP_MAX_CLIMB = -0.05;
+const HARD_SINK = -11;
+/** Gear contact during a mild bounce can still catch a wire. */
+const TRAP_MAX_CLIMB = 3;
 
 // --- approach guidance (the boat's own MEZ/IFLOLS, simulated) ---
-/** The glideslope the landing area expects: 4 degrees, real CVN practice. */
+/** The glideslope the landing area expects: 4 degrees, carrier approach reference. */
 export const GLIDE_DEG = 4;
 /** Distance down the angled strip where the glideslope meets the deck. */
 export const GLIDE_AIM_S = 105;
@@ -263,7 +262,7 @@ export interface FlightInput {
 export type CatPhase = "idle" | "ready" | "charging" | "firing";
 
 export interface SimResult {
-  kind: "wire" | "bolter" | "crash";
+  kind: "wire" | "bolter" | "crash" | "landing";
   wire?: number;
   title: string;
   detail: string;
@@ -319,6 +318,8 @@ export interface AircraftState {
   catPhase: CatPhase;
   catProgress: number; // 0..1 during charging/firing
   arresting: boolean;
+  deckRoll?: number; // carrier index while rolling toward the wires
+  runwayLanded?: boolean;
   catCooldown: number; // seconds until wires are live after a cat shot
   catCarrier: number; // carrier index the current cat shot launches from
   wire?: number;
@@ -695,7 +696,7 @@ export function stepAircraft(st: AircraftState, inp: FlightInput, dt: number): v
     const qHat = (st.omega.x * cM) / (2 * Math.max(V, 30));
     // 1. the stick (and the trim wheel) walks the commanded attitude
     st.pitchRef +=
-      inp.pitch * PITCH_RATE_MAX * clamp(110 / Math.max(V, 110), 0.42, 1) * dt;
+      inp.pitch * PITCH_RATE_MAX * (st.gearT > .8 && st.flapT > .8 && V < 135 ? .32 : 1) * clamp(110 / Math.max(V, 110), 0.42, 1) * dt;
     st.pitchRef += (st.trim - 0.5) * TRIM_RATE_BIAS * dt;
     const path = Math.asin(clamp(st.vel.y / Math.max(V, 1), -1, 1));
     // The reference may never sit past the stall, or chasing it would hold the
@@ -952,7 +953,7 @@ function applyGroundContact(
   if (!st.result) {
     if (hitWater && firstTouch) {
       fail(st, "DITCHED", "The Tomcat is not a seaplane. Impact with the sea.");
-    } else if (bellyHit && firstTouch) {
+    } else if (bellyHit && firstTouch && (st.gearT < .8 || maxWheelPen > .75)) {
       // Scraping the tail during a pavement roll is drag, not death —
       // but arriving nose-high from the air is fatal.
       fail(st, "BELLY IMPACT", "Structure hit the ground. Gear was not down (or down hard).");
@@ -963,43 +964,40 @@ function applyGroundContact(
     }
   }
 
-  // --- landing evaluation on the carrier (a real touchdown only) ---
-  if (
-    !st.result &&
-    hitDeck &&
-    st.airborne &&
-    st.catCooldown <= 0 &&
-    touchdownVy < TRAP_MAX_CLIMB &&
-    touchdownVy > HARD_SINK &&
-    st.speed > 15 &&
-    st.gearT > 0.5
-  ) {
-    const c = carrierAt(st.pos.x, st.pos.z) ?? nearestCarrier(st.pos.x, st.pos.z);
+  // Short touchdowns stay live: roll into the catch area instead of ending
+  // the sortie before the hook can reach it. The corridor includes the gear
+  // footprint, so a modest lineup error does not turn a wheel touch into death.
+  if (!st.result && hitDeck && st.catCooldown <= 0 && st.gearT > .8 &&
+      ((st.airborne && touchdownVy < TRAP_MAX_CLIMB && touchdownVy > HARD_SINK && st.speed > 15) || st.deckRoll !== undefined)) {
+    const c = st.deckRoll === undefined
+      ? (carrierAt(st.pos.x, st.pos.z) ?? nearestCarrier(st.pos.x, st.pos.z))
+      : carriers()[st.deckRoll];
     const { s, d } = stripCoords(c, st.pos.x, st.pos.z);
-    if (Math.abs(d) <= STRIP_HALF_WIDTH && s >= CATCH_S_MIN && s <= CATCH_S_MAX) {
-      const wire = clamp(Math.round((s - WIRE_FIRST_S) / c.wireSpacing) + 1, 1, c.wireCount);
-      st.arresting = true;
-      st.wire = wire;
+    if (Math.abs(d) <= STRIP_HALF_WIDTH + 6 && s >= -12 && s <= CATCH_S_MAX) {
+      st.deckRoll = carriers().indexOf(c);
       st.airborne = false;
-    } else if (Math.abs(d) <= STRIP_HALF_WIDTH) {
-      st.result = {
-        kind: "bolter",
-        title: "BOLTER",
-        detail: "Touched the deck but missed the wires. Go around.",
-      };
-      st.airborne = false;
+      if (s >= CATCH_S_MIN) {
+        st.arresting = true;
+        st.wire = clamp(Math.round((s - WIRE_FIRST_S) / c.wireSpacing) + 1, 1, c.wireCount);
+        st.deckRoll = undefined;
+      }
     } else {
-      fail(st, "DECK STRIKE", "Missed the landing area entirely. That will cost you a jet.");
+      st.deckRoll = undefined;
+      st.banner = { text: "BOLTER — FULL POWER, GO AROUND", until: st.time + 5 };
     }
   }
-
-  // runway touchdown (informational only)
-  if (!st.result && hitRunway && st.airborne && touchdownVy > -6) {
-    st.banner = {
-      text: `TOUCHDOWN — ${Math.round(-touchdownVy * 196.85)} FPM`,
-      until: st.time + 3,
-    };
+  if (st.deckRoll !== undefined && !hitDeck && st.vel.y > 1) {
+    st.deckRoll = undefined;
+    st.airborne = true;
+  }
+  if (!st.result && hitRunway && st.airborne && st.gearT > .8 && touchdownVy > HARD_SINK) {
+    st.banner = { text: "TOUCHDOWN — IDLE THROTTLE, HOLD B TO BRAKE", until: st.time + 8 };
     st.airborne = false;
+    st.runwayLanded = true;
+  }
+  if (st.runwayLanded && !st.result && hitRunway && st.speed < 12) {
+    st.result = { kind: "landing", title: "RUNWAY LANDING", detail: "Landing confirmed. Aircraft recovered, rearmed and repaired." };
+    st.runwayLanded = false;
   }
 
   st.wheelPen = maxWheelPen;

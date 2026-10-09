@@ -280,7 +280,7 @@ function FirstRun({ onDone }: { onDone: () => void }) {
   );
 }
 
-type Screen = "main" | "settings" | "controls" | "multiplayer" | "feedback" | "account";
+type Screen = "main" | "solo" | "settings" | "controls" | "multiplayer" | "feedback" | "account";
 
 function MainMenu({ sim, settings, onSettings, openMultiplayer, onOpenedMultiplayer }: {
   sim: Sim | null; settings: Settings; onSettings: (s: Settings) => void;
@@ -297,121 +297,72 @@ function MainMenu({ sim, settings, onSettings, openMultiplayer, onOpenedMultipla
   }, [openMultiplayer, onOpenedMultiplayer]);
   const net = useNet(sim);
   const account = useAccount();
-  const craft = AIRCRAFT_LIST.find((a) => a.id === settings.aircraft) ?? AIRCRAFT_LIST[0];
-
+  const chooseRoom = (versus: boolean) => {
+    if (net.status !== "online" && net.status !== "connecting") {
+      onSettings({ ...settings, missionMode: versus ? "versus" : "dogfight" });
+    }
+    setScreen("multiplayer");
+  };
   return (
-    <div className="ui-root menu-bg">
-      <div className="menu-panel">
-        <div className="menu-title">
-          <span className="menu-kicker">{craft.role.toUpperCase()} · CARRIER AIR WING</span>
-          <h1>{craft.name}</h1>
-          <span className="menu-sub">
-            CARRIER FLIGHT SIMULATOR
-            <span className="menu-ver" title="Simulator build version">
-              v{APP_VERSION}
-            </span>
-          </span>
-        </div>
+    <div className="ui-root menu-bg dispatch-bg">
+      <div className="menu-panel dispatch-panel">
+        <div className="dispatch-top"><span>FLIGHT OPERATIONS / 01</span><span>v{APP_VERSION}</span></div>
+        <button className="dispatch-brand" onClick={() => setScreen("main")} aria-label="Back to flight operations">
+          <span className="dispatch-mark">F—14</span>
+          <span className="dispatch-name">CARRIER<br />AIR WING</span>
+        </button>
         <div className="acct-strip">
           <span className={"dot " + (account ? "online" : "idle")} />
-          <span className="acct-strip-name">
-            {account ? account.username.toUpperCase() : "GUEST PILOT"}
-          </span>
-          <button className="acct-link" onClick={() => setScreen("account")}>
-            PILOT / GAMESTATE
-          </button>
+          <span className="acct-strip-name">{account ? account.username.toUpperCase() : "GUEST PILOT"}</span>
+          <button className="acct-link" onClick={() => setScreen("account")}>PILOT RECORD</button>
         </div>
-
-        {screen === "main" && (
-          <>
-            {/* Three ways into the air; everything else is one small row of
-                links, so the front screen reads as a briefing board rather
-                than a wall of buttons. */}
-            <div className="menu-buttons">
-              <Btn primary onClick={() => sim?.startMission("carrier")}>
-                CAT SHOT — CARRIER LAUNCH
-              </Btn>
-              <Btn onClick={() => sim?.startMission("airfield")}>
-                RUNWAY — ISLAND AIRFIELD
-              </Btn>
-              <Btn onClick={() => setScreen("multiplayer")}>
-                {net.status === "online"
-                  ? `FLIGHT — ROOM ${net.room} · ${net.pilots.length} LINKED`
-                  : "MULTIPLAYER — FLY WITH A WINGMAN"}
-              </Btn>
-            </div>
-            <div className="menu-nav">
-              <button className="world-chip" onClick={() => setScreen("settings")}>SETTINGS</button>
-              <button className="world-chip" onClick={() => setScreen("controls")}>CONTROLS</button>
-              <button className="world-chip" onClick={() => setScreen("feedback")}>FEEDBACK</button>
-              <button className="world-chip" onClick={() => setScreen("account")}>
-                {account ? `PILOT — ${account.username.toUpperCase()}` : "PILOT — CALLSIGN"}
-              </button>
-            </div>
-            <div className="menu-world">
-              <span className="menu-world-label">MISSION PROFILE</span>
-              <div className="menu-world-chips">
-                {(Object.keys(MISSION_MODE_LABELS) as MissionMode[]).map((m) => (
-                  <button
-                    key={m}
-                    className={"world-chip" + (settings.missionMode === m ? " on" : "")}
-                    title={MISSION_MODE_LABELS[m]}
-                    onClick={() => onSettings({ ...settings, missionMode: m })}
-                  >
-                    {MISSION_MODE_CHIPS[m]}
-                  </button>
-                ))}
-              </div>
-              <div className="menu-world-note">{MISSION_MODE_LABELS[settings.missionMode]}</div>
-            </div>
-            <div className="menu-world">
-              <span className="menu-world-label">AIRCRAFT</span>
-              <div className="menu-world-chips">
-                {AIRCRAFT_LIST.map((a) => (
-                  <button
-                    key={a.id}
-                    className={"world-chip" + (a.id === settings.aircraft ? " on" : "")}
-                    onClick={() => onSettings({ ...settings, aircraft: a.id })}
-                  >
-                    {a.name}
-                  </button>
-                ))}
-              </div>
-              <div className="menu-world-note">
-                {craft.blurb} · {craft.bombs} bombs
-                {craft.missiles > 0 ? ` · ${craft.missiles} missiles` : " · no missiles"} · {craft.gunRps} rnd/s ·
-                hull {craft.hull}
-                {craft.abThrust > 0 ? " · AB" : ""}
-              </div>
-            </div>
-          </>
-        )}
-        {screen === "settings" && (
-          <SettingsPanel settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />
-        )}
-        {screen === "controls" && (
-          <ControlsPanel settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />
-        )}
-        {screen === "multiplayer" && (
-          <MultiplayerPanel sim={sim} settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />
-        )}
-        {screen === "feedback" && (
-          <FeedbackPanel sim={sim} settings={settings} onBack={() => setScreen("main")} />
-        )}
-        {screen === "account" && (
-          <AccountPanel
-            account={account}
-            settings={settings}
-            onSettings={onSettings}
-            onBack={() => setScreen("main")}
-          />
-        )}
+        {screen === "main" && <>
+          <div className="dispatch-heading"><span>READY ON THE DECK</span><h1>Your aircraft.<br />Your sortie.</h1></div>
+          <div className="dispatch-actions">
+            <button className="dispatch-action lead" onClick={() => setScreen("solo")}><span className="dispatch-number">01</span><span><strong>FLY SOLO</strong><small>Pick your aircraft. Make your own run.</small></span><b aria-hidden="true">↗</b></button>
+            <button className="dispatch-action" onClick={() => chooseRoom(false)}><span className="dispatch-number">02</span><span><strong>FLY TOGETHER</strong><small>{net.status === "online" ? `Room ${net.room} · ${net.pilots.length} linked` : "Open a room. Bring a wingman."}</small></span><b aria-hidden="true">↗</b></button>
+            <button className="dispatch-action" onClick={() => chooseRoom(true)}><span className="dispatch-number">03</span><span><strong>HEAD-TO-HEAD</strong><small>Live pilots. Guns and missiles. Settle it in the air.</small></span><b aria-hidden="true">↗</b></button>
+          </div>
+          <nav className="dispatch-nav" aria-label="Flight tools">
+            <button onClick={() => setScreen("settings")}>SETTINGS</button>
+            <button onClick={() => setScreen("controls")}>CONTROLS</button>
+            <button onClick={() => setScreen("account")}>PILOT</button>
+            <button onClick={() => setScreen("feedback")}>FEEDBACK</button>
+          </nav>
+          <div className="dispatch-stamp">CLEAR FOR LAUNCH <span>///</span></div>
+        </>}
+        {screen === "solo" && <FlightSetup sim={sim} settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />}
+        {screen === "settings" && <SettingsPanel settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />}
+        {screen === "controls" && <ControlsPanel settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />}
+        {screen === "multiplayer" && <MultiplayerPanel sim={sim} settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />}
+        {screen === "feedback" && <FeedbackPanel sim={sim} settings={settings} onBack={() => setScreen("main")} />}
+        {screen === "account" && <AccountPanel account={account} settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />}
       </div>
-      <div className="menu-footer">
-        Drag mouse — look around · C — camera · R — target pod · E — missile · Esc — pause · a room code picks the world
-      </div>
+      <div className="dispatch-side" aria-hidden="true"><span>LAUNCH / RECOVER / REPEAT</span><strong>KEEP<br />THE SKY<br />YOURS.</strong><span>BROWSER FLIGHT SIMULATOR</span></div>
+      <div className="menu-footer">C — camera · R — target pod · E — missile · Q — guns · Esc — pause</div>
     </div>
   );
+}
+
+function FlightSetup({ sim, settings, onSettings, onBack }: {
+  sim: Sim | null; settings: Settings; onSettings: (s: Settings) => void; onBack: () => void;
+}) {
+  const mode = settings.missionMode === "versus" ? "cruise" : settings.missionMode;
+  const craft = AIRCRAFT_LIST.find(a => a.id === settings.aircraft) ?? AIRCRAFT_LIST[0];
+  const launch = (mission: "carrier" | "airfield") => {
+    if (settings.missionMode === "versus") onSettings({ ...settings, missionMode: mode });
+    sim?.startMission(mission);
+  };
+  return <div className="menu-screen">
+    <h3 className="menu-h3">SORTIE SETUP</h3>
+    <span className="menu-world-label">AIRCRAFT</span>
+    <div className="menu-world-chips">{AIRCRAFT_LIST.map(a => <button key={a.id} className={"world-chip" + (settings.aircraft === a.id ? " on" : "")} onClick={() => onSettings({ ...settings, aircraft: a.id })}>{a.name}</button>)}</div>
+    <p className="menu-note">{craft.blurb} · {craft.bombs} bombs · {craft.missiles} missiles</p>
+    <span className="menu-world-label">MISSION</span>
+    <div className="menu-world-chips">{(["cruise", "dogfight", "strike"] as MissionMode[]).map(m => <button key={m} className={"world-chip" + (mode === m ? " on" : "")} onClick={() => onSettings({ ...settings, missionMode: m })}>{MISSION_MODE_CHIPS[m]}</button>)}</div>
+    <p className="menu-note">{MISSION_MODE_LABELS[mode]}</p>
+    <div className="menu-buttons"><Btn primary onClick={() => launch("carrier")}>CAT SHOT — CARRIER</Btn><Btn onClick={() => launch("airfield")}>TAKEOFF — RUNWAY</Btn><Btn onClick={onBack}>BACK</Btn></div>
+  </div>;
 }
 
 function PauseMenu({ sim, settings, onSettings }: {
@@ -513,78 +464,21 @@ function SettingsPanel({ settings, onSettings, onBack }: {
   settings: Settings; onSettings: (s: Settings) => void; onBack: () => void;
 }) {
   const set = (patch: Partial<Settings>) => onSettings({ ...settings, ...patch });
-  return (
-    <div className="menu-screen">
-      <h3 className="menu-h3">SETTINGS</h3>
-      <label className="menu-row">
-        <span>Graphics quality</span>
-        <select
-          value={settings.quality}
-          onChange={(e) => set({ quality: e.target.value as Quality })}
-        >
-          <option value="low">Low</option>
-          <option value="medium">Medium</option>
-          <option value="high">High</option>
-        </select>
-      </label>
-      <label className="menu-row">
-        <span>Volume</span>
-        <input
-          type="range" min={0} max={1} step={0.05}
-          value={settings.volume}
-          onChange={(e) => set({ volume: Number(e.target.value) })}
-        />
-      </label>
-      <label className="menu-row">
-        <span>Control sensitivity</span>
-        <input
-          type="range" min={0.4} max={3} step={0.05}
-          value={settings.sensitivity}
-          onChange={(e) => set({ sensitivity: Number(e.target.value) })}
-        />
-      </label>
-      <label className="menu-row">
-        <span>Mission profile</span>
-        <select
-          value={settings.missionMode}
-          onChange={(e) => set({ missionMode: e.target.value as MissionMode })}
-        >
-          {(Object.keys(MISSION_MODE_LABELS) as MissionMode[]).map((m) => (
-            <option key={m} value={m}>{MISSION_MODE_LABELS[m]}</option>
-          ))}
-        </select>
-      </label>
-      <label className="menu-row">
-        <span>Daylight</span>
-        <select
-          value={settings.daylight}
-          onChange={(e) => set({ daylight: e.target.value as DaylightMode })}
-        >
-          {(Object.keys(DAYLIGHT_LABELS) as DaylightMode[]).map((m) => (
-            <option key={m} value={m}>{DAYLIGHT_LABELS[m]}</option>
-          ))}
-        </select>
-      </label>
-      <label className="menu-row">
-        <span>Time of day{settings.daylight === "fixed" ? "" : " (fixed mode)"}</span>
-        <input
-          type="range" min={0} max={24} step={0.25}
-          disabled={settings.daylight !== "fixed"}
-          value={settings.timeOfDay}
-          onChange={(e) => set({ timeOfDay: Number(e.target.value) })}
-        />
-      </label>
-      <label className="menu-row">
-        <span>Show minimap</span>
-        <input
-          type="checkbox"
-          checked={settings.minimap}
-          onChange={(e) => set({ minimap: e.target.checked })}
-        />
-      </label>
-      <Btn onClick={onBack}>BACK</Btn>
-    </div>
-  );
+  const [tab, setTab] = useState("flight");
+  return <div className="menu-screen settings-screen">
+    <h3 className="menu-h3">SETTINGS</h3>
+    <nav className="settings-tabs" aria-label="Settings category">{["flight", "controls", "graphics", "audio", "interface"].map(t => <button key={t} aria-pressed={tab === t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>{t.toUpperCase()}</button>)}</nav>
+    {tab === "flight" && <>
+      <label className="menu-row"><span>Daylight</span><select value={settings.daylight} onChange={e => set({ daylight: e.target.value as DaylightMode })}>{(Object.keys(DAYLIGHT_LABELS) as DaylightMode[]).map(m => <option key={m} value={m}>{DAYLIGHT_LABELS[m]}</option>)}</select></label>
+      <label className="menu-row"><span>Time / {String(Math.floor(settings.timeOfDay)).padStart(2, "0")}:{String(Math.round(settings.timeOfDay % 1 * 60)).padStart(2, "0")}</span><input type="range" min={0} max={23.75} step={0.25} disabled={settings.daylight !== "fixed"} value={settings.timeOfDay} onChange={e => set({ timeOfDay: Number(e.target.value) })} /></label>
+      <p className="menu-note">Choose aircraft and mission in Sortie Setup. Room hosts choose the shared mission in the lobby.</p>
+    </>}
+    {tab === "controls" && <><label className="menu-row"><span>Sensitivity / {settings.sensitivity.toFixed(2)}</span><input type="range" min={0.4} max={3} step={0.05} value={settings.sensitivity} onChange={e => set({ sensitivity: Number(e.target.value) })} /></label><ControlsPanel settings={settings} onSettings={onSettings} onBack={onBack} /></>}
+    {tab === "graphics" && <><label className="menu-row"><span>World detail</span><select value={settings.quality} onChange={e => set({ quality: e.target.value as Quality })}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><p className="menu-note">Low reduces scenery density, effects and shadows for slower browsers.</p></>}
+    {tab === "audio" && <label className="menu-row"><span>Volume / {Math.round(settings.volume * 100)}%</span><input type="range" min={0} max={1} step={0.05} value={settings.volume} onChange={e => set({ volume: Number(e.target.value) })} /></label>}
+    {tab === "interface" && <label className="menu-row"><span>Show minimap</span><input type="checkbox" checked={settings.minimap} onChange={e => set({ minimap: e.target.checked })} /></label>}
+    {tab !== "controls" && <Btn onClick={onBack}>BACK</Btn>}
+  </div>;
 }
 
 function ControlsPanel({ settings, onSettings, onBack }: {
@@ -689,9 +583,9 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
 
   return (
     <div className="menu-screen mp-screen">
-      <h3 className="menu-h3">MULTIPLAYER</h3>
+      <h3 className="menu-h3">{settings.missionMode === "versus" ? "HEAD-TO-HEAD" : "FLY TOGETHER"}</h3>
       <p className="menu-note">
-        One pilot opens the room; everyone else joins with the code.
+        One pilot opens the room; everyone else joins with the code. Head-to-head starts airborne with separate spawns, a five-second shield, scores and automatic respawns.
       </p>
 
       <label className="menu-row">
@@ -865,18 +759,19 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
             </label>
           )}
           <div className="menu-row-btns">
-            <Btn primary onClick={() => sim?.startRoomMission("carrier")}>
-              CARRIER LAUNCH
+            <Btn primary disabled={settings.missionMode === "versus" && !net.pilots.some(p => p.linked)} onClick={() => sim?.startRoomMission("carrier")}>
+              {settings.missionMode === "versus" ? "START AIR BATTLE" : "CARRIER LAUNCH"}
             </Btn>
-            <Btn onClick={() => sim?.startRoomMission("airfield")}>
+            {settings.missionMode !== "versus" && <Btn onClick={() => sim?.startRoomMission("airfield")}>
               RUNWAY TAKEOFF
-            </Btn>
+            </Btn>}
           </div>
           <div className="menu-world-note">
             The room lifts off together with these settings.
           </div>
         </div>
       )}
+      {online && !net.host && settings.missionMode === "versus" && <Btn onClick={() => sim?.joinBattle()}>JOIN ACTIVE AIR BATTLE</Btn>}
       {online && !net.host && (
         <div className="mp-launch">
           <span className="menu-world-label">WAITING FOR THE HOST</span>

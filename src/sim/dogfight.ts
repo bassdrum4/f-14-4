@@ -1,3 +1,5 @@
+import type { BattleWeapon, WeaponLaunch } from "../net/versus";
+import { advanceBomb, canBombReach, BOMB_ARM_TIME as BOMB_ARM, BOMB_DETONATION_RADIUS as LGB_DET } from "./bombTrajectory";
 // Combat layer for the mission modes. Two scenarios share one machinery:
 //
 //   dogfight — a hostile carrier steams in and launches AI bandits off its
@@ -95,11 +97,11 @@ const CEILING = 6000; // m — bandits stay in the fight box (islands reach ~3 k
  *  radius around the player rather than one centred on the world origin. */
 export const DOGFIGHT_ARENA = 16000;
 const ARENA = DOGFIGHT_ARENA;
-const EVADE_DIST = 900; // break when the player is inside this on the six
+const EVADE_DIST = 600; // break when the player is inside this on the six
 const ENGAGE_DIST = 1200; // open fire inside this (was 1300: closer, less time on target)
 const AIM_CONE = 0.14; // rad — roughly on the nose before firing
 const NOSE_CONE_COS = 0.92; // player inside ~23 deg of the bandit = being lined up on
-const NOSE_BREAK_DIST = 1500; // m — inside this, a lined-up bandit breaks hard
+const NOSE_BREAK_DIST = 850; // m — inside this, a lined-up bandit breaks hard
 const KEEP_APART = 240; // m — bandits shoulder away from each other
 const MERGE_DIST = 420; // m — slide past the player rather than through them
 const PANIC_DIST = 150; // m — inside this, break away hard from the player
@@ -148,18 +150,10 @@ const CV_CLIMB_TIME = 3.5; // s of nose-up after a shot before it starts hunting
 const BOMB_MAG = 6; // default racks, overridden by the player's airframe
 const BOMB_HP = 34; // one hit takes a third of the carrier's hull
 const BOMB_RELEASE_CD = 0.5; // s between releases while the key is held
-const BOMB_MASS = 450; // kg — Mk 83 class
-const BOMB_CD = 0.28; // drag coefficient
-const BOMB_AREA = 0.05; // m^2 frontal area
-const BOMB_ARM = 0.35; // s of fall before the fuze is live (clears the jet)
 const BOMB_AIR_RADIUS = 13; // m — a near miss on an airframe breaks it up
 const GRAVITY = 9.81;
 
 // --- laser-guided bombs ---
-/** Steering authority while the laser is painting: enough to walk a bomb onto
- *  a moving ship from altitude, not so much that it flies like a missile. */
-const LGB_TURN = 0.55; // rad/s
-const LGB_DET = 10; // m — proximity detonation at the designated spot
 const LGB_TRAIL = 0.09; // s between trail puffs behind a guided bomb
 const LGB_TRAIL_TTL = 2.4; // s each puff hangs, i.e. how long the wake reads
 // Every store smokes from the moment it leaves the rack, guided or not: without
@@ -497,6 +491,9 @@ function hash(n: number): number {
   return s - Math.floor(s);
 }
 
+export interface CombatOpponent { id: string; life: number; pos: THREE.Vector3; vel: THREE.Vector3 }
+export interface PlayerHit { id: string; life: number; weapon: BattleWeapon }
+
 export class Dogfight {
   active = false;
   /** Mission machinery in play: bandits, or bombable targets. */
@@ -568,6 +565,10 @@ export class Dogfight {
   // Multiplayer: one pilot runs the fight, the room flies in it
   /** A wingman's client: the enemies are the host's, not ours. */
   private mirror = false;
+  private versus = false;
+  private opponents: CombatOpponent[] = [];
+  private playerHits: PlayerHit[] = [];
+  private weaponLaunches: WeaponLaunch[] = [];
   /** Host: the fight as it goes on the wire. Reused — never kept. */
   private snapOut: EnemySnapshot = { carrier: null, bandits: [], wave: 1 };
   /** Mirror: the damage our weapons did, waiting on the host to be told. */
@@ -816,6 +817,25 @@ export class Dogfight {
     );
   }
 
+  beginVersus(player: AircraftState): void {
+    this.setAircraft(player);
+    this.clear();
+    this.versus = true;
+    this.active = true;
+    this.hull = 100;
+  }
+  setOpponents(opponents: CombatOpponent[]): void { this.opponents = opponents; }
+  takeWeaponLaunches(): WeaponLaunch[] { const shots = this.weaponLaunches; this.weaponLaunches = []; return shots; }
+  takePlayerHits(): PlayerHit[] { const hits = this.playerHits; this.playerHits = []; return hits; }
+  setBattleHull(hp: number): void {
+    if (hp < this.hull) this.damageT = DAMAGE_FLASH;
+    this.hull = hp;
+  }
+  private hitOpponent(opponent: CombatOpponent, weapon: BattleWeapon): void {
+    this.playerHits.push({ id: opponent.id, life: opponent.life, weapon });
+    this.hitT = HIT_FLASH;
+  }
+
   /**
    * Point the laser at a world spot (from the target pod's click). Bombs
    * already in the air follow a live designation, so re-clicking re-targets
@@ -842,8 +862,21 @@ export class Dogfight {
    * applies, but a double click is not swallowed: the second weapon goes when
    * the rack is ready.
    */
-  requestBombRelease(): void {
+  requestBombRelease(player?: AircraftState): boolean {
+    if (player && !this.bombReachable(player)) {
+      this.banner(player, "BOMB CANNOT REACH TARGET — CLOSE IN OR CLIMB");
+      return false;
+    }
     this.releaseQueue++;
+    return true;
+  }
+
+  private bombReachable(player: AircraftState): boolean {
+    if (!this.designation) return true;
+    const [x, y, z] = BOMB_STATIONS[this.station % BOMB_STATIONS.length];
+    const pos = player.pos.clone().add(new THREE.Vector3(x, y, z).applyQuaternion(player.quat));
+    const vel = player.vel.clone().add(new THREE.Vector3(0, -2.5, 0).applyQuaternion(player.quat));
+    return canBombReach(pos, vel, this.designation, this.enemyDeck());
   }
 
   /** The hostile boat's hull, for the targeting pick (null once it is gone). */
@@ -873,7 +906,7 @@ export class Dogfight {
       // packet. Our wave queue goes with it.
       this.releaseCarrier();
       this.launchQueued = 0;
-    } else if (!this.cv && this.scenario === "dogfight") {
+    } else if (!this.cv && this.scenario === "dogfight" && !this.versus) {
       // Promoted to lead mid-flight: the boat is ours again, and stepWaves will
       // spot the next wave on it.
       this.spawnEnemyCarrier(player);
@@ -1136,6 +1169,10 @@ export class Dogfight {
   private clearFight(): void {
     this.active = false;
     this.scenario = "dogfight";
+    this.versus = false;
+    this.opponents = [];
+    this.playerHits = [];
+    this.weaponLaunches = [];
     this.gunLive = false;
     this.muzzleT = 0;
     this.threatT = 0;
@@ -1256,6 +1293,11 @@ export class Dogfight {
     this.threatT = Math.max(0, this.threatT - dt);
     this.hitT = Math.max(0, this.hitT - dt);
     this.damageT = Math.max(0, this.damageT - dt);
+    if (this.versus) {
+      this.stepTracers(dt, player);
+      this.stepFlashes(dt);
+      return false;
+    }
     if (this.scenario === "strike") {
       this.stepTargets(dt);
       this.stepTracers(dt, player);
@@ -1304,7 +1346,7 @@ export class Dogfight {
     const gunSpeed = Math.max(MUZZLE_V + player.vel.length(), 1);
     const spots = this.bandits.map((b) => {
       const dist = b.pos.distanceTo(player.pos);
-      const vel = DIR.set(0, 0, -1).applyQuaternion(b.quat).multiplyScalar(b.speed);
+      const vel = DIR.set(0, 0, -1).applyQuaternion(b.quat).multiplyScalar(b.speed).sub(player.vel);
       let tof = Math.min(dist / gunSpeed, 2);
       let lx = b.pos.x + vel.x * tof;
       let ly = b.pos.y + vel.y * tof;
@@ -1316,6 +1358,11 @@ export class Dogfight {
       lz = b.pos.z + vel.z * tof;
       return { x: b.pos.x, y: b.pos.y, z: b.pos.z, lx, ly, lz, km: dist / 1000 };
     });
+    for (const opponent of this.opponents) {
+      const dist = opponent.pos.distanceTo(player.pos);
+      const lead = opponent.pos.clone().addScaledVector(DIR.copy(opponent.vel).sub(player.vel), Math.min(dist / MUZZLE_V, 2));
+      spots.push({ x: opponent.pos.x, y: opponent.pos.y, z: opponent.pos.z, lx: lead.x, ly: lead.y, lz: lead.z, km: dist / 1000 });
+    }
     const cv = this.cv;
     let carrier: DogfightHud["carrier"] = null;
     if (cv) {
@@ -1339,10 +1386,10 @@ export class Dogfight {
       hull: Math.max(0, Math.round(this.hull)),
       kills: this.kills,
       wave: this.wave,
-      bandits: this.bandits.length,
+      bandits: this.versus ? this.opponents.length : this.bandits.length,
       nearestKm: nearest ? nearestD / 1000 : 0,
       nearestBrgDeg: nearest ? (Math.atan2(dx, -dz) * 180) / Math.PI : 0,
-      markers: this.bandits.map((b) => ({ x: b.pos.x, z: b.pos.z })),
+      markers: this.versus ? this.opponents.map(b => ({ x: b.pos.x, z: b.pos.z })) : this.bandits.map((b) => ({ x: b.pos.x, z: b.pos.z })),
       threat: this.threatT > 0,
       firing: this.gunLive,
       hitT: this.hitT / HIT_FLASH,
@@ -1468,9 +1515,8 @@ export class Dogfight {
     // own velocity — identical to what fireGuns will actually spawn.
     const assisted = this.assistBore(player, GUN_MUZ, fwd);
     GUN_V.copy(assisted).multiplyScalar(MUZZLE_V).add(player.vel);
-    // The cue checks a wider tube than the hit test, so the pipper lights up as
-    // it touches a wingtip instead of only on a dead-centre hit.
-    const airR = HIT_RADIUS * 2;
+    // A lit pipper must mean the same contact radius as the actual projectile.
+    const airR = HIT_RADIUS;
     const cv = this.cv;
     const shipLive = cv !== null && cv.status !== "sinking" && cv.status !== "sunk";
     const steps = Math.round(TRACER_LIFE / GUN_DT);
@@ -1496,8 +1542,7 @@ export class Dogfight {
         if (b.catT >= 0) continue;
         // The bandit keeps flying while the round is in the air, so test the
         // path against where the bandit WILL be at this step's flight time —
-        // straight-line along its current velocity (jinks excluded; the tube
-        // is 2x the hit radius, so small weaves stay inside it). Testing the
+        // straight-line along its current velocity (jinks excluded). Testing the
         // stale position made the pipper go dark in every merge even when a
         // burst would connect.
         const vel = DIR.set(0, 0, -1).applyQuaternion(b.quat).multiplyScalar(b.speed);
@@ -1506,6 +1551,10 @@ export class Dogfight {
           hit = "bandit";
           break;
         }
+      }
+      for (const opponent of this.opponents) {
+        GUN_B.copy(opponent.pos).addScaledVector(opponent.vel, t);
+        if (segSphere(GUN_PREV, GUN_P, GUN_B, airR)) { hit = "bandit"; break; }
       }
       if (hit) break;
       for (const t of this.strikeTargets) {
@@ -1575,7 +1624,8 @@ export class Dogfight {
       // lead the target like a burst should be led
       const vel = DIR.set(0, 0, -1).applyQuaternion(b.quat).multiplyScalar(b.speed);
       const tof = Math.min(dist / MUZZLE_V, 1.2);
-      TMP.addScaledVector(vel, tof);
+      TMP.addScaledVector(vel.sub(_player.vel), tof);
+      TMP.y += .5 * GRAVITY * tof * tof;
       // TMP is already relative to the muzzle; subtracting it again made
       // assist depend on the aircraft's world position and altitude.
       TMP.normalize();
@@ -1584,6 +1634,17 @@ export class Dogfight {
         bestAngle = ang;
         best = TMP.clone();
       }
+    }
+    for (const opponent of this.opponents) {
+      TMP.copy(opponent.pos).sub(muzzle);
+      const distance = TMP.length();
+      if (distance > ASSIST_RANGE) continue;
+      const tof = Math.min(distance / MUZZLE_V, 1.2);
+      TMP.addScaledVector(DIR.copy(opponent.vel).sub(_player.vel), tof);
+      TMP.y += .5 * GRAVITY * tof * tof;
+      TMP.normalize();
+      const angle = bore.angleTo(TMP);
+      if (angle < bestAngle) { bestAngle = angle; best = TMP.clone(); }
     }
     if (!best) return bore;
     // pull a fraction of the remaining angle toward the lead point
@@ -1807,40 +1868,21 @@ export class Dogfight {
   private stepBombs(dt: number, player: AircraftState, held: boolean): void {
     this.bombCd = Math.max(0, this.bombCd - dt);
     if ((held || this.releaseQueue > 0) && this.bombCd <= 0 && this.bombsLeft > 0 && !player.onGround) {
-      this.releaseBomb(player);
+      if (!this.bombReachable(player)) {
+        this.releaseQueue = 0;
+        this.banner(player, "BOMB CANNOT REACH TARGET — CLOSE IN OR CLIMB");
+      } else {
+        this.releaseBomb(player);
+      }
       this.bombCd = BOMB_RELEASE_CD;
       if (!held) this.releaseQueue = Math.max(0, this.releaseQueue - 1);
       if (this.bombsLeft === 0) this.banner(player, "BOMBS EXPENDED");
     }
     for (let i = this.bombs.length - 1; i >= 0; i--) {
       const b = this.bombs[i];
-      // quadratic drag, then gravity: a slick bomb stays supersonic for a while
-      const atm = atmosphere(b.pos.y);
-      const k = (0.5 * atm.rho * BOMB_CD * BOMB_AREA * b.vel.length()) / BOMB_MASS;
-      b.vel.multiplyScalar(Math.max(0, 1 - k * dt));
-      b.vel.y -= GRAVITY * dt;
-      b.pos.addScaledVector(b.vel, dt);
+      advanceBomb(b.pos, b.vel, b.guided ? b.target : null, dt);
       b.mesh.position.copy(b.pos);
-      // The store is modelled nose-first down -Z, so the nose (not the tail) has
-      // to be the end that follows the velocity vector.
       b.mesh.quaternion.setFromUnitVectors(NOSE_Z, DIR.copy(b.vel).normalize());
-
-      // --- laser guidance: steer onto the designator ---
-      if (b.guided && b.target) {
-        const speed = b.vel.length();
-        if (speed > 1) {
-          DIR.copy(b.vel).divideScalar(speed);
-          TMP.copy(b.target).sub(b.pos).normalize();
-          const ang = DIR.angleTo(TMP);
-          if (ang > 1e-4) {
-            AXIS.crossVectors(DIR, TMP);
-            if (AXIS.lengthSq() < 1e-8) AXIS.set(0, 1, 0);
-            AXIS.normalize();
-            DIR.applyAxisAngle(AXIS, Math.min(ang, LGB_TURN * dt));
-            b.vel.copy(DIR).multiplyScalar(speed);
-          }
-        }
-      }
 
       // --- wake: every store trails smoke all the way down ---
       b.trailT -= dt;
@@ -2014,6 +2056,10 @@ export class Dogfight {
         best = b.pos;
       }
     }
+    for (const opponent of this.opponents) {
+      const d = opponent.pos.distanceToSquared(from);
+      if (d < bestD) { bestD = d; best = opponent.pos; }
+    }
     for (const t of this.strikeTargets) {
       if (t.dead) continue;
       const d = t.pos.distanceToSquared(from);
@@ -2061,6 +2107,7 @@ export class Dogfight {
       trailT: 0,
       mesh,
     });
+    if (this.versus) this.weaponLaunches.push({ weapon: "missile", pos: pos.toArray(), vel: vel.toArray() });
     this.missilesLeft--;
     this.missileCd = MISSILE_CD;
     this.banner(
@@ -2142,6 +2189,7 @@ export class Dogfight {
           break;
         }
       }
+      if (!hit && this.opponents.some(o => o.pos.distanceTo(m.pos) < MISSILE_AIR_R)) hit = "air";
       if (!hit) {
         for (const t of this.strikeTargets) {
           if (t.dead) continue;
@@ -2195,6 +2243,10 @@ export class Dogfight {
     // a column that outlives the fireball, so the kill reads from any camera
     this.blasts.trail(TMP.set(at.x, y + 10, at.z), 4.6, IMPACT_SMOKE_TTL);
     this.blasts.trail(TMP.set(at.x, y + 24, at.z), 6.5, IMPACT_SMOKE_TTL * 0.8);
+    for (const opponent of this.opponents) {
+      if (opponent.pos.distanceTo(at) < MISSILE_AIR_R) this.hitOpponent(opponent, "missile");
+    }
+
     // splash damage on anything airborne near the burst
     for (const b of this.bandits) {
       if (b.catT >= 0) continue;
@@ -2513,11 +2565,11 @@ export class Dogfight {
       PFWD.dot(TO_P) < -NOSE_CONE_COS * dist;
     if (b.evadeT > 0) {
       b.evadeT -= dt;
-      if (b.evadeT <= 0) b.evadeCd = 5 + hash(b.id + player.time * 1.3) * 4;
+      if (b.evadeT <= 0) b.evadeCd = 9 + hash(b.id + player.time * 1.3) * 5;
     } else if (b.evadeCd > 0) {
       b.evadeCd -= dt;
     } else if ((onSix && dist < EVADE_DIST) || nosed) {
-      b.evadeT = 4 + hash(b.id + player.time) * 2;
+      b.evadeT = 1.8 + hash(b.id + player.time) * 1.2;
     }
 
     // --- afterburner: lit for the merge, the evade and the chase; it cycles
@@ -2717,6 +2769,7 @@ export class Dogfight {
     mesh.position.copy(origin);
     const vel = dir.clone().multiplyScalar(MUZZLE_V);
     if (inherit) vel.add(inherit);
+    if (!hostile && this.versus) this.weaponLaunches.push({ weapon: "gun", pos: origin.toArray(), vel: vel.toArray() });
     this.tracers.push({
       pos: origin.clone(),
       vel,
@@ -2740,7 +2793,7 @@ export class Dogfight {
         t.vel.multiplyScalar(Math.max(0, 1 - k * dt));
       }
       t.vel.y -= GRAVITY * dt;
-      const prev = TMP.copy(t.pos);
+      const prev = GUN_PREV.copy(t.pos);
       t.pos.addScaledVector(t.vel, dt);
       t.mesh.position.copy(t.pos);
       t.mesh.quaternion.setFromUnitVectors(TR_Z, DIR.copy(t.vel).normalize());
@@ -2759,6 +2812,13 @@ export class Dogfight {
               this.hitT = HIT_FLASH;
               dead = true;
               this.damageBandit(b, player.spec.gunDamage, player);
+              break;
+            }
+          }
+          if (!dead) for (const opponent of this.opponents) {
+            if (segSphere(prev, t.pos, opponent.pos, HIT_RADIUS)) {
+              this.hitOpponent(opponent, "gun");
+              dead = true;
               break;
             }
           }

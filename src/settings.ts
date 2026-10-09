@@ -77,7 +77,7 @@ export const DEFAULT_BINDINGS: Record<Action, string> = {
 
 export type DaylightMode = "live" | "fixed" | "cycle";
 
-export type MissionMode = "cruise" | "dogfight" | "strike";
+export type MissionMode = "cruise" | "dogfight" | "strike" | "versus";
 
 export const DAYLIGHT_LABELS: Record<DaylightMode, string> = {
   live: "Real time (Hawaii)",
@@ -86,6 +86,7 @@ export const DAYLIGHT_LABELS: Record<DaylightMode, string> = {
 };
 
 export const MISSION_MODE_LABELS: Record<MissionMode, string> = {
+  versus: "Head-to-head — fight other pilots in your room",
   cruise: "Cruise — free flight",
   dogfight: "Air combat — aggressor bandits fly from the opposing carrier",
   strike: "Strike — practice runs against land and sea targets",
@@ -93,6 +94,7 @@ export const MISSION_MODE_LABELS: Record<MissionMode, string> = {
 
 /** Short chips for the picker: the profile name, without the explanation. */
 export const MISSION_MODE_CHIPS: Record<MissionMode, string> = {
+  versus: "HEAD-TO-HEAD",
   cruise: "CRUISE",
   dogfight: "AGGRESSOR",
   strike: "STRIKE",
@@ -196,7 +198,7 @@ export function loadSettings(): Settings {
           ? parsed.aircraft
           : base.aircraft,
       missionMode:
-        parsed.missionMode === "dogfight" || parsed.missionMode === "cruise" || parsed.missionMode === "strike"
+        parsed.missionMode === "dogfight" || parsed.missionMode === "cruise" || parsed.missionMode === "strike" || parsed.missionMode === "versus"
           ? parsed.missionMode
           : base.missionMode,
       daylight:

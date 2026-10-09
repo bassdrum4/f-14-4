@@ -175,7 +175,7 @@ export function applyGamestate(current: Settings, profile: GamestateProfile): Se
   if (profile.aircraft === "tomcat" || profile.aircraft === "hornet" || profile.aircraft === "intruder") {
     next.aircraft = profile.aircraft;
   }
-  if (profile.missionMode === "dogfight" || profile.missionMode === "cruise" || profile.missionMode === "strike") {
+  if (profile.missionMode === "dogfight" || profile.missionMode === "cruise" || profile.missionMode === "strike" || profile.missionMode === "versus") {
     next.missionMode = profile.missionMode;
   }
   if (profile.daylight === "live" || profile.daylight === "fixed" || profile.daylight === "cycle") {

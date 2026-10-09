@@ -14,7 +14,7 @@ import {
   type AircraftState,
   type FlightInput,
 } from "../src/sim/flight";
-import { carriers, deckAxes, STRIP, worldToDeck, type CarrierDef } from "../src/sim/world";
+import { airfield, carriers, deckAxes, STRIP, worldToDeck, type CarrierDef } from "../src/sim/world";
 
 /** s (down the angled strip) and d (off its centreline) for a world point. */
 function stripCoords(c: CarrierDef, x: number, z: number): { s: number; d: number } {
@@ -198,5 +198,26 @@ function flyApproach(seconds: number, speedTrimKt = 0, label = ""): {
     `${r.st.result?.kind ?? "none"} — ${r.st.result?.title ?? ""}`,
   );
 }
+// Short deck arrival: give the hook time to roll into the catch area.
+{
+  const { st, c } = onApproach();
+  st.pos.copy(stripPoint(c, 8, 0)); st.pos.y += 2.4;
+  st.vel.setLength(70); st.vel.y = -4; st.speed = 70; st.throttle = .2; st.rpm = .2;
+  st.catCooldown = 0;
+  let sawRoll = false;
+  for (let i=0; i<120*15 && !st.result; i++) { stepAircraft(st,idle(),DT); sawRoll ||= st.deckRoll !== undefined; }
+  check("an early deck touchdown rolls forward instead of ending the sortie", sawRoll);
+  check("an early deck touchdown catches a wire", st.result?.kind === "wire", st.result?.title);
+}
+for (const aircraft of ["tomcat", "hornet", "intruder"] as const) {
+  const af = airfield(), st = spawnAircraft("airfield",0,aircraft);
+  st.pos.set(af.centerX-af.runwayLength/2+240,af.elevation+2.5,af.centerZ);
+  st.vel.set(65,-3,0);st.speed=65;st.onGround=false;st.airborne=true;st.catPhase="idle";
+  st.throttle=0;st.rpm=.1;st.gearT=1;st.flapT=1;st.flapsDown=true;
+  const inp=idle();inp.brake=true;
+  for(let i=0;i<120*35&&!st.result;i++)stepAircraft(st,inp,DT);
+  check(`${aircraft} runway touchdown and braking earns landing confirmation`,st.result?.kind==="landing",st.result?.title);
+}
+
 console.log(failures === 0 ? "\nALL LANDING CHECKS PASSED" : `\n${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);

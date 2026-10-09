@@ -51,6 +51,13 @@ export function Hud({ sim, daylight, minimap }: {
   const hud = useHud(sim);
   return (
     <div className="hud-root">
+      {hud.battle && <div className="battle-board">
+        <strong>HEAD-TO-HEAD <span>ROOM {hud.netRoom}</span></strong>
+        <div className="battle-columns"><span>PILOT</span><span>K / D</span><span>HULL</span></div>
+        {[...hud.battle.pilots].sort((a,b) => b.kills - a.kills).map(p => <div key={p.id} className={"battle-row" + (p.id === hud.battleSelf ? " self" : "")}><span>{p.name.toUpperCase()}{p.shield ? " ◇" : ""}</span><span>{p.kills} / {p.deaths}</span><span>{p.ready ? p.hp > 0 ? `${p.hp}%` : `${Math.ceil(p.respawnIn)}s` : "LOBBY"}</span></div>)}
+        {hud.battle.pilots.find(p => p.id === hud.battleSelf)?.shield && <small>SPAWN SHIELD — weapons unlock after 5 seconds</small>}
+        {hud.battle.pilots.find(p => p.id === hud.battleSelf)?.hp === 0 && <small>DOWN — automatic airborne respawn</small>}
+      </div>}
       {!hud.pod && <PitchLadder hud={hud} />}
       {!hud.pod && <TargetBoxes sim={sim} />}
       {hud.pod && <TargetPod sim={sim} />}
@@ -106,7 +113,7 @@ export function Hud({ sim, daylight, minimap }: {
         <div className="hud-nav">
           <div>CARRIER {hud.carrierName} · {hud.distCarrierKm.toFixed(1)} KM · {Math.round(hud.bearingCarrierDeg)}°</div>
           <div>FIELD {hud.distFieldKm.toFixed(1)} KM · {Math.round(hud.bearingFieldDeg)}°</div>
-          {hud.dfActive && (
+          {hud.dfActive && !hud.battle && (
             <div>
               {hud.dfStrike ? "TARGETS" : "BANDITS"} {hud.dfBandits} · {hud.dfStrike ? "CLEARED" : "TAGGED"} {hud.dfKills} · WAVE {hud.dfWave} · NEAR {hud.dfNearestKm.toFixed(1)} KM {Math.round(hud.dfNearestBrgDeg)}°
             </div>
@@ -298,7 +305,7 @@ function Minimap({ hud }: { hud: HudSnapshot }) {
       const x = px(m.x);
       const y = py(m.z);
       if (x < -20 || x > size + 20 || y < -20 || y > size + 20) continue;
-      ctx.fillStyle = "rgba(79, 210, 255, 0.95)";
+      ctx.fillStyle = hud.battle ? "rgba(255, 130, 100, 0.95)" : "rgba(79, 210, 255, 0.95)";
       ctx.beginPath();
       ctx.moveTo(x, y - 4);
       ctx.lineTo(x + 3.6, y + 3);
@@ -306,7 +313,7 @@ function Minimap({ hud }: { hud: HudSnapshot }) {
       ctx.lineTo(x - 3.6, y + 3);
       ctx.closePath();
       ctx.fill();
-      ctx.fillStyle = "rgba(150, 226, 255, 0.95)";
+      ctx.fillStyle = hud.battle ? "rgba(255, 130, 100, 0.95)" : "rgba(150, 226, 255, 0.95)";
       ctx.font = "9px ui-monospace, monospace";
       ctx.fillText(m.name.toUpperCase(), x + 6, y + 3);
     }
@@ -420,7 +427,7 @@ function TargetBoxes({ sim }: { sim: Sim | null }) {
         ctx.fillStyle = "rgba(255, 91, 77, 0.95)";
         ctx.font = "600 13px ui-monospace, monospace";
         ctx.textAlign = "center";
-        ctx.fillText("GUNS - BREAK", w / 2, h * 0.33);
+        ctx.fillText(hud.battle ? "MISSILE INBOUND — BREAK" : "GUNS - BREAK", w / 2, h * 0.33);
         ctx.textAlign = "left";
       }
 
