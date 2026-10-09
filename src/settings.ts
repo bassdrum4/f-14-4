@@ -107,6 +107,7 @@ export interface Settings {
   volume: number; // 0..1
   sensitivity: number; // 0.4..3 — control input ramp rate multiplier
   quality: Quality;
+  adaptiveResolution: boolean;
   aircraft: AircraftId; // the type the player flies
   missionMode: MissionMode; // free flight or an aggressor profile
   daylight: DaylightMode;
@@ -137,6 +138,7 @@ export function defaultSettings(): Settings {
     volume: 0.7,
     sensitivity: 1.35,
     quality: "medium",
+    adaptiveResolution: true,
     aircraft: DEFAULT_AIRCRAFT,
     missionMode: "cruise",
     daylight: "fixed",
@@ -193,6 +195,7 @@ export function loadSettings(): Settings {
         parsed.quality === "low" || parsed.quality === "medium" || parsed.quality === "high"
           ? parsed.quality
           : base.quality,
+      adaptiveResolution: typeof parsed.adaptiveResolution === "boolean" ? parsed.adaptiveResolution : base.adaptiveResolution,
       aircraft:
         parsed.aircraft === "tomcat" || parsed.aircraft === "hornet" || parsed.aircraft === "intruder"
           ? parsed.aircraft

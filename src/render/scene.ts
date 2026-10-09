@@ -544,6 +544,14 @@ export function buildCarrier(c: CarrierDef): THREE.Group {
   // The running lights must not throw their own little shadows around the
   // island; everything else on the ship both casts and receives.
   for (const lamp of [green, red, masthead, beacon]) lamp.castShadow = false;
+  // The ship-wide flag assignment above also visits the instanced deck lamps.
+  // Restore their flags: luminous strips do not need a second shadow draw.
+  g.traverse(o => {
+    if ((o as THREE.InstancedMesh).isInstancedMesh) {
+      o.castShadow = false;
+      o.receiveShadow = false;
+    }
+  });
   return g;
 }
 
@@ -636,7 +644,7 @@ function instanceLamps(
   });
   inst.count = spots.length;
   inst.instanceMatrix.needsUpdate = true;
-  inst.frustumCulled = false;
+  inst.computeBoundingSphere();
   return inst;
 }
 
@@ -762,7 +770,7 @@ export function buildNightLights(): { group: THREE.Group; material: THREE.MeshSt
     inst.setMatrixAt(i, m);
   });
   inst.instanceMatrix.needsUpdate = true;
-  inst.frustumCulled = false;
+  inst.computeBoundingSphere();
   group.add(inst);
 
   return { group, material };

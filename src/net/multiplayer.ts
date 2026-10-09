@@ -361,11 +361,10 @@ const SEND_INTERVAL_MS = 1000 / SEND_HZ;
 /** Fastest the frame flush may repeat, in ms: the sustained rate while flying
  *  is ~30 Hz instead of the old fixed 15 Hz. */
 const FLUSH_MIN_GAP_MS = 1000 / 30;
-/** A hard manoeuvre does not wait for the floor: down to this guard, then send.
- *  A packet is 52 bytes, so a short burst costs nothing. */
-const BURST_MIN_GAP_MS = 12;
-/** What counts as "the pilot did something" for the burst path: metres of
- *  travel, m/s of speed change, or a switch (gear/flaps/brake/AB) moving. */
+/** A hard manoeuvre may send at 60 Hz; ordinary flight stays near 30 Hz. */
+const BURST_MIN_GAP_MS = 1000 / 60;
+/** Unexpected movement relative to the previous velocity, rather than distance
+ *  travelled. At 300 m/s ordinary cruise used to trigger a burst every frame. */
 const BURST_POS_M = 6;
 const BURST_SPEED_MS = 18;
 const BURST_SWEEP = 0.06;
@@ -524,6 +523,13 @@ export class Multiplayer {
   private lastSentX = 0;
   private lastSentY = 0;
   private lastSentZ = 0;
+  private lastSentVX = 0;
+  private lastSentVY = 0;
+  private lastSentVZ = 0;
+  private lastSentQX = 0;
+  private lastSentQY = 0;
+  private lastSentQZ = 0;
+  private lastSentQW = 1;
   private lastSentSpeed = 0;
   private lastSentSweep = 0;
   private lastSentFlags = 0;
@@ -811,8 +817,8 @@ export class Multiplayer {
     try {
       conn = this.peer.connect(id, {
         serialization: "binary",
-        // Reliable + ordered: a dropped pose would leave the wingman parked,
-        // and at ~52 bytes / 15 Hz there is no congestion to trade it for.
+        // Combat and room controls share this reliable channel. Motion sends
+        // respect backpressure so old poses cannot keep enlarging its queue.
         reliable: true,
         metadata: { name: this.name, aircraft: this.aircraft },
       });
@@ -1210,11 +1216,14 @@ export class Multiplayer {
     if (!this.poseDirty || this.status !== "online" || this.conns.size === 0) return;
     const now = performance.now();
     const since = now - this.lastSendAt;
+    const dt = since / 1000;
+    const rotationDot = Math.abs(this.pose.qx * this.lastSentQX + this.pose.qy * this.lastSentQY + this.pose.qz * this.lastSentQZ + this.pose.qw * this.lastSentQW);
     const big =
-      Math.abs(this.pose.x - this.lastSentX) +
-        Math.abs(this.pose.y - this.lastSentY) +
-        Math.abs(this.pose.z - this.lastSentZ) >
+      Math.abs(this.pose.x - this.lastSentX - this.lastSentVX * dt) +
+        Math.abs(this.pose.y - this.lastSentY - this.lastSentVY * dt) +
+        Math.abs(this.pose.z - this.lastSentZ - this.lastSentVZ * dt) >
         BURST_POS_M ||
+      rotationDot < Math.cos(2.5 * Math.PI / 180) ||
       Math.abs(this.pose.speed - this.lastSentSpeed) > BURST_SPEED_MS ||
       Math.abs(this.pose.sweepT - this.lastSentSweep) > BURST_SWEEP ||
       this.pose.flags !== this.lastSentFlags;
@@ -1278,6 +1287,11 @@ export class Multiplayer {
     let any = false;
     for (const conn of this.conns.values()) {
       if (!conn.open) continue;
+      // Poses supersede older poses. Do not pile stale motion behind a slow
+      // channel's reliable combat/control messages; send the newest on drain.
+      const channel = conn.dataChannel;
+      const queued = (conn as DataConnection & { bufferSize?: number }).bufferSize ?? 0;
+      if ((channel?.bufferedAmount ?? 0) > 2048 || queued > 8) continue;
       try {
         conn.send(buf);
         if (enemyBuf) conn.send(enemyBuf);
@@ -1293,6 +1307,13 @@ export class Multiplayer {
     this.lastSentX = this.pose.x;
     this.lastSentY = this.pose.y;
     this.lastSentZ = this.pose.z;
+    this.lastSentVX = this.pose.vx;
+    this.lastSentVY = this.pose.vy;
+    this.lastSentVZ = this.pose.vz;
+    this.lastSentQX = this.pose.qx;
+    this.lastSentQY = this.pose.qy;
+    this.lastSentQZ = this.pose.qz;
+    this.lastSentQW = this.pose.qw;
     this.lastSentSpeed = this.pose.speed;
     this.lastSentSweep = this.pose.sweepT;
     this.lastSentFlags = this.pose.flags;

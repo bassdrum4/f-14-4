@@ -1,4 +1,5 @@
 import { buildScenery, buildAirbaseDetails } from "./details";
+import { ResolutionBudget } from "./performance";
 // Three.js renderer wrapper: scene graph, lighting, resize, quality scaling.
 // The world root (terrain + airfield + carriers) is rebuilt at runtime whenever
 // the terrain seed changes, so the mesh always follows the physics heightfield.
@@ -31,6 +32,10 @@ export class WorldRenderer {
   sun: THREE.DirectionalLight;
   oceanMat: THREE.MeshStandardMaterial;
   private quality: Quality;
+  private resolutionBudget = new ResolutionBudget();
+  private adaptiveResolution = true;
+  private basePixelRatio = 1;
+  private scenery!: THREE.Group;
   private terrainPaint!: TerrainPaint;
   private worldRoot = new THREE.Group();
   private nightRoot = new THREE.Group();
@@ -183,7 +188,8 @@ export class WorldRenderer {
     this.worldRoot.add(buildTerrain(this.quality, paint));
     this.worldRoot.add(buildAirfield());
     this.worldRoot.add(buildAirbaseDetails());
-    this.worldRoot.add(buildScenery(this.quality));
+    this.scenery = buildScenery(this.quality);
+    this.worldRoot.add(this.scenery);
     for (const c of carriers()) this.worldRoot.add(buildCarrier(c));
 
     // Deck and runway lights follow the active layout too, or they would stay
@@ -193,6 +199,13 @@ export class WorldRenderer {
     const night = buildNightLights();
     this.nightLights = night.material;
     this.nightRoot.add(night.group);
+    // These transforms never move. Avoid recalculating hundreds of matrices
+    // every frame; the moving aircraft and hostile carrier remain dynamic.
+    for (const root of [this.worldRoot, this.nightRoot]) {
+      root.traverse(o => { o.updateMatrix(); o.matrixAutoUpdate = false; });
+      root.updateMatrixWorld(true);
+      root.traverse(o => { o.matrixWorldAutoUpdate = false; });
+    }
   }
 
   applyQuality(q: Quality): void {
@@ -209,6 +222,8 @@ export class WorldRenderer {
         : q === "medium"
           ? Math.min(window.devicePixelRatio, 1.5)
           : Math.min(window.devicePixelRatio, 2);
+    this.basePixelRatio = pr;
+    this.resolutionBudget.reset();
     this.renderer.setPixelRatio(pr);
     this.resize();
     if (geometryChanged && this.terrainPaint) this.applyWorld(this.terrainPaint);
@@ -223,6 +238,20 @@ export class WorldRenderer {
     this.camera.updateProjectionMatrix();
   }
 
+  setAdaptiveResolution(enabled: boolean): void {
+    this.adaptiveResolution = enabled;
+    this.resolutionBudget.reset();
+    this.renderer.setPixelRatio(this.basePixelRatio);
+    this.resize();
+  }
+
+  updateFrameBudget(nowMs: number): void {
+    if (this.resolutionBudget.sample(nowMs, this.adaptiveResolution, !document.hidden)) {
+      this.renderer.setPixelRatio(this.basePixelRatio * this.resolutionBudget.scale);
+      this.resize();
+    }
+  }
+
   /** Release GPU resources (world, cues, airframe, renderer). */
   dispose(): void {
     this.scaleCues.dispose();
@@ -230,6 +259,12 @@ export class WorldRenderer {
   }
 
   render(): void {
+    // Small scenery contributes little beyond a few kilometres. Keep terrain,
+    // ships, runway and combat aircraft visible at their full existing ranges.
+    for (const child of this.scenery.children) {
+      const bounds = (child as THREE.InstancedMesh).boundingSphere;
+      child.visible = !bounds || this.camera.position.distanceToSquared(bounds.center) < (bounds.radius + 5000) ** 2;
+    }
     // slow swell drift: gives motion cues when judging height over water
     const t = performance.now() / 1000;
     const waves = this.oceanMat.bumpMap;
