@@ -114,16 +114,11 @@ const MAX_FLASHES = 6;
 // "not shooting straight". The gun cue (see gunSolution) accounts for the drop
 // and the drag that remain, so the crosshair is where the rounds actually go.
 // --- gun aim assist ---
-// A deliberate, very slight pull toward the nearest bandit's lead point when
-// the bore is already nearly on it. The SAME bend is applied to the fired
-// rounds and to the crosshair's ballistic solution, so the pipper shows
-// exactly where the bullets go — and visually snaps that last fraction of a
-// degree onto the target. Deliberately tiny: the assist cone is ~2.6°, the
-// pull is capped under half a degree (comparable to the gun's own spread),
-// and there is no assist beyond 1.5 km — it forgives a hair of error without
-// playing the game for you.
-const ASSIST_CONE = 0.045; // rad (~2.6°): the bore must be this close to assist
-const ASSIST_MAX = 0.0065; // rad (~0.37°): the most a shot can be bent
+// Correct toward a bandit's lead point within five degrees of the bore.
+// The fired rounds and HUD solution use the same correction, capped at five
+// degrees and limited to 1.5 km so distant contacts do not attract the gun.
+const ASSIST_CONE = 5 * Math.PI / 180;
+const ASSIST_MAX = 5 * Math.PI / 180;
 const ASSIST_RANGE = 1500; // m: no assist beyond this
 
 const BULLET_MASS = 0.1; // kg (20 mm class)
@@ -1581,7 +1576,9 @@ export class Dogfight {
       const vel = DIR.set(0, 0, -1).applyQuaternion(b.quat).multiplyScalar(b.speed);
       const tof = Math.min(dist / MUZZLE_V, 1.2);
       TMP.addScaledVector(vel, tof);
-      TMP.sub(muzzle).normalize();
+      // TMP is already relative to the muzzle; subtracting it again made
+      // assist depend on the aircraft's world position and altitude.
+      TMP.normalize();
       const ang = bore.angleTo(TMP);
       if (ang < bestAngle) {
         bestAngle = ang;

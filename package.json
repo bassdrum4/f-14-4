@@ -28,7 +28,8 @@
     "test:feedback": "bun scripts/diag-feedback.ts",
     "test:feedback:gs": "bun scripts/diag-feedback-gs.ts",
     "build:standalone": "npm run build",
-    "check:standalone": "node scripts/check-singlefile.mjs"
+    "check:standalone": "node scripts/check-singlefile.mjs",
+    "test:aim": "bun scripts/diag-aim.ts"
   },
   "dependencies": {
     "peerjs": "^1.5.5",
