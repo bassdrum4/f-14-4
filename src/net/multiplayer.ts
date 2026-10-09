@@ -110,6 +110,8 @@ export interface NetHandlers {
   onCarrierHit?: (dmg: number) => void;
   /** A pilot spoke on the room's radio. */
   onChat?: (msg: ChatMsg) => void;
+  /** One-way delay measured on one pilot's link, in ms. */
+  onLinkDelay?: (id: string, ms: number) => void;
   onBattleAction?: (sender: string, action: BattleAction) => void;
   onBattleState?: (snapshot: BattleSnapshot) => void;
   onBattleShot?: (sender: string, shot: BattleShot) => void;
@@ -278,6 +280,9 @@ export function unpackEnemies(buf: ArrayBuffer): EnemySnapshot | null {
   const v = new DataView(buf);
   if (v.getUint16(0) !== ENEMY_MAGIC) return null;
   const n = v.getUint8(3);
+  // The sender never puts more than ENEMY_MAX bandits on the wire. Without
+  // this ceiling a peer could claim 255 and have the host build 255 aircraft.
+  if (n > ENEMY_MAX) return null;
   // A pose packet is 52 bytes, which no enemy packet can be: the sizes are
   // exact, so the two formats cannot be confused for one another.
   if (buf.byteLength !== ENEMY_FIXED + n * ENEMY_STRIDE) return null;
@@ -333,7 +338,7 @@ interface RosterEntry {
 }
 
 type Control =
-  | { t: "hello"; name: string; aircraft: AircraftId; host: boolean; mode: MissionMode; owner?: string }
+  | { t: "hello"; name: string; aircraft: AircraftId; mode: MissionMode; owner?: string }
   | { t: "roster"; peers: RosterEntry[]; mode: MissionMode }
   | { t: "join"; peer: RosterEntry }
   | { t: "bye"; id: string }
@@ -387,6 +392,8 @@ const HOST_DIAL_RETRIES = 4;
 const HOST_RETRY_MS = 1200;
 /** Cap on the mesh, so a public room code cannot invite a mob. */
 const MAX_PILOTS = 12;
+/** Longest the host may go without repeating an unchanged scoreboard. */
+const BATTLE_REFRESH_MS = 2000;
 
 const ICE_DEFAULT: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
 
@@ -397,9 +404,18 @@ function sanitizeRoom(raw: string): string {
   return s || "TOMCAT";
 }
 
-export function sanitizeName(raw: string): string {
-  const s = raw.trim().replace(/[^\w .\-]/g, "").slice(0, 12);
+export function sanitizeName(raw: unknown): string {
+  const s = (typeof raw === "string" ? raw : "").trim().replace(/[^\w .\-]/g, "").slice(0, 12);
   return s || "PILOT";
+}
+
+/**
+ * Only an airframe this build actually has. The `aircraft` field arrives from
+ * the other end and is handed straight to the mesh builder, so an id nobody
+ * ships has to collapse to a known one rather than be believed.
+ */
+export function sanitizeAircraft(raw: unknown): AircraftId {
+  return raw === "tomcat" || raw === "hornet" || raw === "intruder" ? raw : DEFAULT_AIRCRAFT;
 }
 
 /** Longest chat line the wire will carry; anything past it is cut. */
@@ -411,7 +427,8 @@ export const CHAT_MAX = 160;
  * Emptiness is the caller's decision — the sender drops it, a receiver still
  * hears it as silence.
  */
-export function sanitizeChat(raw: string): string {
+export function sanitizeChat(raw: unknown): string {
+  if (typeof raw !== "string") return "";
   return raw
     .replace(/\s*\n\s*/g, "\n")
     .replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, " ")
@@ -479,6 +496,14 @@ export class Multiplayer {
   private hostDuty: Peer | null = null;
   private hostRetries = 0;
   private host = false;
+  /**
+   * The connection that may issue host-only commands: the room's predictable
+   * peer id, plus whoever we accepted a takeover from after the host left.
+   * Nothing else can promote itself, however loudly its packet claims to.
+   */
+  private hostAuthority: string | null = null;
+  /** A lost host link is being re-dialled; at most one attempt in flight. */
+  private redialPending = false;
   private room = "";
   private selfId = "";
   private name = "PILOT";
@@ -487,6 +512,14 @@ export class Multiplayer {
   private mode: MissionMode = "cruise";
   private status: NetStatus = "idle";
   private error: string | undefined;
+  /**
+   * Host: the last scoreboard actually put on the wire, as its JSON. The
+   * head-to-head scoreboard used to be re-broadcast ten times a second whether
+   * or not a single number had changed — the heaviest message in the room, on
+   * the same reliable channel as the poses. See publishBattle.
+   */
+  private battleCache: string | null = null;
+  private battleSentAt = 0;
   /** Host: the newest fight state, picked up by every other sender tick. */
   private enemy: EnemySnapshot | null = null;
   private enemySeq = 0;
@@ -541,6 +574,8 @@ export class Multiplayer {
   private rttMs = 0;
   private rttPolledAt = 0;
   private rttPending = false;
+  /** Which link the next RTT poll will look at; walks the whole mesh. */
+  private rttCursor = 0;
 
   constructor(
     handlers: NetHandlers = {},
@@ -584,6 +619,16 @@ export class Multiplayer {
     return this.host;
   }
 
+  /**
+   * May this connection speak with the room's authority? The predictable peer
+   * id always may; after a takeover, whoever we accepted the handover from may
+   * too. Nothing else does — `launch`, `mode` and `battleState` all hang off
+   * this, which is what stops a joiner force-starting a mission for the room.
+   */
+  private isHostConn(conn: DataConnection): boolean {
+    return conn.peer === this.hostAuthority || conn.peer === hostPeerId(this.room);
+  }
+
   // --- session ------------------------------------------------------------
 
   /** Open a room. The name/aircraft are announced to whoever joins later. */
@@ -611,6 +656,7 @@ export class Multiplayer {
     // A predictable 4-char tail keeps ids unique without a directory service.
     const id = asHost ? hostPeerId(this.room) : `f14sim-${idSlug(this.room)}-${randomSuffix()}`;
     this.selfId = id;
+    this.hostAuthority = asHost ? id : null;
 
     let peer: Peer;
     try {
@@ -701,6 +747,9 @@ export class Multiplayer {
     }
     this.host = false;
     this.selfId = "";
+    this.hostAuthority = null;
+    this.redialPending = false;
+    this.battleCache = null;
     this.sent = 0;
     this.recv = 0;
     this.sentWindow = [];
@@ -712,6 +761,7 @@ export class Multiplayer {
     this.rttMs = 0;
     this.rttPolledAt = 0;
     this.rttPending = false;
+    this.rttCursor = 0;
     this.seq = 0;
     this.hostRetries = 0;
     this.enemy = null;
@@ -745,7 +795,12 @@ export class Multiplayer {
         }, HOST_RETRY_MS * this.hostRetries);
         return;
       }
-      this.error = "No room with that code — check it, or open the room yourself.";
+      // While other wingmen are still linked this is a lost link to one
+      // peer, not a missing room — say so, and don't contradict the message
+      // that was just shown for the host leaving.
+      this.error = this.conns.size > 0
+        ? "The room host is not answering — wingmen already linked still fly."
+        : "No room with that code — check it, or open the room yourself.";
       this.emit();
       return;
     }
@@ -807,11 +862,36 @@ export class Multiplayer {
     });
   }
 
+  /**
+   * Re-establish a link to the room's host after it dropped. Only ever one
+   * attempt in flight, and never once we have taken the room over ourselves —
+   * the dial itself is `dialHost`, which already retries a host the broker has
+   * not finished registering.
+   */
+  private scheduleHostRedial(): void {
+    if (this.host || this.hostDuty || this.redialPending || this.status !== "online") return;
+    const id = hostPeerId(this.room);
+    if (this.conns.has(id) || this.dialing.has(id)) return;
+    this.redialPending = true;
+    this.hostRetries = 0;
+    window.setTimeout(() => {
+      this.redialPending = false;
+      if (this.status !== "online" || this.host || this.hostDuty) return;
+      if (this.conns.has(hostPeerId(this.room)) || this.dialing.has(hostPeerId(this.room))) return;
+      this.error = "Reconnecting to the room host…";
+      this.emit();
+      this.dialHost();
+    }, HOST_RETRY_MS);
+  }
+
   /** Dial a peer. `known` is the roster entry when we already have one. */
   private dial(id: string, known: RosterEntry | null): void {
     if (!this.peer || this.peer.destroyed) return;
     if (this.conns.has(id) || this.dialing.has(id) || id === this.selfId) return;
-    if (this.pilots.size + 1 >= MAX_PILOTS) return;
+    // The room's host is not one more pilot. A roster at its ceiling must
+    // never be the reason a pilot cannot reach (or re-reach) the room's door —
+    // which is exactly what happened to a full room re-dialling a lost host.
+    if (id !== hostPeerId(this.room) && this.pilots.size + 1 >= MAX_PILOTS) return;
     this.dialing.add(id);
     let conn: DataConnection;
     try {
@@ -851,13 +931,16 @@ export class Multiplayer {
       this.lastSeq.delete(conn.peer);
       this.lastSendAt = 0;
       this.enemyDirty = true;
+      // The room's host is whoever answers on the predictable id, and a brand
+      // new link has none of the room's state cached yet.
+      if (conn.peer === hostPeerId(this.room)) this.hostAuthority = conn.peer;
+      this.battleCache = null;
       // Announce ourselves. The host answers with the roster; a mesh peer
       // already knows us from the roster it got earlier.
       this.send(conn, {
         t: "hello",
         name: this.name,
         aircraft: this.aircraft,
-        host: this.host || this.hostDuty !== null,
         mode: this.mode,
         owner: this.selfId,
       } satisfies Control);
@@ -877,6 +960,9 @@ export class Multiplayer {
       } catch {
         return;
       }
+      // JSON.parse will happily hand back a string, a number or null; none of
+      // those have a `t`, and reading one would throw out of the data handler.
+      if (typeof msg !== "object" || msg === null || typeof msg.t !== "string") return;
       this.onControl(conn, msg);
       return;
     }
@@ -904,15 +990,16 @@ export class Multiplayer {
           id: conn.peer,
           owner: conn.peer === hostPeerId(this.room) && typeof msg.owner === "string" && msg.owner.startsWith(`f14sim-${idSlug(this.room)}-`) ? msg.owner : undefined,
           name: sanitizeName(msg.name),
-          aircraft: msg.aircraft,
-          // The room host is the only predictable peer id, and it announces
-          // itself here: without this, whoever receives the host's own hello
-          // first would file the host on the roster as an ordinary pilot (and
-          // the lobby would show the wrong owner for the room).
-          host: msg.host === true || conn.peer === hostPeerId(this.room),
+          aircraft: sanitizeAircraft(msg.aircraft),
+          // The room host is the only predictable peer id, so the connection
+          // decides this and the packet never can: hello used to carry a
+          // `host: true` claim, and believing it let any joiner declare itself
+          // host — then force-launch the room, rewrite its mission profile and
+          // fabricate its head-to-head scoreboard.
+          host: this.isHostConn(conn),
         };
         const known = this.pilots.has(conn.peer);
-        this.adopt(conn.peer, entry);
+        if (!this.adopt(conn.peer, entry)) break;
         if (this.host || this.hostDuty) {
           // Tell the newcomer who else is here, and everyone else about them.
           // The room's mission profile rides the roster: a pilot joining an
@@ -934,11 +1021,17 @@ export class Multiplayer {
         break;
       }
       case "roster": {
+        // Only the room's host hands out a roster. Taking one from any other
+        // wingman let a stranger file arbitrary pilots — and a bogus host — on
+        // ours, and (through the dial tie-break below) make us dial ids of
+        // their choosing. `msg.peers` is also checked: a scalar or an absent
+        // array used to throw straight out of the data handler.
+        if (!this.isHostConn(conn) || !Array.isArray(msg.peers)) break;
         this.adoptMode(msg.mode);
         for (const entry of msg.peers) {
-          if (entry.id === this.selfId) continue;
+          if (!entry || typeof entry.id !== "string" || entry.id === this.selfId) continue;
           const known = this.pilots.has(entry.id);
-          this.adopt(entry.id, entry);
+          if (!this.adopt(entry.id, entry)) break;
           // Deterministic tie-break so both ends do not dial each other.
           if (!entry.host && !this.conns.has(entry.id) && this.selfId < entry.id) {
             this.dial(entry.id, entry);
@@ -948,10 +1041,12 @@ export class Multiplayer {
         break;
       }
       case "join": {
+        // Same rule as `roster`: the host introduces pilots, nobody else.
         const entry = msg.peer;
-        if (entry.id === this.selfId) break;
+        if (!this.isHostConn(conn)) break;
+        if (!entry || typeof entry.id !== "string" || entry.id === this.selfId) break;
         const known = this.pilots.has(entry.id);
-        this.adopt(entry.id, entry);
+        if (!this.adopt(entry.id, entry)) break;
         if (!this.conns.has(entry.id) && this.selfId < entry.id) this.dial(entry.id, entry);
         if (!known) this.emit();
         break;
@@ -960,19 +1055,25 @@ export class Multiplayer {
         const candidate = [this.selfId, ...this.pilots.keys()].sort()[0];
         const liveHost = [...this.pilots.values()].some(p => p.host && this.conns.get(p.id)?.open);
         if (!this.host && !liveHost && conn.peer === candidate) {
+          // Record who now speaks for the room, so their launch/mode/battle
+          // commands are accepted on the connections we already have.
+          this.hostAuthority = conn.peer;
           for (const p of this.pilots.values()) p.host = p.id === conn.peer;
           this.emit();
         }
         break;
       }
       case "launch":
-        if (conn.peer !== hostPeerId(this.room) && !this.pilots.get(conn.peer)?.host) break;
-        if (msg.mission === "carrier" || msg.mission === "airfield") {
-          this.handlers.onLaunch?.(msg.mission, msg.carrier);
-        }
+        // Host-only, and the boat has to be a real number: a non-numeric
+        // carrier reached the sim as NaN, which put the spawn on no boat at
+        // all instead of being dropped.
+        if (!this.isHostConn(conn)) break;
+        if (msg.mission !== "carrier" && msg.mission !== "airfield") break;
+        if (!Number.isFinite(msg.carrier)) break;
+        this.handlers.onLaunch?.(msg.mission, Math.trunc(msg.carrier));
         break;
       case "mode":
-        if (conn.peer === hostPeerId(this.room) || this.pilots.get(conn.peer)?.host) this.adoptMode(msg.mode);
+        if (this.isHostConn(conn)) this.adoptMode(msg.mode);
         break;
       case "battleShot": {
         const shot = msg.shot;
@@ -983,7 +1084,16 @@ export class Multiplayer {
         if (this.host && this.pilots.has(conn.peer) && msg.action && typeof msg.action === "object") this.handlers.onBattleAction?.(conn.peer, msg.action);
         break;
       case "battleState":
-        if (!this.host && (conn.peer === hostPeerId(this.room) || this.pilots.get(conn.peer)?.host) && msg.snapshot && Array.isArray(msg.snapshot.pilots) && msg.snapshot.pilots.length <= 32) this.handlers.onBattleState?.(msg.snapshot);
+        // The scoreboard is the host's to publish. Field-by-field validation
+        // then happens in the engine, which is where the numbers are used.
+        if (
+          !this.host &&
+          this.isHostConn(conn) &&
+          msg.snapshot &&
+          Number.isFinite(msg.snapshot.match) &&
+          Array.isArray(msg.snapshot.pilots) &&
+          msg.snapshot.pilots.length <= 32
+        ) this.handlers.onBattleState?.(msg.snapshot);
         break;
       case "hit":
         // Damage claims are only accepted from a pilot on the roster, and only
@@ -1019,10 +1129,10 @@ export class Multiplayer {
         break;
       }
       case "name":
-        if (this.pilots.has(conn.peer)) {
+        if (this.pilots.has(conn.peer) && typeof msg.name === "string") {
           const p = this.pilots.get(conn.peer)!;
           p.name = sanitizeName(msg.name);
-          p.aircraft = msg.aircraft;
+          p.aircraft = sanitizeAircraft(msg.aircraft);
           this.handlers.onPilot?.(p.owner ?? conn.peer, p.name, p.aircraft);
           this.emit();
         }
@@ -1045,10 +1155,14 @@ export class Multiplayer {
     this.handlers.onMode?.(mode);
   }
 
-  /** Record a pilot, telling the renderer when they are new or changed. */
-  private adopt(id: string, entry: RosterEntry): void {
-    if (id === this.selfId) return;
+  /** Record a pilot. False when the room is already at its ceiling. */
+  private adopt(id: string, entry: RosterEntry): boolean {
+    if (id === this.selfId) return true;
     const prev = this.pilots.get(id);
+    // A room has a hard cap (MAX_PILOTS). `roster`, `join` and `hello` all
+    // reach this, so a peer that kept announcing pilots used to grow the map
+    // without bound; the new ones stop at the ceiling.
+    if (!prev && this.pilots.size >= MAX_PILOTS) return false;
     const next: RosterEntry = { ...entry, id };
     this.pilots.set(id, next);
     // The renderer only needs to hear about a pilot it has not built a mesh
@@ -1056,6 +1170,7 @@ export class Multiplayer {
     const changed = !prev || prev.name !== next.name || prev.aircraft !== next.aircraft || prev.owner !== next.owner;
     if (prev && prev.owner !== next.owner) this.handlers.onPilotLeave?.(prev.owner ?? id);
     if (changed) this.handlers.onPilot?.(next.owner ?? id, next.name, next.aircraft);
+    return true;
   }
 
   private drop(id: string, tellHost: boolean): void {
@@ -1073,11 +1188,16 @@ export class Multiplayer {
     this.lastSeq.delete(id);
     const departing = this.pilots.get(id);
     const had = this.pilots.delete(id);
+    if (this.hostAuthority === id) this.hostAuthority = null;
     const wasHost = id === hostPeerId(this.room) || departing?.host === true;
     if (wasHost && this.status === "online") {
       this.error = "The room host left. You are still linked to the others.";
       // Somebody has to answer the room's door; see maybePromote().
       this.maybePromote();
+      // ...and somebody has to re-establish the link if nobody did: a NAT
+      // timeout kills one WebRTC path and leaves the rest of the mesh fine,
+      // and without this that pilot loses the fight stream for the session.
+      this.scheduleHostRedial();
     }
     if (had) {
       this.handlers.onPilotLeave?.(departing?.owner ?? id);
@@ -1143,8 +1263,22 @@ export class Multiplayer {
     else this.sendAll(JSON.stringify({ t: "battleAction", action } satisfies Control));
   }
 
+  /**
+   * Host: publish the head-to-head scoreboard. Unchanged frames are skipped —
+   * between fights a room of twelve used to push ~200 kB/s of identical JSON
+   * down the same reliable channel the poses ride, which is exactly the
+   * traffic that makes motion late. A refresh every BATTLE_REFRESH_MS keeps a
+   * rejoining pilot from waiting on a state that never changes, and a new
+   * link invalidates the cache outright (see attach).
+   */
   publishBattle(snapshot: BattleSnapshot): void {
-    if (this.host) this.sendAll(JSON.stringify({ t: "battleState", snapshot } satisfies Control));
+    if (!this.host) return;
+    const wire = JSON.stringify({ t: "battleState", snapshot } satisfies Control);
+    const now = performance.now();
+    if (wire === this.battleCache && now - this.battleSentAt < BATTLE_REFRESH_MS) return;
+    this.battleCache = wire;
+    this.battleSentAt = now;
+    this.sendAll(wire);
   }
 
   /** Mirror: our rounds landed on an aircraft the host owns. */
@@ -1297,8 +1431,6 @@ export class Multiplayer {
     let enemyBuf: ArrayBuffer | null = null;
     if (withEnemy && this.enemy && ++this.enemySinceBeat >= ENEMY_BEATS) {
       enemyBuf = packEnemies(this.enemy, ++this.enemySeq);
-      this.enemyDirty = false;
-      this.enemySinceBeat = 0;
     }
     const buf = packPose(this.pose, ++this.seq);
     let any = false;
@@ -1318,6 +1450,13 @@ export class Multiplayer {
       }
     }
     if (!any) return false;
+    // Retire the fight only now that a wingman has it. Clearing it before the
+    // loop meant a backpressured link silently swallowed a whole snapshot and
+    // the bandits sat still until the next two beats.
+    if (enemyBuf) {
+      this.enemyDirty = false;
+      this.enemySinceBeat = 0;
+    }
     this.poseDirty = false;
     this.sentSinceBeat = true;
     this.lastSendAt = now;
@@ -1355,11 +1494,23 @@ export class Multiplayer {
   private pollRtt(now: number): void {
     if (this.rttPending || now - this.rttPolledAt < 1000) return;
     this.rttPolledAt = now;
-    for (const conn of this.conns.values()) {
-      if (!conn.open) continue;
+    const ids = [...this.conns.keys()];
+    if (ids.length === 0) return;
+    this.rttCursor %= ids.length;
+    // Rotate. The first link used to be the only one ever measured, so one
+    // peer's delay was applied to every wingman in the room — a 200 ms pilot
+    // dragged a 20 ms one a fifth of a second into the past.
+    const start = this.rttCursor;
+    for (let i = 0; i < ids.length; i++) {
+      const idx = (start + i) % ids.length;
+      const id = ids[idx];
+      const conn = this.conns.get(id);
+      if (!conn || !conn.open) continue;
       const pc = (conn as unknown as { peerConnection?: RTCPeerConnection }).peerConnection;
       if (!pc || typeof pc.getStats !== "function") continue;
+      this.rttCursor = (idx + 1) % ids.length;
       this.rttPending = true;
+      const owner = this.pilots.get(id)?.owner ?? id;
       pc.getStats().then(
         (report) => {
           let best = 0;
@@ -1370,7 +1521,11 @@ export class Multiplayer {
           });
           if (best > 0) {
             this.rttMs = best * 1000;
-            setLinkDelayMs(this.rttMs / 2);
+            const oneWay = this.rttMs / 2;
+            // The global is the fallback for a wingman we have not measured
+            // yet; the per-peer value is what that wingman is drawn on.
+            setLinkDelayMs(oneWay);
+            this.handlers.onLinkDelay?.(owner, oneWay);
           }
           this.rttPending = false;
         },

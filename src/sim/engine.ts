@@ -394,6 +394,7 @@ export class Sim {
       onHit: (id, dmg) => this.df.applyRemoteHit(id, dmg, this.state),
       onCarrierHit: (dmg) => this.df.applyRemoteCarrierHit(dmg, this.state),
       onChat: (msg) => this.addChat(msg),
+      onLinkDelay: (id, ms) => this.remoteFleet.setLinkDelay(id, ms),
       onBattleAction: (sender, action) => this.receiveBattleAction(sender, action),
       onBattleState: (snapshot) => this.applyBattle(snapshot),
       onBattleShot: (sender, shot) => {

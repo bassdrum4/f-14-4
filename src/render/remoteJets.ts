@@ -44,11 +44,32 @@ export const FLAG_ACTIVE = 128;
  * connection's own RTT (never from extra traffic). The presented clock targets
  * the newest packet plus this, i.e. where the wingman is right now. */
 let linkDelayMs = 25;
+function clampDelay(ms: number): number {
+  return Math.min(150, Math.max(6, ms));
+}
+/** One-way delay for a wingman we have not measured yet. */
 export function setLinkDelayMs(ms: number): void {
-  linkDelayMs = Math.min(150, Math.max(6, ms));
+  linkDelayMs = clampDelay(ms);
 }
 export function getLinkDelayMs(): number {
   return linkDelayMs;
+}
+/**
+ * One-way delay measured on one pilot's own link. Every peer's path is
+ * different, so each wingman is led by its own — the global above is only the
+ * placeholder until that peer's first reading arrives.
+ */
+const peerDelayMs = new Map<string, number>();
+export function setPeerLinkDelayMs(id: string, ms: number): void {
+  if (!id) return;
+  if (Number.isFinite(ms)) peerDelayMs.set(id, clampDelay(ms));
+  else peerDelayMs.delete(id);
+}
+export function getPeerLinkDelayMs(id: string): number {
+  return peerDelayMs.get(id) ?? linkDelayMs;
+}
+export function clearPeerLinkDelayMs(id: string): void {
+  peerDelayMs.delete(id);
 }
 
 /** How quickly the presented clock is walked onto its target (ms). */
@@ -217,6 +238,12 @@ export class RemoteFleet {
     (r.tag.material as THREE.SpriteMaterial).dispose();
     r.tagTex.dispose();
     this.remotes.delete(id);
+    clearPeerLinkDelayMs(id);
+  }
+
+  /** One-way delay measured on this pilot's own link, not the room's. */
+  setLinkDelay(id: string, ms: number): void {
+    setPeerLinkDelayMs(id, ms);
   }
 
   clear(): void {
@@ -313,7 +340,7 @@ export class RemoteFleet {
       // one-way delay the net layer measured. The presented clock is walked
       // onto that target, a few ms at a time, instead of being snapped to it.
       const newest = buf[buf.length - 1];
-      const target = newest.t + linkDelayMs;
+      const target = newest.t + getPeerLinkDelayMs(r.id);
       if (!r.placed) {
         r.presentT = target;
         r.placed = true;
