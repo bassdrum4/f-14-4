@@ -52,7 +52,7 @@ function delta(from: Ends, to: Ends): { aftDy: number; fwdDy: number } {
   return { aftDy: to.aft.y - from.aft.y, fwdDy: to.fwd.y - from.fwd.y };
 }
 
-const AIL = 0.5; // what game.ts feeds for full roll input
+const AIL = 0.5; // what engine.ts feeds for full roll input
 
 // --- 1. droop: flapT 0 -> 1, wings unswept ---
 {

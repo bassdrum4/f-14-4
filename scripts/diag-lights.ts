@@ -1,7 +1,21 @@
-// Verify the night-light placement maths: every light must land on its deck
-// (or the runway), not in the ocean. Usage: bun scripts/diag-lights.ts
+// Verify the night lighting: deck/runway light placement (every light must land
+// on its deck or the runway, not in the ocean), and the airframes' nav lights —
+// four sprites per airframe, driven by the daylight cycle.
+// Usage: bun scripts/diag-lights.ts
 
+import * as THREE from "three";
 import { STRIP, airfield, carriers, worldToDeck } from "../src/sim/world";
+import { buildAircraft } from "../src/render/geometry";
+import { NAV_GLOW, SHIP_LAMP, SHIP_NAV_GREEN, updateAirLights, updateShipLights } from "../src/render/lights";
+
+let failures = 0;
+function check(name: string, cond: boolean, extra = ""): void {
+  if (cond) console.log(`  ok  ${name}`);
+  else {
+    failures++;
+    console.error(`FAIL  ${name} ${extra}`);
+  }
+}
 
 const DEG = Math.PI / 180;
 
@@ -59,4 +73,89 @@ for (let x = -af.runwayLength / 2 + 20; x <= af.runwayLength / 2 - 20; x += 45) 
   }
 }
 console.log(`\nAirfield runway lights: ${rwOk}/${rwTotal} within the runway box`);
-console.log(`\n${bad === 0 && rwOk === rwTotal ? "ALL LIGHTS PLACED CORRECTLY" : "PLACEMENT PROBLEMS"}`);
+
+// ---------------------------------------------------------------------------
+// Airframe nav lights: port red, starboard green, white tail, strobe beacon
+// ---------------------------------------------------------------------------
+console.log("\nAirframe lights:");
+for (const id of ["tomcat", "hornet", "intruder"] as const) {
+  const jet = buildAircraft(id);
+  const sprites: THREE.Sprite[] = [];
+  jet.group.traverse((o) => {
+    if ((o as THREE.Sprite).isSprite) sprites.push(o as THREE.Sprite);
+  });
+  check(`${id}: carries four nav lights`, sprites.length === 4, `${sprites.length} sprites`);
+  // the red/green tip lights must be on the wing panels, or they would float in
+  // space while the Tomcat sweeps its wings
+  const onWings = [jet.wingPanels[0], jet.wingPanels[1]].map((panel) => {
+    let n = 0;
+    panel.traverse((o) => {
+      if ((o as THREE.Sprite).isSprite) n++;
+    });
+    return n;
+  });
+  check(`${id}: a tip light rides each wing panel`,
+    onWings[0] === 1 && onWings[1] === 1, JSON.stringify(onWings));
+  // and every sprite sits on the airframe, not at the origin
+  let outboard = true;
+  for (const s of sprites) {
+    if (Math.abs(s.position.x) + Math.abs(s.position.y) + Math.abs(s.position.z) < 0.2) outboard = false;
+  }
+  check(`${id}: no light sits on the airframe's origin`, outboard);
+  // an untextured sprite renders as a hard square, which is what made the
+  // lights look like slabs hanging off the wing: every lamp needs its glow
+  const square = sprites.filter((s) => !(s.material as THREE.SpriteMaterial).map);
+  check(`${id}: every light has a soft glow texture, not a bare quad`,
+    square.length === 0, `${square.length} square lights`);
+  const biggest = Math.max(...sprites.map((s) => s.scale.x));
+  check(`${id}: lights stay lamp-sized, not billboard-sized`, biggest <= 3,
+    `widest ${biggest} m`);
+}
+
+// the glow itself: a bright core fading to a transparent rim, so the quad's
+// corners never show (a plain white texture would still read as a square)
+{
+  const img = NAV_GLOW.image as { data: Uint8Array; width: number; height: number };
+  const alphaAt = (x: number, y: number) => img.data[(y * img.width + x) * 4 + 3];
+  check("the nav glow has a bright core", alphaAt(img.width >> 1, img.height >> 1) > 200,
+    `${alphaAt(img.width >> 1, img.height >> 1)}`);
+  check("the nav glow fades to nothing at the rim",
+    alphaAt(0, 0) === 0 && alphaAt(img.width - 1, 0) === 0 &&
+      alphaAt(0, img.height - 1) === 0 && alphaAt(img.width - 1, img.height - 1) === 0);
+  check("the nav glow falls off rather than stepping",
+    alphaAt(0, img.height >> 1) === 0 && alphaAt(img.width >> 2, img.height >> 1) > 40,
+    `${alphaAt(0, img.height >> 1)} / ${alphaAt(img.width >> 2, img.height >> 1)}`);
+}
+
+// darkness drives the whole set
+const sample = (dark: number, t: number) => {
+  updateAirLights(dark, t);
+  const jet = buildAircraft("tomcat");
+  const sprites: THREE.Sprite[] = [];
+  jet.group.traverse((o) => {
+    if ((o as THREE.Sprite).isSprite) sprites.push(o as THREE.Sprite);
+  });
+  return sprites.map((s) => (s.material as THREE.SpriteMaterial).opacity);
+};
+const night = sample(1, 0.03); // during a strobe flash
+const day = sample(0, 0.6); // broad daylight
+check("nav lights are bright at night", Math.min(...night) > 0.4, JSON.stringify(night));
+check("nav lights dim in daylight", Math.max(...day) < 0.2, JSON.stringify(day));
+check("the strobe is off between flashes", sample(1, 0.6).some((o) => o < 0.1),
+  JSON.stringify(sample(1, 0.6)));
+
+updateShipLights(1, 0.03);
+const lampNight = SHIP_LAMP.emissiveIntensity;
+const navGreenNight = SHIP_NAV_GREEN.emissiveIntensity;
+updateShipLights(0, 0.03);
+check("ship deck lamps come up at night", lampNight > 1, `${lampNight.toFixed(2)}`);
+check("ship deck lamps are dark by day", SHIP_LAMP.emissiveIntensity === 0,
+  `${SHIP_LAMP.emissiveIntensity}`);
+check("ship navigation lights stay lit around the clock",
+  navGreenNight > 0.3 && SHIP_NAV_GREEN.emissiveIntensity >= 0.2,
+  `${navGreenNight.toFixed(2)} / ${SHIP_NAV_GREEN.emissiveIntensity.toFixed(2)}`);
+
+console.log(
+  `\n${bad === 0 && rwOk === rwTotal && failures === 0 ? "ALL LIGHT CHECKS PASSED" : "LIGHT PROBLEMS"}`,
+);
+process.exit(failures === 0 && bad === 0 && rwOk === rwTotal ? 0 : 1);

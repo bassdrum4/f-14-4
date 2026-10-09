@@ -1,7 +1,7 @@
 // Verify the minimap projection: north up, east right, everything on screen.
 // Usage: bun scripts/diag-minimap.ts
 
-import { ARCHIPELAGO, KAUAI, airfield } from "../src/sim/world";
+import { ARCHIPELAGO, DEFAULT_SEED, carriers, setWorldSeed } from "../src/sim/world";
 
 const SIZE = 176;
 const PAD = 10;
@@ -26,11 +26,17 @@ function check(name: string, cond: boolean, extra = "") {
   else { fails++; console.error(`FAIL  ${name} ${extra}`); }
 }
 
-for (const world of [ARCHIPELAGO, KAUAI]) {
-  console.log(`\n${world.label}`);
-  const af = airfield();
+// The minimap is drawn from the fleet layout (carriers + airfield), which is
+// deliberately independent of the terrain seed, so a pass over a few seeds is
+// enough to cover the projection.
+const fleetBefore = carriers().map((c) => `${c.name}@${c.x},${c.z}`).join("|");
+
+for (const seed of [DEFAULT_SEED, 90210, 3]) {
+  setWorldSeed(seed);
+  console.log(`\nseed ${seed}`);
+  const af = ARCHIPELAGO.airfield;
   const pois = [
-    ...world.carriers.map((c) => ({ x: c.x, z: c.z, n: c.name })),
+    ...ARCHIPELAGO.carriers.map((c) => ({ x: c.x, z: c.z, n: c.name })),
     { x: af.centerX, z: af.centerZ, n: "FIELD" },
   ];
 
@@ -38,8 +44,8 @@ for (const world of [ARCHIPELAGO, KAUAI]) {
   const players = [
     { x: 0, z: 0 },
     { x: af.centerX, z: af.centerZ },
-    { x: world.carriers[0].x, z: world.carriers[0].z },
-    { x: -world.carriers[0].x, z: -world.carriers[0].z },
+    { x: ARCHIPELAGO.carriers[0].x, z: ARCHIPELAGO.carriers[0].z },
+    { x: -ARCHIPELAGO.carriers[0].x, z: -ARCHIPELAGO.carriers[0].z },
   ];
   let allInside = true;
   let northUp = true;
@@ -69,5 +75,8 @@ for (const world of [ARCHIPELAGO, KAUAI]) {
   const c = project(123, -456, 123, -456, 9000);
   check("player sits at the canvas centre", Math.abs(c.x - SIZE / 2) < 1e-9 && Math.abs(c.y - SIZE / 2) < 1e-9);
 }
+
+check("the fleet layout does not move with the terrain seed",
+  carriers().map((c) => `${c.name}@${c.x},${c.z}`).join("|") === fleetBefore);
 
 console.log(fails === 0 ? "\nALL MINIMAP CHECKS PASSED" : `\n${fails} FAILURES`);

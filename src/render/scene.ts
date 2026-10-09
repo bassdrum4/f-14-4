@@ -1,9 +1,10 @@
 // World meshes: procedural terrain, ocean, sky dome, carrier, airfield.
 
 import * as THREE from "three";
-import { EXTENT, STRIP, airfield, carriers, type CarrierDef } from "../sim/world";
+import { CAT_START_ALONG, EXTENT, STRIP, airfield, type CarrierDef } from "../sim/world";
 import { fbm, smoothstep } from "../sim/noise";
 import { QUALITY_SEGMENTS, type Quality } from "../settings";
+import { SHIP_BEACON, SHIP_LAMP, SHIP_NAV_GREEN, SHIP_NAV_RED, SHIP_NAV_WHITE } from "./lights";
 
 const HALF = EXTENT;
 
@@ -53,59 +54,14 @@ function islandColor(h: number, slope: number, x: number, z: number, c: THREE.Co
   c.setRGB(r, g, b, THREE.SRGBColorSpace);
 }
 
-export type TerrainStyle = "island" | "tropical";
-
-export interface TerrainTextureRef {
-  canvas: HTMLCanvasElement;
-  worldX0: number;
-  worldZ0: number;
-  worldW: number;
-  worldH: number;
-}
-
 export interface TerrainPaint {
   height: (x: number, z: number) => number;
-  style: TerrainStyle;
-  /** Stitched satellite imagery covering the world square, if available. */
-  texture?: TerrainTextureRef | null;
 }
-
-/** Tropical fallback palette for real terrain (no snow line in Hawaii). */
-function tropicalColor(h: number, slope: number, x: number, z: number, c: THREE.Color): void {
-  if (h < -1) {
-    const t = THREE.MathUtils.clamp((h + 90) / 90, 0, 1);
-    c.setRGB(mix(0.05, 0.27, t), mix(0.13, 0.46, t), mix(0.19, 0.5, t), THREE.SRGBColorSpace);
-    return;
-  }
-  const patch = fbm(x * 0.0011, z * 0.0011, 991, 3); // vegetation patchwork
-  const grain = (fbm(x * 0.02, z * 0.02, 553, 2) - 0.5) * 0.06;
-  let r = mix(0.24, 0.34, patch) + grain;
-  let g = mix(0.42, 0.38, patch) + grain;
-  let b = mix(0.2, 0.24, patch) + grain;
-  const beach = 1 - smoothstep(3, 30, h);
-  r = mix(r, 0.82, beach);
-  g = mix(g, 0.76, beach);
-  b = mix(b, 0.57, beach);
-  const rock = smoothstep(0.55, 1.05, slope);
-  r = mix(r, 0.36, rock);
-  g = mix(g, 0.34, rock);
-  b = mix(b, 0.31, rock);
-  const high = smoothstep(700, 1100, h) * (1 - 0.6 * rock) * 0.5;
-  r = mix(r, 0.42, high);
-  g = mix(g, 0.4, high);
-  b = mix(b, 0.38, high);
-  c.setRGB(r, g, b, THREE.SRGBColorSpace);
-}
-
-const TERRAIN_COLORS: Record<TerrainStyle, (h: number, slope: number, x: number, z: number, c: THREE.Color) => void> = {
-  island: islandColor,
-  tropical: tropicalColor,
-};
 
 /**
- * Build the terrain mesh from an arbitrary height sampler: either stitched
- * satellite imagery (UVs mapped in world space so imagery lines up with the
- * physics heightfield exactly) or slope-aware biome vertex colours.
+ * Build the terrain mesh from a height sampler, coloured by slope-aware biome
+ * vertex colours. The sampler is swapped (along with the whole paint) when the
+ * world seed changes, so the mesh always matches the physics heightfield.
  */
 export function buildTerrain(quality: Quality, paint: TerrainPaint): THREE.Mesh {
   const n = QUALITY_SEGMENTS[quality];
@@ -123,41 +79,25 @@ export function buildTerrain(quality: Quality, paint: TerrainPaint): THREE.Mesh 
     heights[i] = h;
   }
 
-  let mat: THREE.MeshStandardMaterial;
-  if (paint.texture) {
-    const { canvas, worldX0, worldZ0, worldW, worldH } = paint.texture;
-    const uv = geom.attributes.uv as THREE.BufferAttribute;
-    for (let i = 0; i < pos.count; i++) {
-      uv.setXY(i, (pos.getX(i) - worldX0) / worldW, (pos.getZ(i) - worldZ0) / worldH);
-    }
-    uv.needsUpdate = true;
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.flipY = false; // row 0 of the stitched canvas is the north edge
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = 8;
-    mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 1, metalness: 0 });
-  } else {
-    // biome colours from height + slope (central differences on the grid)
-    const colorize = TERRAIN_COLORS[paint.style];
-    const colors = new Float32Array(pos.count * 3);
-    const c = new THREE.Color();
-    for (let i = 0; i < pos.count; i++) {
-      const ix = i % w;
-      const iy = (i / w) | 0;
-      const xm = ix > 0 ? i - 1 : i;
-      const xp = ix < w - 1 ? i + 1 : i;
-      const zm = iy > 0 ? i - w : i;
-      const zp = iy < w - 1 ? i + w : i;
-      const gx = (heights[xp] - heights[xm]) / (Math.abs(xp - xm) * cell);
-      const gz = (heights[zp] - heights[zm]) / (Math.abs(zp - zm) * cell);
-      colorize(heights[i], Math.hypot(gx, gz), pos.getX(i), pos.getZ(i), c);
-      colors[i * 3] = c.r;
-      colors[i * 3 + 1] = c.g;
-      colors[i * 3 + 2] = c.b;
-    }
-    geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-    mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
+  // biome colours from height + slope (central differences on the grid)
+  const colors = new Float32Array(pos.count * 3);
+  const c = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    const ix = i % w;
+    const iy = (i / w) | 0;
+    const xm = ix > 0 ? i - 1 : i;
+    const xp = ix < w - 1 ? i + 1 : i;
+    const zm = iy > 0 ? i - w : i;
+    const zp = iy < w - 1 ? i + w : i;
+    const gx = (heights[xp] - heights[xm]) / (Math.abs(xp - xm) * cell);
+    const gz = (heights[zp] - heights[zm]) / (Math.abs(zp - zm) * cell);
+    islandColor(heights[i], Math.hypot(gx, gz), pos.getX(i), pos.getZ(i), c);
+    colors[i * 3] = c.r;
+    colors[i * 3 + 1] = c.g;
+    colors[i * 3 + 2] = c.b;
   }
+  geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
   geom.computeVertexNormals();
   const mesh = new THREE.Mesh(geom, mat);
   mesh.receiveShadow = quality !== "low";
@@ -207,13 +147,17 @@ function oceanTexture(): THREE.CanvasTexture {
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(96, 96); // ~625 m per tile across the 60 km ocean
+  tex.repeat.set(384, 384); // ~625 m per tile, scaled to the wider ocean
   tex.anisotropy = 4;
   return tex;
 }
 
+/**
+ * Open water, one big sheet. It reaches far past the terrain mesh so a pilot
+ * climbing at the edge of the chain sees ocean to the horizon, not a seam.
+ */
 export function buildOcean(): THREE.Mesh {
-  const geom = new THREE.PlaneGeometry(60000, 60000, 1, 1);
+  const geom = new THREE.PlaneGeometry(240000, 240000, 1, 1);
   geom.rotateX(-Math.PI / 2);
   const waves = oceanTexture();
   const mat = new THREE.MeshStandardMaterial({
@@ -223,8 +167,18 @@ export function buildOcean(): THREE.Mesh {
     transparent: true,
     opacity: 0.9, // shallow shelves read faintly through the surface
     bumpMap: waves,
-    bumpScale: 1.6,
+    // Wave height in shading terms only. Pushed much past this the normal
+    // perturbation outruns the surface and the sea reads as if it were
+    // heaving, instead of as a flat sheet with wavetops on it.
+    bumpScale: 0.5,
     roughnessMap: waves,
+    // The sea is a single 2-triangle sheet 240 km across, and the seabed
+    // shelves up close under it. Depth precision collapses over those
+    // distances, so without a bias the two surfaces trade the depth test
+    // frame by frame and the water appears to jump and flicker.
+    polygonOffset: true,
+    polygonOffsetFactor: -4,
+    polygonOffsetUnits: -8,
   });
   const mesh = new THREE.Mesh(geom, mat);
   mesh.position.y = 0;
@@ -344,6 +298,15 @@ export function buildSky(): SkyDome {
 // Carrier
 // --------------------------------------------------------------------------
 
+/**
+ * Where the island sits, across the deck from the ship's centreline. It hugs the
+ * starboard edge whatever the hull's beam is, which keeps it out of the landing
+ * area and off the port side where the angled strip runs out.
+ */
+function islandAcrossOf(c: CarrierDef): number {
+  return c.deckWidth / 2 - 8.5;
+}
+
 function deckTexture(c: CarrierDef): THREE.CanvasTexture {
   const canvas = document.createElement("canvas");
   canvas.width = 1024;
@@ -429,19 +392,22 @@ function deckTexture(c: CarrierDef): THREE.CanvasTexture {
     ctx.fill();
   }
 
-  // catapult track (port side), matching the sim's catTrack start + length
+  // catapult tracks, port and starboard, matching the sim's catTrack start +
+  // length (a carrier launches off both, the player off the port one)
   ctx.strokeStyle = "#d8d8d2";
-  ctx.lineWidth = 5;
-  ctx.beginPath();
-  ctx.moveTo(cx(-40), cy(c.catapultOffsetX));
-  ctx.lineTo(cx(-40 + c.catapultLength), cy(c.catapultOffsetX));
-  ctx.stroke();
-  ctx.lineWidth = 3;
-  for (const a of [-40, -40 + c.catapultLength]) {
+  for (const off of [c.catapultOffsetX, -c.catapultOffsetX]) {
+    ctx.lineWidth = 5;
     ctx.beginPath();
-    ctx.moveTo(cx(a), cy(c.catapultOffsetX - 6));
-    ctx.lineTo(cx(a), cy(c.catapultOffsetX + 6));
+    ctx.moveTo(cx(CAT_START_ALONG), cy(off));
+    ctx.lineTo(cx(CAT_START_ALONG + c.catapultLength), cy(off));
     ctx.stroke();
+    ctx.lineWidth = 3;
+    for (const a of [CAT_START_ALONG, CAT_START_ALONG + c.catapultLength]) {
+      ctx.beginPath();
+      ctx.moveTo(cx(a), cy(off - 6));
+      ctx.lineTo(cx(a), cy(off + 6));
+      ctx.stroke();
+    }
   }
 
   // deck edge safety lines
@@ -486,33 +452,63 @@ export function buildCarrier(c: CarrierDef): THREE.Group {
   hull.position.y = hullTop; // spans [hullTop - hullH, hullTop]
   g.add(hull);
 
-  // Deck slab; its top surface sits exactly at c.deckY (the sim's deck).
-  const deck = new THREE.Mesh(
-    new THREE.BoxGeometry(L, 1, W),
-    new THREE.MeshStandardMaterial({ map: deckTexture(c), roughness: 0.95 }),
-  );
+  // Deck slab; its top surface sits exactly at c.deckY (the sim's deck). The
+  // markings live on a canvas texture — headless runs (the dogfight harness
+  // builds a hostile carrier with no DOM) fall back to plain deck steel.
+  const deckMat =
+    typeof document === "undefined"
+      ? new THREE.MeshStandardMaterial({ color: 0x3c4247, roughness: 0.95 })
+      : new THREE.MeshStandardMaterial({ map: deckTexture(c), roughness: 0.95 });
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(L, 1, W), deckMat);
   deck.position.y = deckTop - 0.5;
   g.add(deck);
 
-  // Island superstructure, starboard side (across > 0).
+  // Island superstructure, starboard side (across > 0). Its offset follows the
+  // deck's width, so a wider hull keeps the island on the deck edge instead of
+  // drifting into the middle of the landing area.
+  const islandAcross = islandAcrossOf(c);
   const island = new THREE.Mesh(
     new THREE.BoxGeometry(28, 22, 14),
     new THREE.MeshStandardMaterial({ color: 0x8a8f8c, roughness: 0.9 }),
   );
-  island.position.set(0, deckTop + 10.5, 30);
+  island.position.set(0, deckTop + 10.5, islandAcross);
   g.add(island);
   const mast = new THREE.Mesh(
     new THREE.CylinderGeometry(1.2, 1.6, 16, 6),
     new THREE.MeshStandardMaterial({ color: 0x6e7376 }),
   );
-  mast.position.set(0, deckTop + 29, 30);
+  mast.position.set(0, deckTop + 29, islandAcross);
   g.add(mast);
   const radar = new THREE.Mesh(
     new THREE.CylinderGeometry(4.5, 4.5, 0.6, 20, 1, true, 0, Math.PI),
     new THREE.MeshStandardMaterial({ color: 0xdbdbd5, roughness: 0.7, side: THREE.DoubleSide }),
   );
-  radar.position.set(0, deckTop + 38, 30);
+  radar.position.set(0, deckTop + 38, islandAcross);
   g.add(radar);
+
+  // Navigation lights: port red, starboard green, masthead white, plus a
+  // masthead anti-collision beacon. They are driven by the daylight cycle
+  // (lights.ts), which is what makes a ship findable at night — important now
+  // that hostile boats steam in from the horizon in the dark.
+  const lampGeom = new THREE.BoxGeometry(1.1, 1.1, 1.1);
+  const green = new THREE.Mesh(lampGeom, SHIP_NAV_GREEN);
+  green.position.set(6, deckTop + 2.2, W / 2 - 1.5);
+  g.add(green);
+  const red = new THREE.Mesh(lampGeom, SHIP_NAV_RED);
+  red.position.set(6, deckTop + 2.2, -W / 2 + 1.5);
+  g.add(red);
+  const masthead = new THREE.Mesh(lampGeom, SHIP_NAV_WHITE);
+  masthead.position.set(0, deckTop + 37.6, islandAcross);
+  g.add(masthead);
+  const beacon = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.7, 1.7), SHIP_BEACON);
+  beacon.position.set(0, deckTop + 35.4, islandAcross);
+  g.add(beacon);
+
+  // The ship carries its own deck lighting — landing-strip edge lights, running
+  // lights down both deck edges and floodlights on the island. Outfitting the
+  // hull rather than the world means the hostile carrier is lit too, instead of
+  // only the ships that happen to be in the active layout.
+  g.add(buildShipDeckLights(c));
 
   // Arresting wires, slung across the angled landing strip at the same deck
   // coordinates the sim uses to catch them (world.ts STRIP).
@@ -545,7 +541,103 @@ export function buildCarrier(c: CarrierDef): THREE.Group {
       m.receiveShadow = true;
     }
   });
+  // The running lights must not throw their own little shadows around the
+  // island; everything else on the ship both casts and receives.
+  for (const lamp of [green, red, masthead, beacon]) lamp.castShadow = false;
   return g;
+}
+
+/**
+ * Everything that lights a carrier at night, in the ship's own frame (+X bow,
+ * +Z starboard): amber lights down the angled landing strip, green/red running
+ * lights along the starboard and port deck edges, and floodlights on the island
+ * so the deck and the superstructure are findable in the dark.
+ *
+ * One instanced mesh per colour: a carrier would otherwise be ~90 draw calls.
+ */
+function buildShipDeckLights(c: CarrierDef): THREE.Group {
+  const g = new THREE.Group();
+  const deckTop = c.deckY + 0.35;
+  const th = (c.landingAngleDeg * Math.PI) / 180;
+  const cos = Math.cos(th);
+  const sin = Math.sin(th);
+
+  // --- amber lights down both edges of the angled landing strip ---
+  const strip: Array<[number, number, number]> = [];
+  for (let s = 6; s <= c.landingLength - 6; s += 18) {
+    for (const d of [-STRIP.halfWidth, STRIP.halfWidth]) {
+      const along = STRIP.startAlong + s * cos + d * sin;
+      const across = STRIP.startAcross - s * sin + d * cos;
+      if (Math.abs(along) > c.deckLength / 2 || Math.abs(across) > c.deckWidth / 2) continue;
+      strip.push([along, across, 5]);
+    }
+  }
+  // threshold lights across the approach end
+  for (let i = -2; i <= 2; i++) {
+    const d = (STRIP.halfWidth / 2.5) * i;
+    const along = STRIP.startAlong + d * sin;
+    const across = STRIP.startAcross + d * cos;
+    if (Math.abs(along) > c.deckLength / 2 || Math.abs(across) > c.deckWidth / 2) continue;
+    strip.push([along, across, 3]);
+  }
+  g.add(instanceLamps(strip, SHIP_LAMP, new THREE.BoxGeometry(1, 0.3, 0.8), deckTop));
+
+  // --- running lights down each deck edge ---
+  const starboard: Array<[number, number, number]> = [];
+  const port: Array<[number, number, number]> = [];
+  const half = c.deckLength / 2 - 12;
+  for (let along = -half; along <= half; along += 34) {
+    starboard.push([along, c.deckWidth / 2 - 1.6, 3.4]);
+    port.push([along, -c.deckWidth / 2 + 1.6, 3.4]);
+  }
+  g.add(instanceLamps(starboard, SHIP_NAV_GREEN, new THREE.BoxGeometry(3.4, 0.26, 0.7), deckTop));
+  g.add(instanceLamps(port, SHIP_NAV_RED, new THREE.BoxGeometry(3.4, 0.26, 0.7), deckTop));
+
+  // --- floodlights down the island's two faces (the island is 14 m deep and
+  // sits on the starboard deck edge, per buildCarrier), so the superstructure
+  // reads at night from both the flight deck and from off the ship's starboard
+  // side ---
+  const islandAcross = islandAcrossOf(c);
+  const floods: Array<[number, number, number]> = [];
+  for (let along = -12; along <= 12; along += 8) {
+    floods.push([along, islandAcross - 6, 1.6]);
+    floods.push([along, islandAcross + 6, 1.6]);
+  }
+  g.add(instanceLamps(floods, SHIP_LAMP, new THREE.BoxGeometry(1.6, 0.6, 1.6), c.deckY + 20));
+
+  g.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (m.isMesh) {
+      m.castShadow = false;
+      m.receiveShadow = false;
+    }
+  });
+  return g;
+}
+
+/** One instanced mesh for a list of [along, across, length] lamp placements. */
+function instanceLamps(
+  spots: Array<[number, number, number]>,
+  material: THREE.Material,
+  geom: THREE.BufferGeometry,
+  y: number,
+): THREE.InstancedMesh {
+  const inst = new THREE.InstancedMesh(geom, material, Math.max(1, spots.length));
+  const m = new THREE.Matrix4();
+  const pos = new THREE.Vector3();
+  const q = new THREE.Quaternion();
+  const scale = new THREE.Vector3();
+  spots.forEach(([along, across, len], i) => {
+    pos.set(along, y, across);
+    q.identity();
+    scale.set(len, 1, 1);
+    m.compose(pos, q, scale);
+    inst.setMatrixAt(i, m);
+  });
+  inst.count = spots.length;
+  inst.instanceMatrix.needsUpdate = true;
+  inst.frustumCulled = false;
+  return inst;
 }
 
 // --------------------------------------------------------------------------
@@ -619,10 +711,13 @@ export function buildAirfield(): THREE.Group {
 }
 
 /**
- * Night lighting: emissive strips along each carrier's angled landing strip and
- * the runway edges. Without these a night approach is unlandable, since the
- * deck is unlit. One shared material, so the daylight cycle can raise and
+ * Night lighting for the island airfield: emissive strips along the runway
+ * edges and thresholds. Without these a night approach is unlandable, since the
+ * plateau is unlit. One shared material, so the daylight cycle can raise and
  * lower every light with a single value.
+ *
+ * Ships carry their own deck lighting (see buildShipDeckLights) so the hostile
+ * carrier — which is not part of any world layout — is lit as well.
  */
 export function buildNightLights(): { group: THREE.Group; material: THREE.MeshStandardMaterial } {
   const group = new THREE.Group();
@@ -633,40 +728,9 @@ export function buildNightLights(): { group: THREE.Group; material: THREE.MeshSt
     roughness: 0.6,
   });
 
-  // Collect placements first, then emit one instanced mesh: ~190 small boxes
+  // Collect placements first, then emit one instanced mesh: ~110 small boxes
   // as individual draw calls would cost far more than they are worth.
   const placements: Array<{ x: number; y: number; z: number; rotY: number; len: number }> = [];
-
-  // --- carrier: lights down both edges of the angled landing strip ---
-  for (const c of carriers()) {
-    const th = (c.landingAngleDeg * Math.PI) / 180;
-    const cos = Math.cos(th);
-    const sin = Math.sin(th);
-    const deckTop = c.deckY + 0.5;
-    const rot = ((90 - c.headingDeg) * Math.PI) / 180;
-    const place = (along: number, across: number, len: number) => {
-      // The strip's forward end overhangs the deck (the bow is narrower than
-      // the landing area is long), so drop any light that falls off the slab.
-      if (Math.abs(along) > c.deckLength / 2 || Math.abs(across) > c.deckWidth / 2) return;
-      placements.push({
-        x: c.x + along * Math.cos(rot) + across * Math.sin(rot),
-        y: deckTop,
-        z: c.z - along * Math.sin(rot) + across * Math.cos(rot),
-        rotY: rot,
-        len,
-      });
-    };
-    for (let s = 6; s <= c.landingLength - 6; s += 18) {
-      for (const d of [-STRIP.halfWidth, STRIP.halfWidth]) {
-        place(STRIP.startAlong + s * cos + d * sin, STRIP.startAcross - s * sin + d * cos, 5);
-      }
-    }
-    // threshold lights at the approach end
-    for (let i = -2; i <= 2; i++) {
-      const d = (STRIP.halfWidth / 2.5) * i;
-      place(STRIP.startAlong + d * sin, STRIP.startAcross + d * cos, 3);
-    }
-  }
 
   // --- airfield: runway edge lighting ---
   {
@@ -704,4 +768,4 @@ export function buildNightLights(): { group: THREE.Group; material: THREE.MeshSt
   return { group, material };
 }
 
-export { HALF as TERRAIN_HALF };
+

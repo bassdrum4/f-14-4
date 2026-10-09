@@ -7,15 +7,33 @@
     "dev": "vite --host 0.0.0.0 --port ${PORT:-5173}",
     "build": "vite build",
     "typecheck": "tsc -b --noEmit",
+    "test:accounts": "bun scripts/diag-accounts.ts",
     "test:sim": "bun scripts/simtest.ts",
+    "test:dogfight": "bun scripts/diag-dogfight.ts",
+    "test:strike": "bun scripts/diag-strike.ts",
+    "test:ordnance": "bun scripts/diag-ordnance.ts",
+    "test:missile": "bun scripts/diag-missile.ts",
+    "test:turn": "bun scripts/diag-turn.ts",
+    "test:turnrate": "bun scripts/diag-turnrate.ts",
+    "test:aircraft": "bun scripts/diag-aircraft.ts",
+    "test:camera": "bun scripts/diag-camera.ts",
     "test:daynight": "bun scripts/daynight.ts",
     "test:flaps": "bun scripts/diag-flaps.ts",
-    "dev:source": "vite --host 0.0.0.0 --open /source.html",
+    "test:net": "bun scripts/diag-net.ts",
+    "test:mp": "bun scripts/diag-mp-flow.ts",
+    "test:chat": "bun scripts/diag-chat.ts",
+    "test:enemysync": "bun scripts/diag-enemy-sync.ts",
+    "test:landing": "bun scripts/diag-landing.ts",
+    "test:climb": "bun scripts/diag-climb.ts",
+    "test:feedback": "bun scripts/diag-feedback.ts",
+    "test:feedback:gs": "bun scripts/diag-feedback-gs.ts",
+    "dev:source": "vite --host 0.0.0.0",
     "build:source": "vite build --config vite.source.config.mjs",
     "check:standalone": "node scripts/build-standalone.mjs --check",
     "build:standalone": "node scripts/build-standalone.mjs"
   },
   "dependencies": {
+    "peerjs": "^1.5.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "three": "^0.170.0"
@@ -30,6 +48,7 @@
     "@types/three": "^0.170.0",
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "~5.6.3",
-    "vite": "^6.0.3"
+    "vite": "^6.0.3",
+    "vite-plugin-singlefile": "^2.3.3"
   }
 }

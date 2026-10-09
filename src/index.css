@@ -20,7 +20,7 @@ html, body, #root {
 }
 
 .app { position: fixed; inset: 0; }
-.game-canvas {
+.sim-canvas {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
   display: block;
@@ -35,6 +35,8 @@ html, body, #root {
   display: flex; align-items: center; justify-content: center;
   flex-direction: column;
   z-index: 10;
+  /* keep every overlay inside the viewport on small screens */
+  padding: 14px;
 }
 
 .menu-bg {
@@ -46,18 +48,30 @@ html, body, #root {
 
 .pause-bg { background: rgba(3, 7, 10, 0.55); backdrop-filter: blur(3px); }
 .result-bg { background: rgba(3, 7, 10, 0.62); backdrop-filter: blur(3px); }
+/* the key-line footer lives under the main menu: reserve room for it */
+.menu-bg { padding-bottom: 52px; }
 
 .menu-panel {
-  width: min(520px, 92vw);
+  width: min(520px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--panel);
   border: 1px solid var(--panel-line);
   border-radius: 10px;
   padding: 34px 38px 26px;
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
   clip-path: polygon(0 0, calc(100% - 26px) 0, 100% 26px, 100% 100%, 26px 100%, 0 calc(100% - 26px));
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 200, 255, 0.35) transparent;
 }
+.menu-panel::-webkit-scrollbar { width: 8px; }
+.menu-panel::-webkit-scrollbar-thumb {
+  background: rgba(120, 200, 255, 0.3); border-radius: 4px;
+}
+.menu-panel::-webkit-scrollbar-track { background: transparent; }
 
-.menu-panel.small { width: min(430px, 92vw); padding: 26px 30px 22px; }
+.menu-panel.small { width: min(430px, 100%); padding: 26px 30px 22px; }
 
 .menu-title { text-align: center; margin-bottom: 22px; }
 .menu-kicker {
@@ -73,8 +87,24 @@ html, body, #root {
 .menu-sub {
   display: block; letter-spacing: 0.35em; font-size: 12px; color: #8fa8ba;
 }
+/* Build version pill, e.g. v1.0.0 — sourced from package.json (src/version.ts). */
+.menu-ver {
+  display: inline-block; margin-left: 10px; padding: 2px 9px;
+  font-family: ui-monospace, monospace; font-size: 10px; letter-spacing: 0.1em;
+  color: var(--accent); background: rgba(79, 210, 255, 0.08);
+  border: 1px solid rgba(79, 210, 255, 0.25); border-radius: 999px;
+  vertical-align: middle;
+}
 
 .menu-buttons { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+
+/* Secondary navigation: one quiet row instead of a stack of full buttons. */
+.menu-nav {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px;
+}
+.menu-nav .world-chip {
+  padding: 8px 12px; font-size: 10px; letter-spacing: 0.18em;
+}
 
 .menu-btn {
   appearance: none; cursor: pointer;
@@ -137,7 +167,9 @@ html, body, #root {
 }
 
 .menu-footer {
-  position: absolute; bottom: 18px; font-size: 12px; letter-spacing: 0.12em;
+  position: absolute; bottom: 16px; left: 0; right: 0;
+  padding: 0 16px; text-align: center;
+  font-size: 12px; line-height: 1.5; letter-spacing: 0.12em;
   color: #6d8496;
 }
 
@@ -146,7 +178,12 @@ html, body, #root {
 /* ------------------------------------------------------------------ */
 
 .result-panel {
-  width: min(460px, 92vw);
+  width: min(460px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 200, 255, 0.35) transparent;
   background: var(--panel);
   border: 1px solid var(--panel-line);
   border-radius: 10px;
@@ -160,7 +197,6 @@ html, body, #root {
 .result-title.crash { color: var(--hud-red); text-shadow: 0 0 22px rgba(255, 91, 77, 0.45); }
 .result-detail { color: #a9bfcd; margin: 0 0 6px; font-size: 15px; }
 .result-sub { color: #7d93a5; font-size: 13px; margin: 0 0 14px; }
-.result-hint { color: #587082; font-size: 12px; margin-top: 14px; letter-spacing: 0.08em; }
 
 /* ------------------------------------------------------------------ */
 /* HUD                                                                 */
@@ -175,6 +211,9 @@ html, body, #root {
 }
 
 .hud-ladder { position: absolute; inset: 0; width: 100%; height: 100%; }
+.hud-targets { position: absolute; inset: 0; width: 100%; height: 100%; }
+.hud-pod { position: absolute; inset: 0; width: 100%; height: 100%; }
+.hud-laser { color: #ff9a80; letter-spacing: 0.05em; }
 
 .hud-left  { position: absolute; left: 3.5%; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 12px; }
 .hud-right { position: absolute; right: 3.5%; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 12px; align-items: flex-end; }
@@ -186,15 +225,19 @@ html, body, #root {
 .hud-gauge-value em { font-style: normal; font-size: 11px; margin-left: 4px; opacity: 0.7; }
 .hud-gauge.warn .hud-gauge-value { color: var(--hud-amber); text-shadow: 0 0 8px rgba(255, 210, 80, 0.5); }
 
+/* Bottom strip: throttle + switch tags + the nav/store readouts. Deliberately
+   small — it sits under the gunsight and must stay out of the way, so the type
+   is compact and the lines are packed tight. */
 .hud-bottom {
-  position: absolute; left: 50%; bottom: 3.2%;
+  position: absolute; left: 50%; bottom: 2.6%;
   transform: translateX(-50%);
-  display: flex; gap: 26px; align-items: flex-end;
-  font-size: 12px;
+  display: flex; gap: 16px; align-items: flex-end;
+  font-size: 10px;
+  line-height: 1.25;
 }
-.hud-eng { display: flex; flex-direction: column; gap: 4px; min-width: 200px; }
+.hud-eng { display: flex; flex-direction: column; gap: 3px; min-width: 148px; }
 .hud-throttle {
-  position: relative; height: 10px; width: 200px;
+  position: relative; height: 8px; width: 148px;
   border: 1px solid rgba(120, 255, 140, 0.5); border-radius: 2px;
   overflow: hidden; background: rgba(0, 20, 8, 0.45);
 }
@@ -202,17 +245,22 @@ html, body, #root {
 .hud-throttle-ab { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, rgba(80, 160, 255, 0.5), rgba(160, 210, 255, 0.85)); mix-blend-mode: screen; }
 .hud-rpm { opacity: 0.8; }
 
-.hud-toggles { display: flex; gap: 8px; }
+.hud-toggles { display: flex; gap: 5px; flex-wrap: wrap; max-width: 190px; }
 .hud-tag {
   border: 1px solid rgba(120, 255, 140, 0.35); border-radius: 3px;
-  padding: 3px 8px; font-size: 10px; letter-spacing: 0.14em;
+  padding: 2px 6px; font-size: 9px; letter-spacing: 0.1em;
   color: rgba(120, 255, 140, 0.45);
 }
 .hud-tag.on { color: var(--hud-green); border-color: var(--hud-green); background: rgba(80, 255, 120, 0.10); }
 .hud-tag.warn { color: var(--hud-amber); border-color: var(--hud-amber); background: rgba(255, 210, 80, 0.08); }
 
-.hud-nav { display: flex; flex-direction: column; gap: 3px; opacity: 0.85; }
-.hud-cam { opacity: 0.6; font-size: 10px; letter-spacing: 0.18em; }
+.hud-nav {
+  display: flex; flex-direction: column; gap: 1px; opacity: 0.85;
+  letter-spacing: 0.02em;
+  max-width: min(560px, 52vw);
+}
+.hud-cv { color: #ff8f7d; letter-spacing: 0.04em; }
+.hud-cam { opacity: 0.6; font-size: 9px; letter-spacing: 0.1em; }
 
 .hud-stall {
   position: absolute; top: 22%; left: 50%; transform: translate(-50%, 0);
@@ -242,7 +290,7 @@ html, body, #root {
 .bindings-grid::-webkit-scrollbar-thumb { background: rgba(120, 200, 255, 0.25); border-radius: 3px; }
 
 /* ------------------------------------------------------------------ */
-/* World selector (menu) + real-terrain HUD credit                     */
+/* World seed (menu)                                                   */
 /* ------------------------------------------------------------------ */
 
 .menu-world {
@@ -279,14 +327,48 @@ html, body, #root {
 .world-chip:disabled { opacity: 0.5; cursor: wait; }
 .menu-world-note { font-size: 12px; color: #7d93a5; letter-spacing: 0.04em; }
 .menu-world-note.err { color: var(--hud-amber); }
-.menu-world-credit { font-size: 11px; color: #587082; letter-spacing: 0.05em; }
 
-.hud-credit {
-  position: absolute; left: 12px; bottom: 10px;
-  font-size: 10px; letter-spacing: 0.08em;
-  color: rgba(190, 210, 225, 0.55);
-  text-shadow: none;
+/* ------------------------------------------------------------------ */
+/* Accounts                                                            */
+/* ------------------------------------------------------------------ */
+
+.acct-strip {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 10px; padding-top: 10px;
+  border-top: 1px solid var(--panel-line);
+  font-size: 11px; letter-spacing: 0.16em; color: #9fb4c4;
 }
+.acct-strip-name { flex: 1 1 auto; color: #dbe8f2; font-weight: 600; }
+.acct-link {
+  appearance: none; cursor: pointer;
+  background: none; border: none; padding: 0;
+  font: inherit; font-size: 10px; letter-spacing: 0.24em;
+  color: var(--accent);
+}
+.acct-link:hover { color: #e8f6ff; }
+
+.acct-tabs { display: flex; gap: 8px; }
+
+.acct-card {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 14px 16px;
+  background: rgba(16, 26, 34, 0.6);
+  border: 1px solid rgba(120, 200, 255, 0.18);
+  border-radius: 4px;
+}
+.acct-name { font-size: 20px; letter-spacing: 0.14em; color: #e8f6ff; font-weight: 600; }
+.acct-since { font-size: 11px; letter-spacing: 0.08em; color: #7d93a5; }
+
+.row-inline { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
+.chip-inline { flex: 0 0 auto; padding: 7px 10px; font-size: 10px; letter-spacing: 0.12em; }
+
+/* First-run card sits over the menu the pilot has not seen yet. */
+.intro-bg {
+  background: radial-gradient(120% 120% at 50% 0%, rgba(9, 18, 26, 0.94), rgba(4, 8, 12, 0.98));
+  backdrop-filter: blur(3px);
+}
+
+.menu-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
 
 /* ------------------------------------------------------------------ */
 /* Minimap                                                             */
@@ -311,3 +393,185 @@ html, body, #root {
 @media (max-width: 900px), (max-height: 620px) {
   .hud-map-canvas { width: 124px; height: 124px; }
 }
+
+/* ------------------------------------------------------------------ */
+/* Multiplayer lobby + feedback form                                   */
+/* ------------------------------------------------------------------ */
+
+.menu-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: #101c26;
+  color: #dfe9f2;
+  border: 1px solid var(--panel-line);
+  padding: 6px 10px;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+}
+.menu-input:focus { outline: none; border-color: var(--accent); }
+.menu-input:disabled { opacity: 0.55; }
+
+.mp-screen .menu-row { align-items: center; }
+
+.mp-status {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; letter-spacing: 0.14em;
+  color: #b9cdda;
+  padding: 8px 10px;
+  border: 1px solid var(--panel-line);
+  border-radius: 4px;
+  background: rgba(12, 20, 28, 0.6);
+}
+
+.dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  display: inline-block; flex: 0 0 auto;
+  background: #587082;
+}
+.dot.idle { background: #587082; }
+.dot.connecting { background: var(--hud-amber); animation: hud-blink 1s steps(2) infinite; }
+.dot.online { background: var(--hud-green); box-shadow: 0 0 8px rgba(120, 255, 140, 0.7); }
+.dot.error { background: var(--hud-red); }
+
+.mp-tally {
+  font-size: 11px; letter-spacing: 0.16em; color: #7d93a5;
+  font-family: ui-monospace, monospace;
+}
+
+/* The lobby's launch row: the only way out of a room and into a cockpit. */
+.mp-launch {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--panel-line);
+}
+.mp-launch .menu-btn { padding: 12px 10px; font-size: 13px; letter-spacing: 0.1em; }
+
+.mp-roster { display: flex; flex-direction: column; gap: 5px; }
+.mp-pilot {
+  display: flex; align-items: center; gap: 10px;
+  background: rgba(16, 26, 34, 0.6);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 7px 10px;
+  font-size: 13px;
+  color: #cfe2ef;
+}
+.mp-pilot:hover { border-color: rgba(120, 200, 255, 0.25); }
+.mp-pilot-name { font-weight: 600; letter-spacing: 0.08em; }
+.mp-pilot-air { margin-left: auto; font-size: 11px; color: #7d93a5; letter-spacing: 0.08em; }
+.mp-pilot .badge {
+  font-size: 9px; letter-spacing: 0.2em;
+  color: #04121a; background: var(--accent);
+  border-radius: 2px; padding: 2px 6px;
+}
+
+/* The room radio: pilot-to-pilot chat over the same data channel. */
+.mp-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+.mp-chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 170px;
+  overflow-y: auto;
+  background: rgba(12, 20, 28, 0.6);
+  border: 1px solid var(--panel-line);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+}
+.mp-chat-line { display: flex; gap: 8px; line-height: 1.45; }
+.mp-chat-from {
+  flex: 0 0 auto;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: #7fb8dd;
+}
+.mp-chat-text {
+  color: #cfe2ef;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.mp-chat-empty { color: #587082; font-size: 11.5px; letter-spacing: 0.08em; }
+.mp-chat-row { display: flex; gap: 8px; }
+.mp-chat-row .menu-input { flex: 1 1 auto; }
+
+.feedback-chips { display: flex; gap: 8px; }
+.feedback-chips .world-chip { flex: 1 1 0; text-align: center; }
+
+.feedback-textarea {
+  width: 100%;
+  resize: vertical;
+  background: #101c26;
+  color: #dfe9f2;
+  border: 1px solid var(--panel-line);
+  border-radius: 4px;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.feedback-textarea:focus { outline: none; border-color: var(--accent); }
+.feedback-textarea::placeholder { color: #59707f; }
+
+.feedback-msg {
+  font-size: 12px; letter-spacing: 0.05em;
+  color: var(--hud-green);
+}
+.feedback-msg.err { color: var(--hud-amber); }
+
+.feedback-queue {
+  display: flex; flex-direction: column; gap: 8px;
+  border-top: 1px solid var(--panel-line);
+  padding-top: 10px;
+  font-size: 11px; letter-spacing: 0.1em; color: #7d93a5;
+}
+
+/* ------------------------------------------------------------------ */
+/* Small screens / short viewports: the overlays shrink to fit         */
+/* ------------------------------------------------------------------ */
+
+@media (max-width: 700px), (max-height: 720px) {
+  .ui-root { padding: 10px; }
+  .menu-bg { padding-bottom: 54px; }
+
+  .menu-panel { padding: 20px 18px 16px; }
+  .menu-panel.small { padding: 18px 16px 14px; }
+  .menu-title { margin-bottom: 14px; }
+  .menu-title h1 { font-size: 32px; }
+  .menu-kicker { letter-spacing: 0.3em; font-size: 10px; }
+  .menu-sub { letter-spacing: 0.2em; font-size: 11px; }
+
+  .menu-h2, .menu-h3 { font-size: 15px; letter-spacing: 0.2em; margin-bottom: 12px; }
+  .menu-buttons { gap: 8px; }
+  .menu-btn { padding: 11px 14px; font-size: 14px; letter-spacing: 0.1em; }
+  .menu-note, .menu-world-note { font-size: 11px; }
+  .menu-row { flex-wrap: wrap; gap: 8px; }
+  .menu-row-btns { flex-wrap: wrap; }
+  .menu-footer { font-size: 11px; letter-spacing: 0.06em; }
+
+  .bindings-grid { grid-template-columns: 1fr; max-height: 34vh; }
+  .menu-world-chips { flex-wrap: wrap; }
+
+  .result-panel { padding: 20px 18px 16px; }
+  .result-title { font-size: 26px; }
+  .result-detail { font-size: 14px; }
+
+  /* the bottom readout strip shrinks a step further on short viewports */
+  .hud-bottom { font-size: 9px; gap: 11px; bottom: 2%; }
+  .hud-nav { max-width: 58vw; }
+  .hud-eng, .hud-throttle { min-width: 108px; width: 108px; }
+  .hud-toggles { max-width: 150px; }
+  .hud-cam { font-size: 8px; }
+}
+
+.hud-net { color: #8fdcff; letter-spacing: 0.05em; }

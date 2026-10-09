@@ -8,6 +8,13 @@
 
 const DEG = Math.PI / 180;
 
+/**
+ * The home station the clock and the sun path are tied to. The islands are
+ * fictional, but the daylight cycle reads better with a real latitude and a
+ * real timezone behind it.
+ */
+export const HOME_SITE = { lat: 21.92, lon: -159.47, tzOffsetHours: -10 };
+
 export interface SunPosition {
   /** Compass azimuth of the sun, degrees clockwise from north. */
   azimuthDeg: number;

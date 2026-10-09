@@ -1,11 +1,11 @@
-// Sanity-check the solar position math against known Kauai values.
+// Sanity-check the solar position math against known home-station values.
 // Usage: bun scripts/diag-sun.ts
 
-import { dayPhase, sunPosition, sunVector } from "../src/sim/sun";
+import { HOME_SITE, dayPhase, sunPosition, sunVector } from "../src/sim/sun";
 
-const LAT = 21.92;
-const LON = -159.47;
-const TZ = -10; // Hawaii standard time
+const LAT = HOME_SITE.lat;
+const LON = HOME_SITE.lon;
+const TZ = HOME_SITE.tzOffsetHours;
 const DAY = 172; // 21 June
 
 function at(h: number, day = DAY) {
@@ -18,7 +18,7 @@ function fmt(t: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-console.log("Kauai (21.92N, 159.47W), 21 Jun. Expect sunrise ~05:53, sunset ~19:19, noon ~12:36 HST.\n");
+console.log("Home station (21.92N, 159.47W), 21 Jun. Expect sunrise ~05:53, sunset ~19:19, noon ~12:36 HST.\n");
 
 for (let h = 0; h < 24; h++) {
   const s = at(h);

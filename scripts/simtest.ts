@@ -2,19 +2,29 @@
 // Usage: bun scripts/simtest.ts
 
 import { Quaternion, Vector3 } from "three";
-import { catTrack, spawnAircraft, stepAircraft } from "../src/sim/flight";
+import {
+  CAT_ACCEL,
+  CAT_V_END,
+  catTrack,
+  isRecoverySurface,
+  spawnAircraft,
+  stepAircraft,
+} from "../src/sim/flight";
 import { atmosphere } from "../src/sim/atmosphere";
 import {
   ARCHIPELAGO,
-  KAUAI,
+  DEFAULT_SEED,
+  EXTENT,
   STRIP,
+  activeWorldSeed,
   deckAxes,
   groundAt,
   isOnDeck,
-  makeKauaiSampler,
   resetWorld,
-  setWorld,
+  sanitizeSeed,
+  setWorldSeed,
   terrainHeight,
+  worldSeedForRoom,
   worldToDeck,
   type CarrierDef,
 } from "../src/sim/world";
@@ -73,6 +83,37 @@ function idle() {
     check(`${c.name}: ground = deck at 19m`, g.kind === "deck" && g.y === 19, `${g.kind} ${g.y}`);
     const cat = catTrack(c);
     check(`${c.name}: catapult starts on deck`, isOnDeck(c, cat.start.x, cat.start.z), "");
+    // The whole launch stroke has to stay over the deck, or the shuttle would
+    // run off the side of the ship (CAT_V_END^2 / 2a metres of track).
+    const stroke = (CAT_V_END * CAT_V_END) / (2 * CAT_ACCEL);
+    const exit = cat.start.clone().addScaledVector(cat.dir, stroke);
+    check(`${c.name}: cat stroke ends on deck`,
+      isOnDeck(c, exit.x, exit.z),
+      `${stroke.toFixed(0)} m stroke`);
+
+    // --- the landing corridor has to be over the deck for its whole length ---
+    // This is what "big enough to land" means: a corridor that runs off the port
+    // edge is a touchdown the sim cannot see, because groundAt() only reports a
+    // deck where isOnDeck() says so.
+    const th = (c.landingAngleDeg * Math.PI) / 180;
+    const corners: Array<[number, number]> = [];
+    for (const s of [STRIP.catchSMin, STRIP.catchSMax]) {
+      for (const d of [-STRIP.halfWidth, STRIP.halfWidth]) {
+        const along = STRIP.startAlong + s * Math.cos(th) + d * Math.sin(th);
+        const across = STRIP.startAcross - s * Math.sin(th) + d * Math.cos(th);
+        const { fwd, right } = deckAxes(c.headingDeg);
+        corners.push([
+          c.x + fwd[0] * along + right[0] * across,
+          c.z + fwd[1] * along + right[1] * across,
+        ]);
+      }
+    }
+    check(`${c.name}: the whole landing corridor is on the deck`,
+      corners.every(([x, z]) => isOnDeck(c, x, z)),
+      `deck ${c.deckLength}x${c.deckWidth} m`);
+    check(`${c.name}: the deck is big enough to land on`,
+      c.deckLength >= 400 && c.deckWidth >= 100,
+      `${c.deckLength}x${c.deckWidth} m`);
   }
 
   let minSep = Infinity;
@@ -260,6 +301,29 @@ function idle() {
   }
 }
 
+// --- a landing on a friendly surface is a recovery, not a result ---
+{
+  // The sim refuels and re-arms on the airborne -> deck/runway transition, so
+  // a real runway touchdown has to land in that state rather than a crash or a
+  // frozen result. Fly a short final onto the airfield plateau.
+  const af = ARCHIPELAGO.airfield;
+  const st = spawnAircraft("airfield");
+  st.pos.set(af.centerX - af.runwayLength / 2 + 400, af.elevation + 3, af.centerZ);
+  st.vel.set(70, -2, 0);
+  st.airborne = true;
+  st.onGround = false;
+  st.banner = null;
+  let recovered = false;
+  for (let i = 0; i < Math.round(6 / DT); i++) {
+    const wasAirborne = st.airborne;
+    stepAircraft(st, idle(), DT);
+    if (wasAirborne && isRecoverySurface(st)) recovered = true;
+  }
+  check("a runway touchdown reads as a recovery", recovered,
+    `onGround=${st.onGround} kind=${st.groundKind} result=${st.result?.title ?? "none"}`);
+  check("and it is not a frozen result", st.result === null, st.result?.title ?? "");
+}
+
 // --- brakes stop the aircraft ---
 {
   const st = spawnAircraft("airfield");
@@ -269,25 +333,108 @@ function idle() {
   check("brakes stop the jet", st.speed < 2, `v=${st.speed.toFixed(1)}`);
 }
 
-// --- real-terrain world plumbing (offline synthetic heightfield) ---
+// --- seeded world generation: the seed is the whole world ---
 {
-  const fake = { sample: () => 220 };
-  setWorld(KAUAI, makeKauaiSampler(fake));
-  const af = KAUAI.airfield;
-  const hField = terrainHeight(af.centerX, af.centerZ);
-  check("kauai: airfield flattened to its elevation", Math.abs(hField - af.elevation) < 1, `${hField.toFixed(1)}`);
-  for (const c of KAUAI.carriers) {
-    const h = terrainHeight(c.x, c.z);
-    check(`kauai: ${c.name} anchorage is deep water`, h <= -39, `${h.toFixed(0)}m`);
-    check(`kauai: ${c.name} deck resolves`, groundAt(c.x, c.z).kind === "deck", groundAt(c.x, c.z).kind);
+  check("a seed is sanitised to a stable integer",
+    sanitizeSeed(-1) === 2147483646 && sanitizeSeed(12.7) === 12, `${sanitizeSeed(-1)} ${sanitizeSeed(12.7)}`);
+  check("a fresh install flies the default seed", activeWorldSeed() === DEFAULT_SEED, `${activeWorldSeed()}`);
+
+  // What the room actually synchronises is this: one number in, the identical
+  // terrain out. Sample a spread of points, regenerate, and compare exactly.
+  const probes = [0, 3000, 9000, 21000, -15000, -27000];
+  const sampleAll = (): number[] => {
+    const out: number[] = [];
+    for (const x of probes) for (const z of probes) out.push(terrainHeight(x, z));
+    for (const c of ARCHIPELAGO.carriers) out.push(terrainHeight(c.x, c.z));
+    return out;
+  };
+
+  setWorldSeed(4242);
+  const first = sampleAll();
+  setWorldSeed(DEFAULT_SEED);
+  setWorldSeed(4242);
+  const second = sampleAll();
+  check("a seed rebuilds byte-identical terrain",
+    first.every((h, i) => Math.abs(h - second[i]) < 1e-9),
+    "the same seed generated different heights");
+
+  setWorldSeed(90210);
+  const other = sampleAll();
+  check("a different seed builds a different chain",
+    other.some((h, i) => Math.abs(h - first[i]) > 1),
+    "two different seeds produced the same terrain");
+
+  // Any seed the player can type has to land on something flyable: a chain with
+  // real land on it, and relief that is neither flat nor absurd.
+  let worstLand = 1;
+  let loPeak = Infinity;
+  let hiPeak = -Infinity;
+  for (const seed of [0, 1, 99, 1337, 4242, 8080, 31337, 65535, 90210, 123456789, 2000000000, 2147483646]) {
+    setWorldSeed(seed);
+    let land = 0;
+    let peak = -Infinity;
+    const n = 24;
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        const h = terrainHeight(-EXTENT + ((i + 0.5) * 2 * EXTENT) / n, -EXTENT + ((j + 0.5) * 2 * EXTENT) / n);
+        if (h > 0) land++;
+        if (h > peak) peak = h;
+      }
+    }
+    worstLand = Math.min(worstLand, land / (n * n));
+    loPeak = Math.min(loPeak, peak);
+    hiPeak = Math.max(hiPeak, peak);
   }
-  const hOut = terrainHeight(20000, -20000);
-  check("kauai: beyond the mesh is open ocean", hOut <= -39, `${hOut}`);
+  check("every seed puts islands in the world",
+    worstLand > 0.03, `thinnest chain covers ${(worstLand * 100).toFixed(1)}% of a coarse grid`);
+  check("every seed has real relief, and none is absurd",
+    loPeak > 200 && hiPeak < 4000, `peaks ${loPeak.toFixed(0)}m .. ${hiPeak.toFixed(0)}m`);
+}
+
+// --- every seed is flyable: runway flat, anchorages deep, approaches clear ---
+{
+  // Two of these come from real room codes, because that is how a player picks
+  // a world now: whatever the code hashes to must still be a flyable chain.
+  const seeds = [DEFAULT_SEED, 4242, 90210, 7, 2147483646, worldSeedForRoom("F14ALPHA"), worldSeedForRoom("TOMCAT")];
+  for (const seed of seeds) {
+    setWorldSeed(seed);
+    const af = ARCHIPELAGO.airfield;
+    const hField = terrainHeight(af.centerX, af.centerZ);
+    check(`seed ${seed}: airfield flattened to its elevation`,
+      Math.abs(hField - af.elevation) < 1, `${hField.toFixed(1)}`);
+
+    let anchorages = true;
+    let detail = "";
+    for (const c of ARCHIPELAGO.carriers) {
+      const h = terrainHeight(c.x, c.z);
+      if (h > -39) { anchorages = false; detail += `${c.name} ${h.toFixed(0)}m `; }
+      if (groundAt(c.x, c.z).kind !== "deck") { anchorages = false; detail += `${c.name} not deck `; }
+      for (let i = 0; i < 16; i++) {
+        const a = (i / 16) * Math.PI * 2;
+        if (terrainHeight(c.x + Math.cos(a) * 1200, c.z + Math.sin(a) * 1200) > -10) {
+          anchorages = false;
+          detail += `${c.name} land at 1.2km `;
+          break;
+        }
+      }
+    }
+    check(`seed ${seed}: every anchorage is deep water with 1.2 km clearance`, anchorages, detail);
+
+    // The island chain lives inside the mesh, so past its corner there is
+    // nothing but water whatever the seed threw in.
+    const far = terrainHeight(EXTENT + 600, EXTENT + 600);
+    const far2 = terrainHeight(-(EXTENT + 600), -(EXTENT + 600));
+    check(`seed ${seed}: beyond the mesh is open water`, far < 0 && far2 < 0, `${far.toFixed(0)} ${far2.toFixed(0)}`);
+  }
+
+  setWorldSeed(90210);
   const st = spawnAircraft("carrier", 1);
-  check("kauai: spawns settled on carrier 2", st.onGround && st.groundKind === "deck", `${st.groundKind}`);
+  check("a seeded world still spawns settled on carrier 2", st.onGround && st.groundKind === "deck", `${st.groundKind}`);
+
   resetWorld();
+  check("resetWorld returns to the default seed", activeWorldSeed() === DEFAULT_SEED, `${activeWorldSeed()}`);
   const hBack = terrainHeight(0, 0);
-  check("procedural world restored after reset", hBack > 50, `${hBack.toFixed(0)}`);
+  check("and to the default seed's terrain", hBack > 50, `${hBack.toFixed(0)}`);
 }
 
 console.log(failures === 0 ? "\nALL TESTS PASSED" : `\n${failures} FAILURES`);

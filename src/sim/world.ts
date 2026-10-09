@@ -1,13 +1,28 @@
-// World layouts: the procedural archipelago and the real-terrain Kauai map.
-// One layout is active at a time. The height sampler is swappable — analytic
-// procedural terrain or a Mapbox DEM heightfield — while airfield, carriers and
-// the flattening rules always derive from the active layout, so the sim, the
-// renderer and the HUD all agree on one source of truth.
+// World layout: one procedural archipelago, generated from a seed.
+//
+// The seed is the whole multiplayer synchronisation story. The host sends a
+// single number — once when a pilot joins, and again only if somebody actually
+// changes it — and every pilot rebuilds the identical island chain locally.
+// Terrain never crosses the wire, and nothing is re-sent per frame.
+//
+// The seed drives the terrain: island positions, sizes, ridgelines, summits and
+// the noise offsets the generator runs on. The fleet layout (the airfield
+// plateau and the carrier anchorages) is deliberately fixed, because the flight
+// model, the deck meshes and the trap logic all agree on it. `applyLayoutOps`
+// then forces the runway flat and every anchorage deep, and the generator keeps
+// islands clear of both, so any seed is flyable.
 
 import { fbm, ridged, smoothstep } from "./noise";
 
-/** Terrain mesh extent (half-size, meters). Beyond this: open ocean. */
-export const EXTENT = 12000;
+/**
+ * Terrain mesh extent (half-size, meters). Beyond this: open ocean.
+ *
+ * The chain runs a long way: a 60 km square of mostly water, with island
+ * groups strung across it and the fleet's carriers spread between them. The
+ * heightfield is analytic, so this is the size of the *mesh* and the HUD box;
+ * physics is exact anywhere in it.
+ */
+export const EXTENT = 30000;
 
 export const SEA = { y: 0 };
 
@@ -40,24 +55,32 @@ function carrier(name: string, x: number, z: number, headingDeg: number): Carrie
   return {
     name, x, z, headingDeg,
     deckY: 19,
-    deckLength: 300,
-    deckWidth: 77,
-    landingLength: 240,
+    // Deliberately bigger than a real 333 m fleet carrier. This sim is flown
+    // with a keyboard or a stick, not a HOTAS with a trimmed Tomcat, so
+    // the last 100 m of the approach is far harder than the real thing: the deck
+    // is stretched to keep a trap achievable without turning it into a barn door.
+    // The hostile carrier uses the same hull (makeCarrier), so the two match.
+    deckLength: 435,
+    deckWidth: 112,
+    landingLength: 348,
     landingAngleDeg: 9.5,
     wireCount: 4,
-    wireSpacing: 12.5,
-    catapultOffsetX: -14,
-    catapultLength: 94,
+    wireSpacing: 18,
+    catapultOffsetX: -20,
+    catapultLength: 136,
   };
 }
 
-export type WorldId = "archipelago" | "kauai";
+/**
+ * Build a carrier that is not part of a world layout (the dogfight's hostile
+ * boat): same hull/deck numbers as the fleet, but its position and heading are
+ * live and move with the sim.
+ */
+export const makeCarrier = carrier;
 
 export interface WorldDef {
-  id: WorldId;
+  id: string;
   label: string;
-  /** Required attribution when real-world data is in use (Mapbox terms). */
-  attribution: string | null;
   airfield: AirfieldDef;
   carriers: CarrierDef[];
 }
@@ -69,23 +92,31 @@ export interface WorldDef {
  * where the sim checks them.
  */
 export const STRIP = {
-  startAlong: -115, // aft end of the landing area, along the deck
-  startAcross: 5, //  centreline offset at the aft end (toward starboard)
-  halfWidth: 15, //    touchdown corridor half-width
-  wireFirstS: 35, //   first arresting wire, metres from the strip start
-  catchSMin: 26, //    earliest s that can catch a wire
-  catchSMax: 170, //   latest s that can catch a wire
+  startAlong: -167, // aft end of the landing area, along the deck
+  startAcross: 8, //   centreline offset at the aft end (toward starboard)
+  halfWidth: 21, //    touchdown corridor half-width
+  wireFirstS: 51, //   first arresting wire, metres from the strip start
+  catchSMin: 38, //    earliest s that can catch a wire
+  catchSMax: 246, //   latest s that can catch a wire
 };
 
+/**
+ * Where the catapult shuttle starts, along the deck from the ship's centre
+ * (positive = forward). Shared by the flight model, the bandit launches and the
+ * painted deck, so a jet always launches down the track that is drawn under it.
+ * It sits in the aft half of the deck, so the jet is parked well back with the
+ * whole forward deck ahead of it (~200 m of run-out past the end of the stroke).
+ */
+export const CAT_START_ALONG = -80;
+
 // ---------------------------------------------------------------------------
-// The two worlds
+// The fleet layout — fixed, whatever the terrain seed is
 // ---------------------------------------------------------------------------
 
 /** Fictional archipelago: airfield on the main island, carriers in open sea. */
 export const ARCHIPELAGO: WorldDef = {
   id: "archipelago",
   label: "Procedural islands",
-  attribution: null,
   airfield: {
     centerX: -1800,
     centerZ: 2400,
@@ -95,59 +126,222 @@ export const ARCHIPELAGO: WorldDef = {
     headingDeg: 90, // runway points east
   },
   carriers: [
-    carrier("ALPHA", 6200, -1400, 135), // east-southeast waters
-    carrier("BRAVO", 9500, 9500, 85), // south-east approaches
-    carrier("CHARLIE", -9500, 9500, 125), // south-west approaches
-    carrier("DELTA", -9500, -9500, 275), // north-west approaches
+    carrier("ALPHA", 10000, 2000, 135), // due east of the main island
+    carrier("BRAVO", 20000, 9000, 85), // north-east approaches
+    carrier("CHARLIE", -27000, 8000, 125), // far west, off the NW chain
+    carrier("DELTA", -8000, -16000, 275), // south-central basin
+    carrier("ECHO", 6000, 12000, 40), // north of the airfield
+    carrier("FOXTROT", 26000, 14000, 0), // north-east corner
+    carrier("GOLF", 15000, -24000, 275), // southern waters
+    carrier("HOTEL", -17000, 8000, 275), // between the west islands
   ],
 };
 
-/**
- * Real terrain: south Kauai, Hawaii. Airfield on the Koloa coastal plain,
- * carriers in verified open water (>= 2.2 km from land, clear sea lanes).
- * Fitted against live Mapbox terrain-RGB data (see scripts/worldfit.ts).
- */
-export const KAUAI: WorldDef = {
-  id: "kauai",
-  label: "Kauai, Hawaii — live terrain",
-  attribution: "Terrain & imagery © Mapbox © OpenStreetMap",
-  airfield: {
-    centerX: 1500,
-    centerZ: 2250,
-    elevation: 57,
-    runwayLength: 2200,
-    runwayWidth: 48,
-    headingDeg: 90,
-  },
-  carriers: [
-    carrier("LEHUA", -10500, 5500, 90),
-    carrier("MAKANI", -500, 10250, 50),
-    carrier("NALU", 10500, 10500, 0),
-    carrier("KAI", 10500, 2250, 40),
-  ],
-};
-
-export const WORLDS: Record<WorldId, WorldDef> = { archipelago: ARCHIPELAGO, kauai: KAUAI };
+const activeWorld: WorldDef = ARCHIPELAGO;
 
 // ---------------------------------------------------------------------------
-// Active world + sampler
+// Seed -> island chain
 // ---------------------------------------------------------------------------
 
-export interface HeightSource {
-  sample(x: number, z: number): number;
+/** The world a fresh install flies, and the one `resetWorld()` returns to. */
+export const DEFAULT_SEED = 1337;
+
+/** Clamp anything the user (or the wire) hands us into a stable integer seed. */
+export function sanitizeSeed(raw: number): number {
+  if (!Number.isFinite(raw)) return DEFAULT_SEED;
+  const n = Math.floor(raw);
+  return ((n % 2147483647) + 2147483647) % 2147483647;
 }
 
-let activeWorld: WorldDef = ARCHIPELAGO;
-let activeSampler: (x: number, z: number) => number = proceduralHeight;
+/**
+ * The world a room code stands for — the code *is* the world.
+ *
+ * Every pilot who types the same code generates the same island chain locally,
+ * so a seed is never shown, never copied around and never put on the wire. The
+ * normalisation mirrors the net layer's room handling (upper case, alphanumerics
+ * only, at most 10 characters), so "f14-alpha" and "F14ALPHA" are one world.
+ * An empty code is solo flight, which flies the default world.
+ */
+export function worldSeedForRoom(raw: string): number {
+  const code = normalizeRoomCode(raw);
+  return code ? sanitizeSeed(hash32(code)) : DEFAULT_SEED;
+}
 
-export function setWorld(world: WorldDef, sampler: (x: number, z: number) => number): void {
-  activeWorld = world;
-  activeSampler = sampler;
+function normalizeRoomCode(raw: string): string {
+  return raw.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10);
+}
+
+/** FNV-1a — cheap, and well spread for short codes. */
+function hash32(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+interface Landmass {
+  x: number;
+  z: number;
+  r: number; // land is full strength inside this radius
+  falloff: number; // coastline fade distance
+  ridgeAmp: number; // mountain amplitude
+  hillAmp: number; // rolling-hills amplitude
+  seed: number;
+  base?: number; // interior baseline height (default LAND_BASE)
+  coastSharp?: number; // < 1 pinches the coastline into cliffs
+}
+
+/** A named summit — a landmark you can see from the air and steer by. */
+interface Peak {
+  x: number;
+  z: number;
+  h: number;
+  r: number;
+}
+
+interface WorldGen {
+  landmasses: Landmass[];
+  peaks: Peak[];
+  /** Base offset for every noise lookup, so two seeds never share a texture. */
+  noise: number;
+}
+
+/** Baseline upland height so island interiors never sit at sea level. */
+const LAND_BASE = 70;
+
+/** How far an island's coast must stay from a carrier before it is accepted. */
+const FLEET_CLEARANCE = 3000;
+/** ... and from the airfield island, so the runway approach stays a valley. */
+const HUB_CLEARANCE = 2500;
+
+/**
+ * Small deterministic PRNG (mulberry32). The island chain is a pure function of
+ * the seed, so two pilots who agree on the number generate the same islands.
+ */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * The island chain a seed stands for.
+ *
+ * The hub island always carries the airfield. The rest are strung on a jittered
+ * ring across the 60 km square, each given one of four characters (volcanic
+ * range, rugged fjord coast, rolling hills, low atoll). Candidates that would
+ * crowd the airfield or a carrier anchorage are rejected rather than carved up,
+ * so the runway and every ship keep clean water and a clear approach.
+ */
+function generateWorld(seed: number): WorldGen {
+  const rnd = mulberry32(seed);
+  const noise = Math.floor(rnd() * 1000000);
+  const landmasses: Landmass[] = [];
+  const peaks: Peak[] = [];
+  const hubX = ARCHIPELAGO.airfield.centerX;
+  const hubZ = ARCHIPELAGO.airfield.centerZ;
+
+  // --- the hub: the airfield island, always present ---
+  {
+    const x = hubX + (rnd() - 0.5) * 600;
+    const z = hubZ + (rnd() - 0.5) * 600;
+    const r = 3800 + rnd() * 900;
+    const ridgeAmp = 700 + rnd() * 520;
+    landmasses.push({
+      x, z, r, falloff: 3000,
+      ridgeAmp, hillAmp: 180 + rnd() * 90, seed: 17 + Math.floor(rnd() * 60),
+    });
+    // Summits sit ~0.85r out, clear of the flattened runway plateau.
+    peaks.push({ x: x - r * 0.65, z: z - r * 0.6, h: ridgeAmp * (0.85 + rnd() * 0.2), r: 900 + rnd() * 300 });
+    peaks.push({ x: x + r * 0.7, z: z + r * 0.5, h: ridgeAmp * 0.6, r: 700 + rnd() * 250 });
+  }
+
+  // --- the chain: islands on a jittered ring, clear of the fleet ---
+  const count = 12 + Math.floor(rnd() * 5);
+  for (let i = 0; i < count; i++) {
+    for (let attempt = 0; attempt < 24; attempt++) {
+      const angle = rnd() * Math.PI * 2;
+      const radius = 13000 + rnd() * 13000;
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
+      const r = 900 + rnd() * 2100;
+      const falloff = r * (0.9 + rnd() * 0.5);
+      const reach = r + falloff;
+      if (Math.hypot(x - hubX, z - hubZ) <= reach + HUB_CLEARANCE) continue;
+      if (ARCHIPELAGO.carriers.some((c) => Math.hypot(x - c.x, z - c.z) <= reach + FLEET_CLEARANCE)) continue;
+
+      const kind = rnd();
+      let ridgeAmp: number;
+      let hillAmp: number;
+      let base: number | undefined;
+      let coastSharp: number | undefined;
+      if (kind < 0.26) {
+        // tall volcanic range
+        ridgeAmp = 1150 + rnd() * 700;
+        hillAmp = 200 + rnd() * 80;
+        coastSharp = 0.55 + rnd() * 0.2;
+      } else if (kind < 0.54) {
+        // rugged fjord country
+        ridgeAmp = 780 + rnd() * 480;
+        hillAmp = 190 + rnd() * 70;
+        coastSharp = 0.65 + rnd() * 0.15;
+      } else if (kind < 0.78) {
+        // rolling hills
+        ridgeAmp = 360 + rnd() * 380;
+        hillAmp = 120 + rnd() * 70;
+      } else {
+        // low sandy atoll
+        ridgeAmp = 80 + rnd() * 130;
+        hillAmp = 50 + rnd() * 40;
+        base = 14 + rnd() * 12;
+      }
+      landmasses.push({
+        x, z, r, falloff, ridgeAmp, hillAmp,
+        seed: 10 + Math.floor(rnd() * 900), base, coastSharp,
+      });
+      if (ridgeAmp > 750) {
+        peaks.push({ x: x - r * 0.35, z: z - r * 0.3, h: ridgeAmp * (0.7 + rnd() * 0.3), r: 650 + rnd() * 400 });
+        if (rnd() < 0.55) {
+          peaks.push({ x: x + r * 0.4, z: z + r * 0.35, h: ridgeAmp * 0.6, r: 550 + rnd() * 350 });
+        }
+      }
+      break; // placed — move on to the next island
+    }
+  }
+
+  return { landmasses, peaks, noise };
+}
+
+// ---------------------------------------------------------------------------
+// Active world
+// ---------------------------------------------------------------------------
+
+let activeSeed = DEFAULT_SEED;
+let activeSampler: (x: number, z: number) => number = makeProceduralSampler(DEFAULT_SEED);
+
+/**
+ * Regenerate the world for `seed`. Deterministic and synchronous — no fetch and
+ * no network — so a client can rebuild the room's terrain from the host's seed
+ * the instant the seed arrives.
+ */
+export function setWorldSeed(seed: number): void {
+  activeSeed = sanitizeSeed(seed);
+  activeSampler = makeProceduralSampler(activeSeed);
 }
 
 export function resetWorld(): void {
-  activeWorld = ARCHIPELAGO;
-  activeSampler = proceduralHeight;
+  setWorldSeed(DEFAULT_SEED);
+}
+
+export function activeWorldSeed(): number {
+  return activeSeed;
 }
 
 export function activeWorldDef(): WorldDef {
@@ -254,13 +448,17 @@ export function applyLayoutOps(
   af: AirfieldDef,
   cs: CarrierDef[],
 ): number {
-  // --- flatten airfield plateau (fully flat within runway + 100 m, fades over 400 m) ---
+  // --- flatten airfield plateau (fully flat within runway + 300 m, fades over
+  // 500 m). The margins are generous on purpose: the terrain mesh is coarse
+  // over a 60 km world (a cell is 150-300 m), and a plateau only as wide as the
+  // runway would let an interpolated triangle poke up through the runway slab
+  // at low graphics settings.
   const dx = Math.abs(x - af.centerX);
   const dz = Math.abs(z - af.centerZ);
-  const halfL = af.runwayLength / 2 + 100;
-  const halfW = af.runwayWidth / 2 + 100;
+  const halfL = af.runwayLength / 2 + 300;
+  const halfW = af.runwayWidth / 2 + 300;
   const boxDist = Math.hypot(Math.max(dx - halfL, 0), Math.max(dz - halfW, 0));
-  const runwayFlat = 1 - smoothstep(0, 400, boxDist);
+  const runwayFlat = 1 - smoothstep(0, 500, boxDist);
   h = h + (af.elevation - h) * runwayFlat;
 
   // --- ensure carrier areas are open water (at least 40 m deep) ---
@@ -276,22 +474,6 @@ export function applyLayoutOps(
   return h;
 }
 
-/** Sampler for a loaded Mapbox DEM heightfield: ocean mapping + layout ops. */
-export function makeKauaiSampler(hf: HeightSource): (x: number, z: number) => number {
-  const af = KAUAI.airfield;
-  const cs = KAUAI.carriers;
-  return (x: number, z: number) => {
-    // Outside the playable square the DEM's clamped edge would turn into
-    // invisible "land" in the physics, so report open ocean instead.
-    if (Math.abs(x) > EXTENT + 500 || Math.abs(z) > EXTENT + 500) return -40;
-    let h = hf.sample(x, z);
-    // Mapbox terrain-RGB reports exactly sea level over the ocean (no
-    // bathymetry), so map that to a seabed depth the sim can collide with.
-    if (h < 0.5) h = -40;
-    return applyLayoutOps(x, z, h, af, cs);
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Procedural terrain — a small archipelago: the main island carries the
 // airfield, the others give the world a varied mix (a tall volcanic range,
@@ -299,104 +481,67 @@ export function makeKauaiSampler(hf: HeightSource): (x: number, z: number) => nu
 // and deterministic, so the sim can query heights for physics any time.
 // ---------------------------------------------------------------------------
 
-interface Landmass {
-  x: number;
-  z: number;
-  r: number; // land is full strength inside this radius
-  falloff: number; // coastline fade distance
-  ridgeAmp: number; // mountain amplitude
-  hillAmp: number; // rolling-hills amplitude
-  seed: number;
-  base?: number; // interior baseline height (default LAND_BASE)
-  coastSharp?: number; // < 1 pinches the coastline into cliffs
-}
-
-const LANDMASSES: Landmass[] = [
-  // main island — carries the airfield
-  { x: ARCHIPELAGO.airfield.centerX, z: ARCHIPELAGO.airfield.centerZ, r: 4300, falloff: 3400, ridgeAmp: 820, hillAmp: 200, seed: 17 },
-  // north-east: tall volcanic range with snowcaps
-  { x: 2500, z: 6200, r: 2400, falloff: 2800, ridgeAmp: 1750, hillAmp: 260, seed: 41, coastSharp: 0.55 },
-  // south-west: rugged fjord country
-  { x: -5800, z: -2600, r: 2500, falloff: 2600, ridgeAmp: 1300, hillAmp: 240, seed: 73, coastSharp: 0.7 },
-  // south: low sandy atoll ringed by lagoons
-  { x: -1500, z: -5600, r: 1700, falloff: 2600, ridgeAmp: 120, hillAmp: 60, base: 14, seed: 101 },
-  // east islet chain
-  { x: 5600, z: 3600, r: 1100, falloff: 1700, ridgeAmp: 620, hillAmp: 150, seed: 131 },
-  { x: 6600, z: 5300, r: 750, falloff: 1150, ridgeAmp: 420, hillAmp: 110, seed: 149 },
-];
-
-/** Named summits — landmarks you can see from the air and steer by. */
-const PEAKS = [
-  { x: 3000, z: 6600, h: 1500, r: 1100 },
-  { x: 1800, z: 5500, h: 950, r: 850 },
-  { x: -6100, z: -1700, h: 1150, r: 950 },
-  { x: -5200, z: -3200, h: 800, r: 750 },
-  { x: -700, z: -900, h: 850, r: 950 },
-  { x: -4300, z: 4500, h: 720, r: 800 },
-];
-
-/** Baseline upland height so island interiors never sit at sea level. */
-const LAND_BASE = 70;
-
-function proceduralHeight(x: number, z: number): number {
-  const seed = 1337;
+function makeProceduralSampler(seed: number): (x: number, z: number) => number {
+  const { landmasses, peaks, noise } = generateWorld(seed);
   const af = ARCHIPELAGO.airfield;
 
-  // --- domain warp: meandering ridgelines, ragged coastlines ---
-  const wxo = fbm(x * 0.00008, z * 0.00008, seed + 3, 3) - 0.5;
-  const wzo = fbm(x * 0.00008, z * 0.00008, seed + 9, 3) - 0.5;
-  const wx = x + wxo * 3600;
-  const wz = z + wzo * 3600;
-  const coastWarp = (fbm(x * 0.00022, z * 0.00022, seed + 71, 4) - 0.5) * 2600;
+  return (x: number, z: number) => {
+    // --- domain warp: meandering ridgelines, ragged coastlines ---
+    const wxo = fbm(x * 0.00008, z * 0.00008, noise + 3, 3) - 0.5;
+    const wzo = fbm(x * 0.00008, z * 0.00008, noise + 9, 3) - 0.5;
+    const wx = x + wxo * 3600;
+    const wz = z + wzo * 3600;
+    const coastWarp = (fbm(x * 0.00022, z * 0.00022, noise + 71, 4) - 0.5) * 2600;
 
-  // --- land mask: strongest island wins and brings its own character ---
-  let land = 0;
-  let nearCoast = 0;
-  let ridgeAmp = 0;
-  let hillAmp = 0;
-  let baseH = LAND_BASE;
-  for (const m of LANDMASSES) {
-    const d = Math.hypot(x - m.x, z - m.z);
-    const shore = m.r + m.falloff * (m.coastSharp ?? 1);
-    const mask = 1 - smoothstep(m.r, shore, d + coastWarp);
-    if (mask > land) {
-      land = mask;
-      ridgeAmp = m.ridgeAmp;
-      hillAmp = m.hillAmp;
-      baseH = m.base ?? LAND_BASE;
+    // --- land mask: strongest island wins and brings its own character ---
+    let land = 0;
+    let nearCoast = 0;
+    let ridgeAmp = 0;
+    let hillAmp = 0;
+    let baseH = LAND_BASE;
+    for (const m of landmasses) {
+      const d = Math.hypot(x - m.x, z - m.z);
+      const shore = m.r + m.falloff * (m.coastSharp ?? 1);
+      const mask = 1 - smoothstep(m.r, shore, d + coastWarp);
+      if (mask > land) {
+        land = mask;
+        ridgeAmp = m.ridgeAmp;
+        hillAmp = m.hillAmp;
+        baseH = m.base ?? LAND_BASE;
+      }
+      nearCoast = Math.max(nearCoast, 1 - smoothstep(m.r, shore + 2600, d));
     }
-    nearCoast = Math.max(nearCoast, 1 - smoothstep(m.r, shore + 2600, d));
-  }
 
-  // --- relief: ranges in bands, hills, fine detail, plus named summits ---
-  const rangeMask = smoothstep(0.34, 0.72, fbm(wx * 0.00011, wz * 0.00011, seed + 5, 3));
-  const rid = ridged(wx * 0.0003, wz * 0.0003, seed, 5);
-  const hills = fbm(wx * 0.0007, wz * 0.0007, seed + 9, 5);
-  const detail = fbm(x * 0.004, z * 0.004, seed + 23, 3);
-  let peak = 0;
-  for (const p of PEAKS) {
-    const d = Math.hypot(x - p.x, z - p.z);
-    if (d < p.r * 1.8) {
-      const t = 1 - smoothstep(p.r * 0.3, p.r * 1.5, d);
-      peak = Math.max(peak, p.h * t * t);
+    // --- relief: ranges in bands, hills, fine detail, plus named summits ---
+    const rangeMask = smoothstep(0.34, 0.72, fbm(wx * 0.00011, wz * 0.00011, noise + 5, 3));
+    const rid = ridged(wx * 0.0003, wz * 0.0003, noise, 5);
+    const hills = fbm(wx * 0.0007, wz * 0.0007, noise + 9, 5);
+    const detail = fbm(x * 0.004, z * 0.004, noise + 23, 3);
+    let peak = 0;
+    for (const p of peaks) {
+      const d = Math.hypot(x - p.x, z - p.z);
+      if (d < p.r * 1.8) {
+        const t = 1 - smoothstep(p.r * 0.3, p.r * 1.5, d);
+        peak = Math.max(peak, p.h * t * t);
+      }
     }
-  }
-  const upland =
-    Math.pow(rid, 1.5) * ridgeAmp * (0.35 + 0.65 * rangeMask) +
-    hills * hillAmp +
-    detail * 16 +
-    peak;
+    const upland =
+      Math.pow(rid, 1.5) * ridgeAmp * (0.35 + 0.65 * rangeMask) +
+      hills * hillAmp +
+      detail * 16 +
+      peak;
 
-  // Broad basin around the airfield keeps the approach clear and makes the
-  // plateau read as a valley floor rather than a mesa.
-  const fieldD = Math.hypot(x - af.centerX, z - af.centerZ);
-  const basin = 0.32 + 0.68 * smoothstep(1400, 3600, fieldD);
+    // Broad basin around the airfield keeps the approach clear and makes the
+    // plateau read as a valley floor rather than a mesa.
+    const fieldD = Math.hypot(x - af.centerX, z - af.centerZ);
+    const basin = 0.32 + 0.68 * smoothstep(1400, 3600, fieldD);
 
-  const relief = (baseH + upland * basin) * land;
+    const relief = (baseH + upland * basin) * land;
 
-  // --- seabed: deeper basins offshore, shelving up near the coasts ---
-  const seabed = (-14 - ridged(x * 0.00022, z * 0.00022, seed + 40, 3) * 130) * (1 - 0.5 * nearCoast);
-  const h = relief + seabed * (1 - land);
+    // --- seabed: deeper basins offshore, shelving up near the coasts ---
+    const seabed = (-14 - ridged(x * 0.00022, z * 0.00022, noise + 40, 3) * 130) * (1 - 0.5 * nearCoast);
+    const h = relief + seabed * (1 - land);
 
-  return applyLayoutOps(x, z, h, af, ARCHIPELAGO.carriers);
+    return applyLayoutOps(x, z, h, af, ARCHIPELAGO.carriers);
+  };
 }
