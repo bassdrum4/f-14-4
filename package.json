@@ -9,7 +9,11 @@
     "typecheck": "tsc -b --noEmit",
     "test:sim": "bun scripts/simtest.ts",
     "test:daynight": "bun scripts/daynight.ts",
-    "test:flaps": "bun scripts/diag-flaps.ts"
+    "test:flaps": "bun scripts/diag-flaps.ts",
+    "dev:source": "vite --host 0.0.0.0 --open /source.html",
+    "build:source": "vite build --config vite.source.config.mjs",
+    "check:standalone": "node scripts/build-standalone.mjs --check",
+    "build:standalone": "node scripts/build-standalone.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",
