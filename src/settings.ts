@@ -25,7 +25,9 @@ export type Action =
   | "trimDown"
   | "fire"
   | "bomb"
-  | "missile";
+  | "missile"
+  | "settings"
+  | "map";
 
 export const ACTION_LABELS: Record<Action, string> = {
   pitchUp: "Pitch up (nose up)",
@@ -49,6 +51,8 @@ export const ACTION_LABELS: Record<Action, string> = {
   fire: "Fire guns",
   bomb: "Bombs / target pod (click to designate)",
   missile: "Fire missile (nearest target)",
+  settings: "Settings (in flight)",
+  map: "Tactical map (big / small)",
 };
 
 export const DEFAULT_BINDINGS: Record<Action, string> = {
@@ -73,6 +77,8 @@ export const DEFAULT_BINDINGS: Record<Action, string> = {
   fire: "KeyQ",
   bomb: "KeyR",
   missile: "KeyE",
+  settings: "KeyO",
+  map: "KeyM",
 };
 
 export type DaylightMode = "live" | "fixed" | "cycle";
@@ -113,6 +119,10 @@ export interface Settings {
   /** Local clock hour 0..24, used by "fixed" mode. */
   timeOfDay: number;
   minimap: boolean;
+  /** Green angle ladder + flight-path marker over the middle of the view. */
+  hudLadder: boolean;
+  /** Green gunsight cross, its tracer ladder and the range readout. */
+  hudGunCross: boolean;
   bindings: Record<Action, string>;
   /** Multiplayer callsign, shown to the rest of the flight. */
   callsign: string;
@@ -142,6 +152,8 @@ export function defaultSettings(): Settings {
     daylight: "fixed",
     timeOfDay: 9,
     minimap: true,
+    hudLadder: true,
+    hudGunCross: true,
     bindings: { ...DEFAULT_BINDINGS },
     callsign: "",
     room: "",
@@ -208,6 +220,8 @@ export function loadSettings(): Settings {
       timeOfDay:
         typeof parsed.timeOfDay === "number" ? clampNum(parsed.timeOfDay, 0, 24) : base.timeOfDay,
       minimap: typeof parsed.minimap === "boolean" ? parsed.minimap : base.minimap,
+      hudLadder: typeof parsed.hudLadder === "boolean" ? parsed.hudLadder : base.hudLadder,
+      hudGunCross: typeof parsed.hudGunCross === "boolean" ? parsed.hudGunCross : base.hudGunCross,
       bindings: { ...base.bindings, ...(parsed.bindings ?? {}) },
       callsign: typeof parsed.callsign === "string" ? parsed.callsign.slice(0, 12) : base.callsign,
       room: typeof parsed.room === "string" ? roomCode(parsed.room) : base.room,

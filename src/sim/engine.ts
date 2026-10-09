@@ -1,5 +1,5 @@
 import { RemoteWeapons } from "../render/remoteWeapons";
-import { BattleReferee, type BattleAction, type BattleSnapshot } from "../net/versus";
+import { BattleReferee, battleCarrierPair, type BattleAction, type BattleSnapshot } from "../net/versus";
 import { specFor } from "./aircraft";
 // Sim orchestrator: state machine, fixed-timestep sim, render loop, HUD feed.
 
@@ -158,6 +158,8 @@ export interface HudSnapshot {
   dfLanded: { x: number; y: number; z: number; age: number; kind: "ground" | "air" | "water" } | null;
   /** True while the target pod camera is up (a click designates). */
   pod: boolean;
+  /** The big tactical map is up. */
+  bigMap: boolean;
   /** Multiplayer: live wingmen, nearest first. */
   remotes: RemoteContact[];
   /** Multiplayer session, condensed for the HUD and the lobby. */
@@ -245,7 +247,7 @@ function defaultHud(): HudSnapshot {
     dfBombs: 6, dfBombsMax: 6, dfBombsAway: 0, dfCarrier: null,
     dfMissiles: 2, dfMissilesMax: 2,
     dfBombsTracking: 0, dfBombTracks: [], dfDesignated: null,
-    dfReleased: null, dfLanded: null, pod: false,
+    dfReleased: null, dfLanded: null, pod: false, bigMap: false,
     remotes: [], netStatus: "idle", netRoom: "", netHost: false, netPilots: 0,
   };
 }
@@ -302,12 +304,16 @@ export class Sim {
   private explosions: ExplosionField;
   /** Target pod camera is up: the mouse aims, a click designates. */
   private pod = false;
+  /** Tactical map: the minimap, blown up to fill the view. */
+  private bigMap = false;
   /**
    * The crash replay, from the fatal hit to the screen: while `falling`, the
    * dead jet tumbles under the action camera; after impact the camera holds on
    * the fireball for a beat before the results take over. Null when alive.
    */
   private crashSeq: { falling: boolean; t: number; smokeT: number } | null = null;
+  /** One-shot: the pilot asked for settings from the air (the settings key). */
+  private settingsRequest = false;
   /** One-shot: the next menu should open on the multiplayer screen (a dead
    *  pilot returning to their room's lobby). */
   private pendingRoom = false;
@@ -534,6 +540,7 @@ export class Sim {
     this.endPod();
     this.crashSeq = null;
     this.pendingRoom = false;
+    this.settingsRequest = false;
     this.breakupHide = false;
     this.state = spawnAircraft(mission, carrierIndex, this.settings.aircraft);
     this.battleLife = -1;
@@ -577,6 +584,9 @@ export class Sim {
   }
 
   resume(): void {
+    // Back in the air: the in-flight settings request is spent, so the next
+    // Escape opens the plain pause screen.
+    this.settingsRequest = false;
     if (this.phase === "paused") {
       this.setPhase("flying");
       this.last = performance.now() / 1000;
@@ -610,6 +620,11 @@ export class Sim {
     this.quitToMenu();
   }
 
+  /** The pause screen reads this to open straight on the settings tab. */
+  get settingsRequested(): boolean {
+    return this.settingsRequest;
+  }
+
   /** The menu reads this to open on the multiplayer screen after a death. */
   get pendingRoomReentry(): boolean {
     return this.pendingRoom;
@@ -621,6 +636,7 @@ export class Sim {
   }
 
   quitToMenu(): void {
+    this.settingsRequest = false;
     this.dfArmed = false;
     this.endPod();
     this.crashSeq = null;
@@ -965,23 +981,37 @@ export class Sim {
     return this.netState.status === "online" && this.settings.missionMode === "versus";
   }
 
-  private spawnBattleAircraft(): void {
+  private spawnBattleAircraft(respawn = false): void {
     this.endPod();
     const ids = [this.netState.self, ...this.netState.pilots.map(p => p.id)].sort();
     const slot = Math.max(0, ids.indexOf(this.netState.self));
-    const angle = slot * Math.PI * 2 / Math.max(2, ids.length) + (Math.max(0, this.battleLife) % 4) * .3;
-    const center = carriers()[this.spawnCarrier % carriers().length];
-    this.state = spawnAircraft("carrier", this.spawnCarrier, this.settings.aircraft);
+    // Two boats, one per side: the pair rides the match id, so every pilot in
+    // the room works out the same two carriers without another packet, and the
+    // slots alternate between them — with two pilots that is one boat each.
+    const fleet = carriers();
+    const pair = battleCarrierPair(Math.floor(this.battle.match) || 0, fleet.length);
+    const side = slot % pair.length;
+    const carrierIndex = pair[side] % fleet.length;
+    const center = fleet[carrierIndex];
+    const ring = ids.filter((_, i) => i % pair.length === side);
+    const ringSlot = Math.max(0, ring.indexOf(this.netState.self));
+    const angle = ringSlot * Math.PI * 2 / Math.max(1, ring.length) + (Math.max(0, this.battleLife) % 4) * .3;
+    this.state = spawnAircraft("carrier", carrierIndex, this.settings.aircraft);
     const st = this.state;
     st.pos.set(center.x + Math.cos(angle) * 3000, 1600 + slot * 60, center.z + Math.sin(angle) * 3000);
-    const direction = new THREE.Vector3(center.x - st.pos.x, 0, center.z - st.pos.z).normalize();
+    // Nose on the contested middle rather than on your own boat: both sides
+    // start flying at each other instead of turning away from their own deck.
+    const midX = (fleet[pair[0]].x + fleet[pair[1]].x) / 2;
+    const midZ = (fleet[pair[0]].z + fleet[pair[1]].z) / 2;
+    const direction = new THREE.Vector3(midX - st.pos.x, 0, midZ - st.pos.z).normalize();
     const heading = Math.atan2(direction.x, -direction.z);
     st.quat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -heading);
     st.vel.copy(direction).multiplyScalar(210); st.speed = 210;
     st.gearDown = false; st.gearT = 0; st.flapsDown = false; st.flapT = 0;
     st.onGround = false; st.airborne = true; st.catPhase = "idle"; st.catCooldown = 5;
     st.throttle = .72; st.rpm = .72; st.banner = { text: "HEAD-TO-HEAD — FIVE-SECOND SPAWN SHIELD", until: 5 };
-    this.df.beginVersus(st);
+    // A respawn keeps the racks you have left; a fresh launch arms them.
+    this.df.beginVersus(st, !respawn);
     this.remoteWeapons.clear();
     this.prevPos.copy(st.pos); this.prevQuat.copy(st.quat);
     this.rig.resetFollow(); this.breakupHide = false;
@@ -1010,8 +1040,10 @@ export class Sim {
     const self = snapshot.pilots.find(p => p.id === this.netState.self);
     if (this.phase === "menu" || !self?.ready) return;
     if (self.hp > 0 && self.life !== this.battleLife) {
+      // Dying costs the hull, not the ordnance: only landing re-arms.
+      const respawn = this.battleLife >= 0;
       this.battleLife = self.life;
-      this.spawnBattleAircraft();
+      this.spawnBattleAircraft(respawn);
     }
     this.df.setBattleHull(self.hp);
     if (self.hp === 0 && !this.state.result) {
@@ -1165,6 +1197,15 @@ export class Sim {
       this.pause();
       return;
     }
+    // Options without leaving the cockpit: pause on the spot and open the
+    // settings screen (the pause menu reads the one-shot flag).
+    if (this.input.take("settings")) {
+      this.settingsRequest = true;
+      this.pause();
+      return;
+    }
+    // The tactical map is a view toggle, like the camera: one press, one state.
+    if (this.input.take("map")) this.bigMap = !this.bigMap;
     if (this.input.take("camera")) {
       if (this.pod) this.endPod();
       else this.rig.cycle();
@@ -1489,6 +1530,7 @@ export class Sim {
       dayPhase: this.dayPhase,
       aircraftName: st.spec.name,
       pod: this.pod,
+      bigMap: this.bigMap,
       remotes: this.remoteFleet.contacts(st.pos.x, st.pos.y, st.pos.z),
       netStatus: this.netState.status,
       netRoom: this.netState.room,

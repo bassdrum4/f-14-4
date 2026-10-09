@@ -161,6 +161,8 @@ export function profileOf(s: Settings): GamestateProfile {
     sensitivity: s.sensitivity,
     quality: s.quality,
     minimap: s.minimap,
+    hudLadder: s.hudLadder,
+    hudGunCross: s.hudGunCross,
     bindings: { ...s.bindings },
   };
 }
@@ -188,6 +190,8 @@ export function applyGamestate(current: Settings, profile: GamestateProfile): Se
     next.quality = profile.quality;
   }
   if (typeof profile.minimap === "boolean") next.minimap = profile.minimap;
+  if (typeof profile.hudLadder === "boolean") next.hudLadder = profile.hudLadder;
+  if (typeof profile.hudGunCross === "boolean") next.hudGunCross = profile.hudGunCross;
   if (profile.bindings && typeof profile.bindings === "object") {
     const fetched = profile.bindings as Record<string, string>;
     for (const k of Object.keys(DEFAULT_KEYS) as Array<keyof typeof DEFAULT_KEYS>) {

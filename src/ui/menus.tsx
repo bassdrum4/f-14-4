@@ -100,7 +100,7 @@ export function UiRoot({ sim, settings, onSettings }: {
         <MainMenu sim={sim} settings={settings} onSettings={onSettings} openMultiplayer={sim?.pendingRoomReentry === true} onOpenedMultiplayer={() => sim?.consumeRoomReentry()} />
       )}
       {phase !== "menu" && (
-        <Hud sim={sim} daylight={settings.daylight} minimap={settings.minimap} />
+        <Hud sim={sim} daylight={settings.daylight} minimap={settings.minimap} ladder={settings.hudLadder} gunCross={settings.hudGunCross} />
       )}
       {phase === "paused" && sim && (
         <PauseMenu sim={sim} settings={settings} onSettings={onSettings} />
@@ -339,7 +339,7 @@ function MainMenu({ sim, settings, onSettings, openMultiplayer, onOpenedMultipla
         {screen === "account" && <AccountPanel account={account} settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />}
       </div>
       <div className="dispatch-side" aria-hidden="true"><span>LAUNCH / RECOVER / REPEAT</span><strong>KEEP<br />THE SKY<br />YOURS.</strong><span>BROWSER FLIGHT SIMULATOR</span></div>
-      <div className="menu-footer">C — camera · R — target pod · E — missile · Q — guns · Esc — pause</div>
+      <div className="menu-footer">C — camera · R — target pod · E — missile · Q — guns · M — map · O — settings · Enter — radio · Esc — pause</div>
     </div>
   );
 }
@@ -368,7 +368,12 @@ function FlightSetup({ sim, settings, onSettings, onBack }: {
 function PauseMenu({ sim, settings, onSettings }: {
   sim: Sim; settings: Settings; onSettings: (s: Settings) => void;
 }) {
-  const [screen, setScreen] = useState<Screen>("main");
+  // Asked for settings from the air (the settings key)? Open on that screen.
+  // A plain read rather than a consume: React runs this initialiser twice under
+  // StrictMode, and a one-shot flag would be spent by the first pass.
+  const [screen, setScreen] = useState<Screen>(() =>
+    sim.settingsRequested ? "settings" : "main",
+  );
   const net = useNet(sim);
   const account = useAccount();
   return (
@@ -379,6 +384,7 @@ function PauseMenu({ sim, settings, onSettings }: {
           <>
             <div className="menu-buttons">
               <Btn primary onClick={() => sim.resume()}>RESUME</Btn>
+              <Btn onClick={() => setScreen("settings")}>SETTINGS</Btn>
               <Btn onClick={() => sim.restart()}>RESTART FLIGHT</Btn>
               <Btn onClick={() => sim.quitToMenu()}>QUIT TO MENU</Btn>
             </div>
@@ -476,7 +482,12 @@ function SettingsPanel({ settings, onSettings, onBack }: {
     {tab === "controls" && <><label className="menu-row"><span>Sensitivity / {settings.sensitivity.toFixed(2)}</span><input type="range" min={0.4} max={3} step={0.05} value={settings.sensitivity} onChange={e => set({ sensitivity: Number(e.target.value) })} /></label><ControlsPanel settings={settings} onSettings={onSettings} onBack={onBack} /></>}
     {tab === "graphics" && <><label className="menu-row"><span>World detail</span><select value={settings.quality} onChange={e => set({ quality: e.target.value as Quality })}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><p className="menu-note">Low reduces scenery density, effects and shadows for slower browsers.</p></>}
     {tab === "audio" && <label className="menu-row"><span>Volume / {Math.round(settings.volume * 100)}%</span><input type="range" min={0} max={1} step={0.05} value={settings.volume} onChange={e => set({ volume: Number(e.target.value) })} /></label>}
-    {tab === "interface" && <label className="menu-row"><span>Show minimap</span><input type="checkbox" checked={settings.minimap} onChange={e => set({ minimap: e.target.checked })} /></label>}
+    {tab === "interface" && <>
+      <label className="menu-row"><span>Show minimap</span><input type="checkbox" checked={settings.minimap} onChange={e => set({ minimap: e.target.checked })} /></label>
+      <label className="menu-row"><span>Angle ladder (green pitch/roll overlay)</span><input type="checkbox" checked={settings.hudLadder} onChange={e => set({ hudLadder: e.target.checked })} /></label>
+      <label className="menu-row"><span>Gun cross (green sight, tracer line, range)</span><input type="checkbox" checked={settings.hudGunCross} onChange={e => set({ hudGunCross: e.target.checked })} /></label>
+      <p className="menu-note">In the air, {keyLabel(settings.bindings.settings ?? "KeyO")} pauses and opens this screen. Both overlays sit over the middle of the view.</p>
+    </>}
     {tab !== "controls" && <Btn onClick={onBack}>BACK</Btn>}
   </div>;
 }

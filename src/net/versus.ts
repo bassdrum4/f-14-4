@@ -13,6 +13,29 @@ export interface BattlePilot {
 }
 export interface BattleSnapshot { match: number; pilots: BattlePilot[] }
 interface Entry extends BattlePilot { shieldUntil: number; respawnAt: number }
+/** Mix a match id into a well-spread 32-bit value. */
+function hash32(value: number): number {
+  let h = Math.imul((value | 0) ^ 0x9e3779b9, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+
+/**
+ * The two carriers a head-to-head match starts from: one boat per side, instead
+ * of every pilot circling the same ship. The pair is derived from the match id
+ * alone, so every pilot in the room works out the same two carriers (and the
+ * same one for each slot) without another packet on the wire.
+ */
+export function battleCarrierPair(match: number, count: number): [number, number] {
+  const n = Math.max(2, Math.floor(count));
+  const first = hash32(match) % n;
+  // +1 keeps the pair distinct without a rejection loop.
+  const second = (first + 1 + (hash32(match * 31 + 7) % (n - 1))) % n;
+  return [first, second];
+}
+
 export class BattleReferee {
   private pilots = new Map<string, Entry>();
   private seen = new Set<string>();

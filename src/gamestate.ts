@@ -29,6 +29,9 @@ export interface GamestateProfile {
   sensitivity: number;
   quality: string;
   minimap: boolean;
+  /** HUD overlay preferences. Optional: profiles saved before they existed. */
+  hudLadder?: boolean;
+  hudGunCross?: boolean;
   bindings: Record<string, string>;
 }
 

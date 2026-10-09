@@ -2,9 +2,10 @@
 // Reads the Sim's HudSnapshot via useSyncExternalStore — no per-frame React
 // state.
 
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import * as THREE from "three";
 import type { Sim, HudSnapshot } from "../sim/engine";
+import type { ChatMsg } from "../net/multiplayer";
 import { DEFAULT_SEED } from "../sim/world";
 import type { DaylightMode } from "../settings";
 
@@ -39,14 +40,18 @@ const EMPTY: HudSnapshot = {
   dfMissiles: 0, dfMissilesMax: 0,
   glide: null,
   dfBombsTracking: 0, dfBombTracks: [], dfDesignated: null,
-  dfReleased: null, dfLanded: null, pod: false,
+  dfReleased: null, dfLanded: null, pod: false, bigMap: false,
   remotes: [], netStatus: "idle", netRoom: "", netHost: false, netPilots: 0,
 };
 
-export function Hud({ sim, daylight, minimap }: {
+export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: {
   sim: Sim | null;
   daylight: DaylightMode;
   minimap: boolean;
+  /** Green angle ladder over the middle of the view. */
+  ladder?: boolean;
+  /** Green gunsight cross + tracer ladder. */
+  gunCross?: boolean;
 }) {
   const hud = useHud(sim);
   return (
@@ -58,10 +63,12 @@ export function Hud({ sim, daylight, minimap }: {
         {hud.battle.pilots.find(p => p.id === hud.battleSelf)?.shield && <small>SPAWN SHIELD — weapons unlock after 5 seconds</small>}
         {hud.battle.pilots.find(p => p.id === hud.battleSelf)?.hp === 0 && <small>DOWN — automatic airborne respawn</small>}
       </div>}
-      {!hud.pod && <PitchLadder hud={hud} />}
-      {!hud.pod && <TargetBoxes sim={sim} />}
+      {!hud.pod && ladder && <PitchLadder hud={hud} />}
+      {!hud.pod && <TargetBoxes sim={sim} gunCross={gunCross} />}
       {hud.pod && <TargetPod sim={sim} />}
-      {minimap && !hud.pod && <Minimap hud={hud} />}
+      {minimap && !hud.pod && !hud.bigMap && <Minimap hud={hud} />}
+      {!hud.pod && hud.bigMap && <Minimap hud={hud} big />}
+      <RadioOverlay sim={sim} />
       <div className="hud-left">
         <Gauge label="AIRSPEED" value={Math.round(hud.speedKt)} unit="KT" big />
         <Gauge label="MACH" value={hud.mach.toFixed(2)} />
@@ -149,6 +156,7 @@ export function Hud({ sim, daylight, minimap }: {
               LASER {hud.dfDesignated.km.toFixed(1)} KM · RELEASE AGAIN TO RE-ENGAGE
             </div>
           )}
+          <div className="hud-cam">[ENTER] RADIO · [M] MAP</div>
           <div className="hud-cam">
             {hud.aircraftName} · {hud.cameraMode.toUpperCase()} · [C] CAM · {formatClock(hud.localHour)} {daylight === "live" ? "HST" : "LOCAL"}
           </div>
@@ -211,16 +219,21 @@ function formatClock(hours: number): string {
  * points of interest, which keeps the whole fleet on screen while zooming in
  * tightly on the jet.
  */
-function Minimap({ hud }: { hud: HudSnapshot }) {
+function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  // The tactical view is the same drawing, scaled up: `side` is the panel size
+  // in CSS pixels, and every coordinate below stays in the 176-unit space.
+  const side = big ? Math.round(Math.min(window.innerWidth, window.innerHeight) * 0.62) : 176;
 
   useEffect(() => {
     const cv = ref.current;
     if (!cv) return;
-    const size = 176;
-    const dpr = Math.min(window.devicePixelRatio, 2);
-    cv.width = size * dpr;
-    cv.height = size * dpr;
+    const n = 176;
+    // dpr carries the panel size as well as the display density: the drawing
+    // below stays in 176 units and is simply rendered larger for the map view.
+    const dpr = Math.min(window.devicePixelRatio, 2) * (side / n);
+    cv.width = Math.round(n * dpr);
+    cv.height = Math.round(n * dpr);
     const ctx = cv.getContext("2d");
     if (!ctx) return;
 
@@ -234,27 +247,27 @@ function Minimap({ hud }: { hud: HudSnapshot }) {
       maxR = Math.max(maxR, Math.hypot(hud.dfCarrier.x - hud.playerX, hud.dfCarrier.z - hud.playerZ));
     }
     const range = maxR * 1.15;
-    const scale = (size / 2 - 10) / range;
+    const scale = (n / 2 - 10) / range;
 
     // world XZ -> canvas. North (-Z) is up, east (+X) is right.
-    const px = (x: number) => size / 2 + (x - hud.playerX) * scale;
-    const py = (z: number) => size / 2 + (z - hud.playerZ) * scale;
+    const px = (x: number) => n / 2 + (x - hud.playerX) * scale;
+    const py = (z: number) => n / 2 + (z - hud.playerZ) * scale;
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, size, size);
+    ctx.clearRect(0, 0, n, n);
 
     // sea
     ctx.fillStyle = "rgba(6, 22, 34, 0.72)";
-    ctx.fillRect(0, 0, size, size);
+    ctx.fillRect(0, 0, n, n);
 
     // graticule
     ctx.strokeStyle = "rgba(120, 200, 255, 0.10)";
     ctx.lineWidth = 1;
     for (let i = 1; i < 4; i++) {
-      const p = (size / 4) * i;
+      const p = (n / 4) * i;
       ctx.beginPath();
-      ctx.moveTo(p, 0); ctx.lineTo(p, size);
-      ctx.moveTo(0, p); ctx.lineTo(size, p);
+      ctx.moveTo(p, 0); ctx.lineTo(p, n);
+      ctx.moveTo(0, p); ctx.lineTo(n, p);
       ctx.stroke();
     }
 
@@ -262,7 +275,7 @@ function Minimap({ hud }: { hud: HudSnapshot }) {
     ctx.strokeStyle = "rgba(120, 255, 140, 0.16)";
     for (const f of [1 / 3, 2 / 3]) {
       ctx.beginPath();
-      ctx.arc(size / 2, size / 2, (size / 2 - 10) * f, 0, Math.PI * 2);
+      ctx.arc(n / 2, n / 2, (n / 2 - 10) * f, 0, Math.PI * 2);
       ctx.stroke();
     }
 
@@ -292,7 +305,7 @@ function Minimap({ hud }: { hud: HudSnapshot }) {
     for (const m of hud.carrierMarkers) {
       const x = px(m.x);
       const y = py(m.z);
-      if (x < -20 || x > size + 20 || y < -20 || y > size + 20) continue;
+      if (x < -20 || x > n + 20 || y < -20 || y > n + 20) continue;
       ctx.fillStyle = m.near ? "rgba(120, 255, 140, 1)" : "rgba(150, 200, 230, 0.8)";
       ctx.beginPath();
       ctx.arc(x, y, m.near ? 4 : 3, 0, Math.PI * 2);
@@ -304,7 +317,7 @@ function Minimap({ hud }: { hud: HudSnapshot }) {
     for (const m of hud.remotes) {
       const x = px(m.x);
       const y = py(m.z);
-      if (x < -20 || x > size + 20 || y < -20 || y > size + 20) continue;
+      if (x < -20 || x > n + 20 || y < -20 || y > n + 20) continue;
       ctx.fillStyle = hud.battle ? "rgba(255, 130, 100, 0.95)" : "rgba(79, 210, 255, 0.95)";
       ctx.beginPath();
       ctx.moveTo(x, y - 4);
@@ -323,7 +336,7 @@ function Minimap({ hud }: { hud: HudSnapshot }) {
     for (const m of hud.enemyMarkers) {
       const x = px(m.x);
       const y = py(m.z);
-      if (x < -10 || x > size + 10 || y < -10 || y > size + 10) continue;
+      if (x < -10 || x > n + 10 || y < -10 || y > n + 10) continue;
       ctx.beginPath();
       ctx.arc(x, y, 3, 0, Math.PI * 2);
       ctx.fill();
@@ -347,7 +360,7 @@ function Minimap({ hud }: { hud: HudSnapshot }) {
     // --- player: heading-up triangle at the centre ---
     const hdg = (hud.playerHeadingDeg * Math.PI) / 180;
     ctx.save();
-    ctx.translate(size / 2, size / 2);
+    ctx.translate(n / 2, n / 2);
     // heading 0 = north = up, so rotate by the heading
     ctx.rotate(hdg);
     ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
@@ -363,19 +376,24 @@ function Minimap({ hud }: { hud: HudSnapshot }) {
     // --- frame + compass tick ---
     ctx.strokeStyle = "rgba(120, 255, 140, 0.45)";
     ctx.lineWidth = 1;
-    ctx.strokeRect(0.5, 0.5, size - 1, size - 1);
+    ctx.strokeRect(0.5, 0.5, n - 1, n - 1);
     ctx.fillStyle = "rgba(120, 255, 140, 0.8)";
     ctx.font = "9px ui-monospace, monospace";
-    ctx.fillText("N", size / 2 - 3, 11);
-    ctx.fillText(`${(range / 1000).toFixed(0)}km`, 6, size - 6);
+    ctx.fillText("N", n / 2 - 3, 11);
+    ctx.fillText(`${(range / 1000).toFixed(0)}km`, 6, n - 6);
   }, [hud]);
 
   return (
-    <div className="hud-map">
-      <canvas ref={ref} className="hud-map-canvas" />
+    <div className={big ? "hud-map big" : "hud-map"}>
+      <canvas
+        ref={ref}
+        className="hud-map-canvas"
+        style={big ? { width: side, height: side } : undefined}
+      />
       {/* The world seed, visible in flight: two wingmen can confirm at a glance
           that they are looking at the same islands. */}
       <div className="hud-map-label">SEED {hud.worldSeed}</div>
+      {big && <div className="hud-map-label">[M] CLOSE · [ENTER] RADIO</div>}
     </div>
   );
 }
@@ -388,7 +406,7 @@ function Minimap({ hud }: { hud: HudSnapshot }) {
  * diamond where the guns should lead, a hit marker when rounds connect, a red
  * pulse when we take hits, and a break warning when rounds are in the air.
  */
-function TargetBoxes({ sim }: { sim: Sim | null }) {
+function TargetBoxes({ sim, gunCross }: { sim: Sim | null; gunCross: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     let raf = 0;
@@ -411,7 +429,7 @@ function TargetBoxes({ sim }: { sim: Sim | null }) {
       // The gun crosshair and the ordnance marks work in every mode (guns and
       // bombs are live on a cruise leg too), so they are drawn before the
       // dogfight-only symbology returns.
-      drawGunCrosshair(ctx, w, h, sim, hud);
+      if (gunCross) drawGunCrosshair(ctx, w, h, sim, hud);
       drawOrdnance(ctx, w, h, sim, hud);
       drawApproach(ctx, w, h, hud);
       if (!hud.dfActive) return;
@@ -486,7 +504,7 @@ function TargetBoxes({ sim }: { sim: Sim | null }) {
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [sim]);
+  }, [sim, gunCross]);
   return <canvas ref={ref} className="hud-targets" />;
 }
 
@@ -996,4 +1014,87 @@ function PitchLadder({ hud }: { hud: HudSnapshot }) {
     return () => cancelAnimationFrame(raf);
   }, [hud]);
   return <canvas ref={ref} className="hud-ladder" />;
+}
+
+// ---------------------------------------------------------------------------
+// In-flight radio
+// ---------------------------------------------------------------------------
+
+/** The room radio log, re-read whenever a line arrives. */
+function useChatLog(sim: Sim | null): readonly ChatMsg[] {
+  const [log, setLog] = useState<readonly ChatMsg[]>([]);
+  useEffect(() => {
+    if (!sim) return;
+    const sync = () => setLog(sim.chat.slice());
+    sync();
+    return sim.subscribeChat(sync);
+  }, [sim]);
+  return log;
+}
+
+/**
+ * The radio, opened with Enter while flying. The box takes focus, and the input
+ * layer leaves keys alone when they are aimed at a text field, so typing a line
+ * does not fly the aircraft; Enter sends it, Escape closes the box instead of
+ * pausing the sim.
+ */
+function RadioOverlay({ sim }: { sim: Sim | null }) {
+  const log = useChatLog(sim);
+  const [open, setOpen] = useState(false);
+  const [line, setLine] = useState("");
+  const box = useRef<HTMLInputElement>(null);
+  const online = sim?.netSnapshot.status === "online";
+
+  useEffect(() => {
+    if (open) box.current?.focus();
+  }, [open]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== "Enter" || e.repeat) return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      e.preventDefault();
+      setOpen(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  if (!open) return null;
+
+  const send = () => {
+    const text = line.trim();
+    if (text) sim?.sendChat(text);
+    setLine("");
+    setOpen(false);
+  };
+
+  return (
+    <div className="hud-radio">
+      <div className="hud-radio-log">
+        {log.length === 0 && <div className="hud-radio-empty">Radio silence — Enter sends to the flight.</div>}
+        {log.slice(-6).map((m, i) => (
+          <div key={`${i}-${m.from}`} className="hud-radio-line">
+            <b>{m.from ? m.from.toUpperCase() : "??"}</b> {m.text}
+          </div>
+        ))}
+      </div>
+      <input
+        ref={box}
+        className="hud-radio-input"
+        value={line}
+        maxLength={160}
+        autoComplete="off"
+        placeholder={online ? "TRANSMIT TO THE FLIGHT — ENTER SENDS · ESC CLOSES" : "RADIO OFFLINE — SOLO FLIGHT"}
+        onChange={(e) => setLine(e.target.value)}
+        onKeyDown={(e) => {
+          // Keep Enter and Escape away from the flight controls behind us.
+          e.stopPropagation();
+          if (e.code === "Enter") send();
+          else if (e.code === "Escape") setOpen(false);
+        }}
+      />
+    </div>
+  );
 }

@@ -395,6 +395,49 @@ html, body, #root {
 }
 
 /* ------------------------------------------------------------------ */
+/* Big tactical map (M) + in-flight radio (Enter)                      */
+/* ------------------------------------------------------------------ */
+
+.hud-map.big {
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  align-items: center;
+}
+.hud-map.big .hud-map-canvas {
+  border-color: rgba(120, 255, 140, 0.55);
+  box-shadow: 0 10px 48px rgba(0, 0, 0, 0.6);
+}
+
+.hud-radio {
+  position: absolute; left: 50%; bottom: 7.5%;
+  transform: translateX(-50%);
+  width: min(560px, 62vw);
+  display: flex; flex-direction: column; gap: 6px;
+  pointer-events: auto;
+}
+.hud-radio-log {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 8px 10px;
+  background: rgba(4, 14, 22, 0.72);
+  border: 1px solid rgba(120, 255, 140, 0.3);
+  border-radius: 4px;
+  font-size: 11.5px; letter-spacing: 0.04em;
+  color: #cfe2ef;
+}
+.hud-radio-empty { color: #587082; }
+.hud-radio-line b { color: #7fb8dd; letter-spacing: 0.08em; }
+.hud-radio-input {
+  font: inherit; font-size: 12px; letter-spacing: 0.08em;
+  padding: 8px 10px;
+  color: #dff3e4;
+  background: rgba(4, 14, 22, 0.85);
+  border: 1px solid rgba(120, 255, 140, 0.5);
+  border-radius: 4px;
+  outline: none;
+}
+.hud-radio-input::placeholder { color: #5b7a86; }
+
+/* ------------------------------------------------------------------ */
 /* Multiplayer lobby + feedback form                                   */
 /* ------------------------------------------------------------------ */
 

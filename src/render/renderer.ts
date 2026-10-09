@@ -65,8 +65,11 @@ export class WorldRenderer {
     this.scene.fog = new THREE.Fog(0xbfd3e0, 6000, 58000);
 
     // Far plane past the fog: the chain runs 60 km, and the sea haze should
-    // close the horizon before the frustum does.
-    this.camera = new THREE.PerspectiveCamera(62, 1, 0.5, 70000);
+    // close the horizon before the frustum does. The near plane is 1 m rather
+    // than 10 cm because the sea is one 240 km sheet: depth precision is what
+    // decides whether a pixel is water or beach at range, and every centimetre
+    // taken off `near` is precision thrown away at the far end of the world.
+    this.camera = new THREE.PerspectiveCamera(62, 1, 1, 70000);
     this.camera.position.set(0, 200, 200);
 
     // lighting

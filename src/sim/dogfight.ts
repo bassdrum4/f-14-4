@@ -198,6 +198,11 @@ const MISSILE_ARM = 0.35; // s before the seeker goes live (clears the jet)
 const MISSILE_DET = 26; // m proximity fuze on the locked target
 const MISSILE_AIR_R = 30; // m airburst radius on any airframe
 const MISSILE_HP = 90; // damage: one hit breaks any aircraft outright
+// A wingman reports its own weapon results, so its claims are capped at the
+// biggest single hit the fight can actually produce (with headroom for tuning):
+// anything above this is a bug or a cheat, not a hit.
+const MAX_CLAIMED_HIT = MISSILE_HP * 2;
+const MAX_CLAIMED_CV_HIT = RAM_CARRIER_HP * 2;
 const MISSILE_CV_DMG = 38; // damage to the hostile carrier's hull
 const MISSILE_MASS = 230; // kg
 const MISSILE_CD0 = 0.3; // drag coefficient (coast phase)
@@ -817,12 +822,23 @@ export class Dogfight {
     );
   }
 
-  beginVersus(player: AircraftState): void {
+  /**
+   * Start (or restart) a head-to-head sortie. `refillStores` is false on a
+   * respawn: dying costs the hull, not the ordnance, so only a landing puts
+   * the missiles and bombs back on the racks.
+   */
+  beginVersus(player: AircraftState, refillStores = true): void {
+    const bombs = this.bombsLeft;
+    const missiles = this.missilesLeft;
     this.setAircraft(player);
     this.clear();
     this.versus = true;
     this.active = true;
     this.hull = 100;
+    if (!refillStores) {
+      this.bombsLeft = Math.min(bombs, this.bombsMax);
+      this.missilesLeft = Math.min(missiles, this.missilesMax);
+    }
   }
   setOpponents(opponents: CombatOpponent[]): void { this.opponents = opponents; }
   takeWeaponLaunches(): WeaponLaunch[] { const shots = this.weaponLaunches; this.weaponLaunches = []; return shots; }
@@ -1147,7 +1163,10 @@ export class Dogfight {
    * to the host, who owns the aircraft and settles the kill.
    */
   private damageBandit(b: Bandit, dmg: number, player: AircraftState): void {
-    b.hp -= dmg;
+    // Last line of defence for damage that arrives over the wire: a non-finite
+    // or negative number would make the bandit impossible to kill.
+    if (!Number.isFinite(dmg) || dmg <= 0) return;
+    b.hp -= Math.min(dmg, MAX_CLAIMED_HIT);
     if (this.mirror) this.hitsOut.push({ id: b.id, dmg });
     if (b.hp <= 0) {
       if (this.mirror) this.takenDown.set(b.id, performance.now());
@@ -2274,10 +2293,14 @@ export class Dogfight {
   private damageCarrier(at: THREE.Vector3, player: AircraftState, dmg: number): void {
     const cv = this.cv;
     if (!cv || cv.status === "sinking" || cv.status === "sunk") return;
+    // Same wire-damage guard as the bandits: no NaN, no negative hulls, and no
+    // claim bigger than the biggest hit the fight can produce.
+    if (!Number.isFinite(dmg) || dmg <= 0) return;
+    dmg = Math.min(dmg, MAX_CLAIMED_CV_HIT);
     // A wingman's hit goes to the host as well: the host owns the hull, and the
     // snapshot it sends back settles the damage a packet later.
     if (this.mirror) this.carrierHitOut += dmg;
-    cv.hp = Math.max(0, cv.hp - dmg);
+    cv.hp = Math.max(0, Math.min(CV_HP, cv.hp - dmg));
     this.hitT = HIT_FLASH;
     this.flash(at);
     if (cv.hp <= 0) {

@@ -74,11 +74,18 @@ Controls, Graphics, Audio and Interface tabs.
   cannot be reached. Guidance, racks and release cadence stay the same.
 - Head-to-head uses the existing room codes and PeerJS connection. Open a room,
   have another pilot join, then the host selects Head-to-head and Start Air Battle.
-  Pilots spawn airborne apart, have five seconds of protection, and respawn
-  three seconds after a death. Incoming tracers and missile plumes are visible, with a missile warning.
+  Pilots spawn airborne apart on **two carriers drawn from the match id** (one
+  boat per side, so both ends of the room agree without another packet), have
+  five seconds of protection, and respawn three seconds after a death. A death
+  costs the hull but **not the ordnance**: only landing re-arms the racks. Incoming tracers and missile plumes are visible, with a missile warning.
   Guns and missiles damage player aircraft; the
   host owns hull, kills, deaths and life numbers. Late arrivals can join an
   active battle from the lobby. Host takeover preserves the scoreboard.
+- In flight, **O** opens settings without leaving the cockpit, **M** throws up
+  the tactical map (the minimap, scaled to fill the view), and **Enter** opens
+  the room radio — Enter sends, Escape closes it without pausing. The green
+  angle ladder and the gun cross can each be switched off in Settings →
+  Interface for a clean view.
 - Trees, rocks and airbase details are procedural. Instanced scenery is split
   into chunks for culling and scaled by graphics quality, with no external assets.
 
@@ -94,6 +101,8 @@ npm run test:aim
 npm run test:landing
 npm run test:bomb-envelope
 npm run test:versus
+npm run test:settings
+npm run test:net-authority
 npm run test:mp
 npm run check:standalone
 ```

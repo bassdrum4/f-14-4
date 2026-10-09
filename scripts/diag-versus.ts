@@ -1,6 +1,6 @@
 import { Scene, Vector3, InstancedMesh } from 'three';
 import { RemoteWeapons } from '../src/render/remoteWeapons';
-import { BattleReferee, type BattleAction } from '../src/net/versus';
+import { BattleReferee, battleCarrierPair, type BattleAction } from '../src/net/versus';
 import { Dogfight } from '../src/sim/dogfight';
 import { ExplosionField } from '../src/render/effects';
 import { spawnAircraft } from '../src/sim/flight';
@@ -49,4 +49,40 @@ check('an incoming remote missile raises the warning',remoteWeapons.incoming);
 check('remote missiles have a visible airframe batch',(visuals.children[1] as InstancedMesh).count===1);
 remoteWeapons.clear();check('respawn clears old remote weapon visuals',(visuals.children[0] as InstancedMesh).count===0&&!remoteWeapons.incoming);
 remoteWeapons.dispose();
+// --- head-to-head start: two carriers, one per side -----------------------
+let distinct = true, inRange = true;
+const seen = new Set<string>();
+for (let m = 1; m <= 64; m++) {
+  const [a, b] = battleCarrierPair(m * 137 + 11, 8);
+  if (a === b) distinct = false;
+  if (a < 0 || a > 7 || b < 0 || b > 7) inRange = false;
+  seen.add(`${a}-${b}`);
+}
+check('the two start carriers are distinct and in range', distinct && inRange);
+check('the pair varies with the match id', seen.size > 8);
+check('the pair is stable for one match', JSON.stringify(battleCarrierPair(137 * 9, 8)) === JSON.stringify(battleCarrierPair(137 * 9, 8)));
+const [twoA, twoB] = battleCarrierPair(4, 2);
+check('a two-carrier fleet puts the sides on different boats', twoA !== twoB);
+
+// --- head-to-head: dying costs the hull, not the ordnance -----------------
+const racksScene = new Scene();
+const racks = new Dogfight(racksScene, new ExplosionField(racksScene, 'low'));
+const flyer = spawnAircraft('carrier', 0);
+flyer.onGround = false; flyer.airborne = true; flyer.gearT = 0;
+racks.beginVersus(flyer);
+racks.setOpponents([{ id: 'b', life: 1, pos: flyer.pos.clone().add(new Vector3(0, 0, -400)), vel: new Vector3() }]);
+racks.requestMissile(flyer);
+for (let i = 0; i < 60; i++) { flyer.time += 1 / 120; racks.step(1 / 120, flyer, false); }
+check('a missile leaves the rail', racks.hud(flyer).missiles === racks.hud(flyer).missilesMax - 1);
+const respawned = spawnAircraft('carrier', 0);
+respawned.onGround = false; respawned.airborne = true; respawned.gearT = 0;
+racks.beginVersus(respawned, false);
+check('a respawn keeps the missiles you have left', racks.hud(respawned).missiles === 1 && racks.hud(respawned).missilesMax === 2);
+check('a respawn still gives the hull back', racks.hud(respawned).hull === 100);
+const launched = spawnAircraft('carrier', 0);
+launched.onGround = false; launched.airborne = true; launched.gearT = 0;
+racks.beginVersus(launched, true);
+check('a fresh launch arms the racks', racks.hud(launched).missiles === racks.hud(launched).missilesMax);
+racks.dispose();
+
 process.exit(failures?1:0);

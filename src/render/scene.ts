@@ -172,13 +172,23 @@ export function buildOcean(): THREE.Mesh {
     // heaving, instead of as a flat sheet with wavetops on it.
     bumpScale: 0.5,
     roughnessMap: waves,
-    // The sea is a single 2-triangle sheet 240 km across, and the seabed
-    // shelves up close under it. Depth precision collapses over those
-    // distances, so without a bias the two surfaces trade the depth test
-    // frame by frame and the water appears to jump and flicker.
+    // The sea is a single 2-triangle sheet 240 km across while the camera's far
+    // plane is 70 km, so depth precision over the surface is coarse: a beach or
+    // a hull a few metres off the waterline lands in the same depth bucket as
+    // the sea and the two trade the test frame by frame.
+    //
+    // The bias is POSITIVE — the sea is pushed away from the viewer — so land
+    // and ships win every tie and water can never wash over an island, a beach
+    // or a ship's hull. (Negative bias, the old value, fixed the far seabed
+    // poking through the swell by handing every tie to the sea, which covered
+    // shorelines and waterlines instead: the worse artefact of the two.)
     polygonOffset: true,
-    polygonOffsetFactor: -4,
-    polygonOffsetUnits: -8,
+    // A constant bias, with no slope term: the factor multiplies the depth
+    // gradient, and a grazing sea surface has an enormous one, so any non-zero
+    // factor throws the water hundreds of metres off its true depth near the
+    // horizon. Eight depth units is enough to lose a tie and nothing else.
+    polygonOffsetFactor: 0,
+    polygonOffsetUnits: 8,
   });
   const mesh = new THREE.Mesh(geom, mat);
   mesh.position.y = 0;

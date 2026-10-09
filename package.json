@@ -8,6 +8,7 @@
     "build": "vite build",
     "typecheck": "tsc -b --noEmit",
     "test:accounts": "bun scripts/diag-accounts.ts",
+    "test:settings": "bun scripts/diag-settings.ts",
     "test:sim": "bun scripts/simtest.ts",
     "test:dogfight": "bun scripts/diag-dogfight.ts",
     "test:strike": "bun scripts/diag-strike.ts",
@@ -31,6 +32,7 @@
     "check:standalone": "node scripts/check-singlefile.mjs",
     "test:aim": "bun scripts/diag-aim.ts",
     "test:versus": "bun scripts/diag-versus.ts",
+    "test:net-authority": "bun scripts/diag-net-authority.ts",
     "test:bomb-envelope": "bun scripts/diag-bomb-envelope.ts"
   },
   "dependencies": {

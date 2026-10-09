@@ -1,5 +1,5 @@
-// Verify settings persistence, including the new daylight/minimap fields and
-// resilience against old or corrupt stored data.
+// Verify settings persistence, including daylight/minimap and the HUD overlay
+// toggles, and resilience against old or corrupt stored data.
 // Usage: bun scripts/diag-settings.ts
 
 // minimal localStorage shim
@@ -25,9 +25,12 @@ const KEY = "f14sim.settings.v1";
 // defaults
 store.clear();
 const d = loadSettings();
-check("defaults include daylight mode", d.daylight === "live", d.daylight);
+check("defaults include daylight mode", d.daylight === "fixed", d.daylight);
 check("defaults include a time of day", typeof d.timeOfDay === "number" && d.timeOfDay >= 0 && d.timeOfDay <= 24, String(d.timeOfDay));
 check("defaults show the minimap", d.minimap === true, String(d.minimap));
+check("defaults show the angle ladder", d.hudLadder === true, String(d.hudLadder));
+check("defaults show the gun cross", d.hudGunCross === true, String(d.hudGunCross));
+check("the in-flight settings key is bound", d.bindings.settings === "KeyO", d.bindings.settings);
 check("every daylight mode is labelled", Object.keys(DAYLIGHT_LABELS).length === 3);
 
 // A first run mints a callsign so a guest has a stable name, but never a room
@@ -47,33 +50,41 @@ const s = defaultSettings();
 s.daylight = "cycle";
 s.timeOfDay = 5.75;
 s.minimap = false;
+s.hudLadder = false;
+s.hudGunCross = false;
 saveSettings(s);
 const back = loadSettings();
 check("daylight round-trips", back.daylight === "cycle", back.daylight);
 check("time of day round-trips", Math.abs(back.timeOfDay - 5.75) < 1e-9, String(back.timeOfDay));
 check("minimap flag round-trips", back.minimap === false, String(back.minimap));
+check("angle ladder flag round-trips", back.hudLadder === false, String(back.hudLadder));
+check("gun cross flag round-trips", back.hudGunCross === false, String(back.hudGunCross));
 check("bindings still round-trip", JSON.stringify(back.bindings) === JSON.stringify(DEFAULT_BINDINGS));
 
 // old stored data without the new fields must not break
 store.set(KEY, JSON.stringify({ volume: 0.5, quality: "high", bindings: { pitchUp: "KeyI" } }));
 const old = loadSettings();
-check("old settings load with daylight defaults", old.daylight === "live", old.daylight);
+check("old settings load with daylight defaults", old.daylight === "fixed", old.daylight);
 check("old settings keep their own values", old.quality === "high" && old.volume === 0.5);
 check("old settings keep custom bindings", old.bindings.pitchUp === "KeyI", old.bindings.pitchUp);
 check("old settings fill in missing bindings", old.bindings.rollLeft === DEFAULT_BINDINGS.rollLeft);
+check("old settings show both overlays", old.hudLadder === true && old.hudGunCross === true);
+check("old settings gain the settings key", old.bindings.settings === "KeyO", old.bindings.settings);
 
 // corrupt values get clamped
 store.set(KEY, JSON.stringify({ daylight: "nonsense", timeOfDay: 99, minimap: "yes", volume: 5 }));
 const bad = loadSettings();
-check("invalid daylight falls back", bad.daylight === "live", bad.daylight);
+check("invalid daylight falls back", bad.daylight === "fixed", bad.daylight);
 check("out-of-range time clamps into 0..24", bad.timeOfDay >= 0 && bad.timeOfDay <= 24, String(bad.timeOfDay));
 check("non-boolean minimap falls back", bad.minimap === true, String(bad.minimap));
+check("non-boolean overlays fall back on", bad.hudLadder === true && bad.hudGunCross === true);
 check("out-of-range volume clamps", bad.volume >= 0 && bad.volume <= 1, String(bad.volume));
 
 // garbage
 store.set(KEY, "{not json");
 const junk = loadSettings();
-check("corrupt storage falls back to defaults", junk.daylight === "live" && junk.minimap === true);
+check("corrupt storage falls back to defaults",
+  junk.daylight === defaultSettings().daylight && junk.minimap === defaultSettings().minimap);
 
 console.log(fails === 0 ? "\nALL SETTINGS CHECKS PASSED" : `\n${fails} FAILURES`);
 process.exit(fails === 0 ? 0 : 1);

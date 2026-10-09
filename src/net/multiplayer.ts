@@ -980,19 +980,36 @@ export class Multiplayer {
         if (!this.host && (conn.peer === hostPeerId(this.room) || this.pilots.get(conn.peer)?.host) && msg.snapshot && Array.isArray(msg.snapshot.pilots) && msg.snapshot.pilots.length <= 32) this.handlers.onBattleState?.(msg.snapshot);
         break;
       case "hit":
-        if (typeof msg.id === "number" && typeof msg.dmg === "number") {
+        // Damage claims are only accepted from a pilot on the roster, and only
+        // as a real positive number: a NaN or a negative used to poison the
+        // bandit's hull (an unkillable bandit) or heal it.
+        if (
+          this.pilots.has(conn.peer) &&
+          Number.isInteger(msg.id) &&
+          Number.isFinite(msg.dmg) &&
+          msg.dmg > 0
+        ) {
           this.handlers.onHit?.(msg.id, msg.dmg);
         }
         break;
       case "cvhit":
-        if (typeof msg.dmg === "number") this.handlers.onCarrierHit?.(msg.dmg);
+        if (this.pilots.has(conn.peer) && Number.isFinite(msg.dmg) && msg.dmg > 0) {
+          this.handlers.onCarrierHit?.(msg.dmg);
+        }
         break;
       case "bye":
-        if (msg.id) this.drop(msg.id, false);
+        // The connection says who is leaving: trusting the id in the payload
+        // let any pilot eject a wingman from the roster mid-flight.
+        this.drop(conn.peer, false);
         break;
       case "chat": {
         const text = sanitizeChat(msg.text);
-        if (text) this.handlers.onChat?.({ from: sanitizeName(msg.from), text });
+        // The callsign comes from the roster, not the packet, so nobody can
+        // speak for another pilot on the radio.
+        if (text) {
+          const pilot = this.pilots.get(conn.peer);
+          this.handlers.onChat?.({ from: pilot ? pilot.name : sanitizeName(msg.from), text });
+        }
         break;
       }
       case "name":
