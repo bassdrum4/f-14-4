@@ -927,9 +927,9 @@ function PitchLadder({ hud }: { hud: HudSnapshot }) {
       if (!cv) return;
       const dpr = Math.min(window.devicePixelRatio, 2);
       const w = cv.clientWidth, h = cv.clientHeight;
-      if (cv.width !== w * dpr || cv.height !== h * dpr) {
-        cv.width = w * dpr;
-        cv.height = h * dpr;
+      if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+        cv.width = Math.round(w * dpr);
+        cv.height = Math.round(h * dpr);
       }
       const ctx = cv.getContext("2d");
       if (!ctx) return;

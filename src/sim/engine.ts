@@ -334,6 +334,7 @@ export class Sim {
   private battleDeadLife = -1;
   private battleTickAt = 0;
   private battleReadyAt = 0;
+  private combatRoster: BattleSnapshot | null = null;
   private netListeners = new Set<(s: NetState) => void>();
   /** The room radio: newest last, capped so a long session cannot grow it. */
   private chatLog: ChatMsg[] = [];
@@ -365,6 +366,7 @@ export class Sim {
       settings.aircraft,
     );
     this.renderer.applyQuality(settings.quality);
+    this.renderer.setAdaptiveResolution(settings.adaptiveResolution);
     this.input = new InputManager(settings);
     // honour the persisted volume from the first frame — applySettings only
     // runs when the user touches a setting, so the constructor must seed it.
@@ -409,6 +411,7 @@ export class Sim {
 
   applySettings(s: Settings): void {
     const qualityChanged = s.quality !== this.settings.quality;
+    const resolutionChanged = s.adaptiveResolution !== this.settings.adaptiveResolution;
     const daylightChanged =
       s.daylight !== this.settings.daylight || s.timeOfDay !== this.settings.timeOfDay;
     const modeChanged = s.missionMode !== this.settings.missionMode;
@@ -420,6 +423,7 @@ export class Sim {
       this.renderer.applyQuality(s.quality);
       this.explosions.setQuality(s.quality);
     }
+    if (resolutionChanged) this.renderer.setAdaptiveResolution(s.adaptiveResolution);
     if (daylightChanged) this.dayHours = this.resolveDayHours(s);
     // Changing airframe: rebuild the mesh and re-park the jet on the new type.
     if (aircraftChanged) {
@@ -914,6 +918,7 @@ export class Sim {
 
   private loop = (nowMs: number): void => {
     this.raf = requestAnimationFrame(this.loop);
+    this.renderer.updateFrameBudget(nowMs);
     const now = nowMs / 1000;
     const frameDt = Math.min(0.05, Math.max(0.0001, now - this.last));
     // Advance the clock every frame (including the menu), otherwise the
@@ -939,7 +944,11 @@ export class Sim {
     this.advanceDaylight(frameDt);
     // Multiplayer: interpolate the wingmen and hand our own pose to the net
     // layer, which sends it at its own fixed rate rather than per frame.
-    this.remoteFleet.setCombatPilots(this.battleActive ? this.battle.pilots.filter(p => p.ready && p.hp > 0).map(p => p.id) : null);
+    const roster = this.battleActive ? this.battle : null;
+    if (roster !== this.combatRoster) {
+      this.combatRoster = roster;
+      this.remoteFleet.setCombatPilots(roster ? roster.pilots.filter(p => p.ready && p.hp > 0).map(p => p.id) : null);
+    }
     this.remoteFleet.update(nowMs);
     this.net.publish(this.buildPose());
     this.syncFight();

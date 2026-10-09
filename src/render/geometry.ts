@@ -104,18 +104,19 @@ function finishShip(
 ): void {
   addAirLights(group, spots, wings);
   group.traverse((o) => {
-    o.frustumCulled = false;
+    // Mesh bounds follow the animated parent transforms. Off-screen aircraft
+    // must be culled from both the colour pass and the sun's shadow pass.
+    o.frustumCulled = true;
     const mesh = o as THREE.Mesh;
     if (mesh.isMesh) {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
     }
   });
-  // Light sprites are screen-facing points, not geometry: they must not throw
-  // shadows and they must stay visible from every angle.
+  // Light sprites face the camera from every angle, but still cull off-screen.
   group.traverse((o) => {
     if ((o as THREE.Sprite).isSprite) {
-      o.frustumCulled = false;
+      o.frustumCulled = true;
       o.renderOrder = 4;
     }
   });

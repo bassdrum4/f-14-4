@@ -39,6 +39,27 @@ The result preserves the existing *features and deployment format*, but its
 HTML need not be byte-for-byte identical to the old build because this source
 contains newer fixes and has been rebuilt from source.
 
+## Browser performance (v1.1.1)
+
+Aircraft and lamp instances now use camera and shadow-frustum culling. Deck
+lights avoid the shadow pass, static world transforms are computed once, and
+small scenery is hidden beyond nearby chunks. Combat contacts and terrain
+physics remain available at their existing ranges.
+
+Settings → Graphics includes **Adaptive resolution**, enabled by default. It
+reduces only the rendered pixel count during sustained slow frames, then
+recovers gradually. Disable it to keep the selected resolution fixed. It does
+not alter the 120 Hz flight/weapon simulation, host authority or network timers.
+
+Ordinary flight sends poses near 30 Hz; urgent switches and manoeuvres may
+send at 60 Hz. Congested links skip superseded motion updates and resume with
+the latest pose while combat and room controls remain reliable. Other pilots'
+links continue independently. Existing remote interpolation is preserved.
+
+Run `bun scripts/diag-performance.ts` and `bun scripts/diag-mp-flow.ts` locally
+to check rendering policy, sustained send rates and congestion recovery. These
+checks are not connected to GitHub Actions.
+
 ## Source layout
 
 - `src/sim/aircraft.ts` — F-14A, F/A-18C, A-6E

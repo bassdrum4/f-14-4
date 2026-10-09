@@ -126,6 +126,8 @@ const controlLog: string[] = [];
 
 class MockConn {
   open = false;
+  dataChannel = { bufferedAmount: 0 };
+  bufferSize = 0;
   pair: MockConn | null = null;
   private handlers = new Map<string, Handler[]>();
 
@@ -777,6 +779,49 @@ check("a non-host cannot publish battle scores", skipper.battleStates.length ===
 joiner.net.setMode("cruise");
 await flush();
 check("a non-host cannot change the room mission", skipper.modes[skipper.modes.length - 1] !== "cruise");
+
+console.log("\n[motion rate and congested links]");
+const realNow = performance.now;
+let renderNow = 100000;
+performance.now = () => renderNow;
+const flying = emptyPose();
+flying.vx = flying.speed = 360;
+const motionBefore = joiner.poseCount;
+for (let i = 0; i < 120; i++) {
+  renderNow += 1000 / 120;
+  flying.x += 360 / 120;
+  skipper.net.publish(flying);
+}
+await flush();
+const sends = joiner.poseCount - motionBefore;
+check("fast cruise does not become a per-frame stream", sends >= 24 && sends <= 31, `${sends} poses in 1 second at 120 render Hz`);
+renderNow += 18;
+flying.flags = 128;
+const switchBefore = joiner.poseCount;
+skipper.net.publish(flying);
+await flush();
+check("an urgent switch still sends before the ordinary interval", joiner.poseCount === switchBefore + 1);
+const links = (skipper.net as unknown as { conns: Map<string, MockConn> }).conns;
+const slow = links.get(joiner.net.snapshot.self)!;
+slow.dataChannel.bufferedAmount = 4096;
+const slowBefore = joiner.poseCount, healthyBefore = lateEnemy.poseCount;
+for (let i = 0; i < 10; i++) {
+  renderNow += 40; flying.x += 14.4; skipper.net.publish(flying);
+}
+await flush();
+check("a blocked link does not accumulate obsolete poses", joiner.poseCount === slowBefore);
+check("a blocked pilot does not delay healthy peers", lateEnemy.poseCount > healthyBefore);
+const battleBefore = joiner.battleStates.length;
+skipper.net.publishBattle(battleState);
+await flush();
+check("authoritative combat messages remain reliable under motion backpressure", joiner.battleStates.length === battleBefore + 1);
+slow.dataChannel.bufferedAmount = 0; slow.bufferSize = 9;
+renderNow += 40; skipper.net.publish(flying); await flush();
+check("PeerJS's own queued messages also block stale motion", joiner.poseCount === slowBefore);
+slow.bufferSize = 0;
+renderNow += 40; flying.x += 14.4; skipper.net.publish(flying); await flush();
+check("a drained channel resumes with the newest pose", joiner.poseCount === slowBefore + 1 && Math.abs(joiner.poses.get(skipper.net.snapshot.self)!.x - flying.x) < .001);
+performance.now = realNow;
 
 for (const p of [host, wing, third, late, early, lateHost, clash, lead, numberTwo, scout, wingTwo, skipper, joiner, lateEnemy]) p.net.dispose();
 
