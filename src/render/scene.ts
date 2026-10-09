@@ -430,6 +430,21 @@ function deckTexture(c: CarrierDef): THREE.CanvasTexture {
   return tex;
 }
 
+/**
+ * How thick a rendered arresting pendant is, in metres.
+ *
+ * A real cross-deck pendant is three quarters of an inch, which at these
+ * distances is a sub-pixel line nobody has ever seen from the cockpit — the
+ * first version of this shipped at 0.24 m and read as a painted mark. This is
+ * a deliberate exaggeration so the cable is an object you can line up with,
+ * not a detail you have to be told is there.
+ */
+export const WIRE_THICKNESS = 0.6;
+/** How far the pendant is held above the deck, in metres. */
+export const WIRE_LIFT = 0.6;
+/** Width of the deck-edge shoe propping each pendant up, in metres. */
+export const WIRE_SHOE = 1.6;
+
 export function buildCarrier(c: CarrierDef): THREE.Group {
   const g = new THREE.Group();
 
@@ -522,19 +537,45 @@ export function buildCarrier(c: CarrierDef): THREE.Group {
 
   // Arresting wires, slung across the angled landing strip at the same deck
   // coordinates the sim uses to catch them (world.ts STRIP).
+  //
+  // These used to be 0x2b2b2b — three channels away from the #2a2f34 landing
+  // strip painted underneath them, so the cable was the same colour as the
+  // deck it lay on and you only ever saw the white wire lines. Taut steel,
+  // lifted clear of the deck on its end fittings, is what makes a pendant
+  // read as a raised cable from the bird instead of as another painted mark.
   const th = (c.landingAngleDeg * Math.PI) / 180;
   const cos = Math.cos(th);
   const sin = Math.sin(th);
-  const wireMat = new THREE.MeshStandardMaterial({ color: 0x2b2b2b });
-  const wireGeom = new THREE.BoxGeometry(0.22, 0.22, STRIP.halfWidth * 2);
+  const wireMat = new THREE.MeshStandardMaterial({
+    color: 0xaab2ba,
+    metalness: 0.7,
+    roughness: 0.35,
+  });
+  const wireGeom = new THREE.BoxGeometry(WIRE_THICKNESS, WIRE_THICKNESS, STRIP.halfWidth * 2);
+  // The deck-edge shoes each pendant is propped on: they are what puts the
+  // cable in the air, and they give the shadow something to be cast from.
+  const shoeGeom = new THREE.BoxGeometry(WIRE_SHOE, WIRE_LIFT, WIRE_SHOE);
+  const shoeMat = new THREE.MeshStandardMaterial({ color: 0x2f343a, roughness: 0.85 });
   for (let i = 0; i < c.wireCount; i++) {
     const s = STRIP.wireFirstS + i * c.wireSpacing;
     const along = STRIP.startAlong + s * cos;
     const across = STRIP.startAcross - s * sin;
     const seg = new THREE.Mesh(wireGeom, wireMat);
-    seg.position.set(along, deckTop + 0.35, across);
+    // Named, not guessed at: the island's floodlights are also 1.6 x 0.6 x
+    // 1.6, so a test that identified these by their dimensions counted them.
+    seg.name = `wire-${i + 1}`;
+    seg.position.set(along, deckTop + WIRE_LIFT, across);
     seg.rotation.y = th; // long axis (+Z) rotated to run across the strip
     g.add(seg);
+    // Local +Z runs (sin, cos) across the strip after the rotation, so both
+    // ends land on the deck at the strip's edges — where the shoes sit.
+    for (const side of [-1, 1]) {
+      const off = side * STRIP.halfWidth;
+      const shoe = new THREE.Mesh(shoeGeom, shoeMat);
+      shoe.name = `wire-shoe-${i + 1}-${side < 0 ? "p" : "s"}`;
+      shoe.position.set(along + off * sin, deckTop + WIRE_LIFT / 2, across + off * cos);
+      g.add(shoe);
+    }
   }
 
   // Place the ship in the ocean and align its local frame with the sim deck

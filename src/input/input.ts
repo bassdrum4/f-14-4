@@ -111,7 +111,6 @@ export class InputManager {
       this.capture(e.code);
       return;
     }
-    if (e.repeat) return;
     // Menu controls keep their standard keyboard behaviour: arrows drive
     // sliders/selects and Space activates the focused button instead of
     // being eaten by the flight controls (and never reaching the widget).
@@ -131,7 +130,12 @@ export class InputManager {
     }
     const code = e.code;
     const action = this.actionFor(code);
+    // A bound key is prevented whether or not it is an auto-repeat: the repeat
+    // of ArrowUp is a page scroll if nobody eats it, and a held nav key
+    // repeats for as long as the pilot holds it. Only the *edge* below is
+    // skipped on a repeat, so one press stays one press.
     if (action) e.preventDefault();
+    if (e.repeat) return;
     this.down.add(code);
     if (action && !this.consumed.has(action)) {
       this.pressedQueue.add(action);

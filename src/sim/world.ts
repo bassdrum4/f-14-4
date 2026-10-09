@@ -378,6 +378,23 @@ export function deckAxes(headingDeg: number): { fwd: [number, number]; right: [n
   return { fwd, right };
 }
 
+/**
+ * Heading in degrees (0 = north, clockwise) for a body whose forward axis is
+ * -Z — the convention every aircraft here uses. The map draws everything
+ * north-up, so this is the number that turns a marker into an arrow.
+ */
+export function headingOfQuat(q: { x: number; y: number; z: number; w: number }): number {
+  const fx = -2 * (q.x * q.z + q.y * q.w);
+  const fz = -(1 - 2 * (q.x * q.x + q.y * q.y));
+  return ((Math.atan2(fx, -fz) * 180) / Math.PI + 360) % 360;
+}
+
+/** Heading in degrees from a velocity vector (0 = north). Unmoving = 0. */
+export function headingOfVel(v: { x: number; z: number }): number {
+  if (v.x * v.x + v.z * v.z < 25) return 0;
+  return ((Math.atan2(v.x, -v.z) * 180) / Math.PI + 360) % 360;
+}
+
 /** Convert world XZ into a carrier's deck-local (along, across) meters. */
 export function worldToDeck(c: CarrierDef, x: number, z: number): [number, number] {
   const { fwd, right } = deckAxes(c.headingDeg);

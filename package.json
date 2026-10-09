@@ -25,6 +25,8 @@
     "test:chat": "bun scripts/diag-chat.ts",
     "test:enemysync": "bun scripts/diag-enemy-sync.ts",
     "test:landing": "bun scripts/diag-landing.ts",
+    "test:navkeys": "bun scripts/diag-navkeys.ts",
+    "test:map": "bun scripts/diag-map.ts",
     "test:climb": "bun scripts/diag-climb.ts",
     "test:feedback": "bun scripts/diag-feedback.ts",
     "test:feedback:gs": "bun scripts/diag-feedback-gs.ts",

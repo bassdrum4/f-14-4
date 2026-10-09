@@ -51,6 +51,8 @@ import {
   carriers,
   deckAxes,
   groundAt,
+  headingOfQuat,
+  headingOfVel,
   isOnDeck,
   makeCarrier,
   type CarrierDef,
@@ -402,7 +404,8 @@ export interface DogfightHud {
   missilesMax: number;
   nearestKm: number;
   nearestBrgDeg: number;
-  markers: Array<{ x: number; z: number }>;
+  /** Map markers: where it is, and which way it is pointed. */
+  markers: Array<{ x: number; z: number; headingDeg: number }>;
   /** A bandit has rounds in the air right now (within the hold window). */
   threat: boolean;
   /** The player's trigger is down (the muzzle flash is lit). */
@@ -438,6 +441,8 @@ export interface DogfightHud {
     status: CarrierStatus;
     /** Aircraft still to launch: queued plus rolling on the cats. */
     inbound: number;
+    /** Which way the boat is steaming, for the map. */
+    headingDeg: number;
   } | null;
 }
 
@@ -1397,6 +1402,7 @@ export class Dogfight {
         hp: Math.max(0, Math.round(cv.hp)),
         status: cv.status,
         inbound: this.launchQueued + this.bandits.filter((b) => b.catT >= 0).length,
+        headingDeg: cv.def.headingDeg,
       };
     }
     return {
@@ -1408,7 +1414,9 @@ export class Dogfight {
       bandits: this.versus ? this.opponents.length : this.bandits.length,
       nearestKm: nearest ? nearestD / 1000 : 0,
       nearestBrgDeg: nearest ? (Math.atan2(dx, -dz) * 180) / Math.PI : 0,
-      markers: this.versus ? this.opponents.map(b => ({ x: b.pos.x, z: b.pos.z })) : this.bandits.map((b) => ({ x: b.pos.x, z: b.pos.z })),
+      markers: this.versus
+        ? this.opponents.map(b => ({ x: b.pos.x, z: b.pos.z, headingDeg: headingOfVel(b.vel) }))
+        : this.bandits.map((b) => ({ x: b.pos.x, z: b.pos.z, headingDeg: headingOfQuat(b.quat) })),
       threat: this.threatT > 0,
       firing: this.gunLive,
       hitT: this.hitT / HIT_FLASH,
@@ -1448,7 +1456,7 @@ export class Dogfight {
     let ndz = 0;
     let alive = 0;
     const spots: DogfightHud["spots"] = [];
-    const markers: Array<{ x: number; z: number }> = [];
+    const markers: Array<{ x: number; z: number; headingDeg: number }> = [];
     for (const t of this.strikeTargets) {
       if (t.dead) continue;
       alive++;
@@ -1460,7 +1468,7 @@ export class Dogfight {
       }
       const ty = t.pos.y + 6;
       spots.push({ x: t.pos.x, y: ty, z: t.pos.z, lx: t.pos.x, ly: ty, lz: t.pos.z, km: d / 1000 });
-      markers.push({ x: t.pos.x, z: t.pos.z });
+      markers.push({ x: t.pos.x, z: t.pos.z, headingDeg: t.headingDeg });
     }
     return {
       active: this.active,

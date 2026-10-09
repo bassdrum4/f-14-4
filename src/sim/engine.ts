@@ -113,9 +113,12 @@ export interface HudSnapshot {
   playerX: number;
   playerZ: number;
   playerHeadingDeg: number;
-  carrierMarkers: Array<{ name: string; x: number; z: number; near: boolean }>;
+  carrierMarkers: Array<{ name: string; x: number; z: number; near: boolean; headingDeg: number; lengthM: number }>;
   fieldX: number;
   fieldZ: number;
+  /** Runway heading + length, so the map can draw the field as it lies. */
+  fieldHeadingDeg: number;
+  fieldLengthM: number;
   worldExtent: number;
   localHour: number;
   dayPhase: DayPhase;
@@ -130,7 +133,7 @@ export interface HudSnapshot {
   dfBandits: number;
   dfNearestKm: number;
   dfNearestBrgDeg: number;
-  enemyMarkers: Array<{ x: number; z: number }>;
+  enemyMarkers: Array<{ x: number; z: number; headingDeg: number }>;
   dfThreat: boolean;
   /** The player's trigger is down (muzzle flash + bright bullet ladder). */
   gunFiring: boolean;
@@ -179,6 +182,8 @@ export interface RemoteContact {
   z: number;
   km: number;
   brgDeg: number;
+  /** Which way they are pointed, for the tactical map's chevrons. */
+  headingDeg: number;
 }
 
 /** The enemy boat, as the HUD sees it. */
@@ -192,6 +197,8 @@ export interface HostileCarrierHud {
   hp: number;
   status: CarrierStatus;
   inbound: number;
+  /** Which way the boat is steaming, for the tactical map. */
+  headingDeg: number;
 }
 
 const FIXED_DT = 1 / 120;
@@ -238,7 +245,7 @@ function defaultHud(): HudSnapshot {
     bearingFieldDeg: 0, worldLabel: "Procedural islands", worldSeed: DEFAULT_SEED,
     radarAltFt: 0,
     playerX: 0, playerZ: 0, playerHeadingDeg: 0, carrierMarkers: [],
-    fieldX: 0, fieldZ: 0, worldExtent: 12000,
+    fieldX: 0, fieldZ: 0, fieldHeadingDeg: 0, fieldLengthM: 0, worldExtent: 12000,
     localHour: 12, dayPhase: "day",
     dfActive: false, dfStrike: false, dfHull: 100, dfKills: 0, dfWave: 1, dfBandits: 0,
     dfNearestKm: 0, dfNearestBrgDeg: 0, enemyMarkers: [],
@@ -1532,9 +1539,13 @@ export class Sim {
         x: c.x,
         z: c.z,
         near: c.name === nearest.name,
+        headingDeg: c.headingDeg,
+        lengthM: c.deckLength,
       })),
       fieldX: af.centerX,
       fieldZ: af.centerZ,
+      fieldHeadingDeg: af.headingDeg,
+      fieldLengthM: af.runwayLength,
       worldExtent: EXTENT,
       localHour: this.dayHours,
       dayPhase: this.dayPhase,

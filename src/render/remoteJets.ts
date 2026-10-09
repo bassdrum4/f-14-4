@@ -13,6 +13,7 @@
 import * as THREE from "three";
 import { buildAircraft, type TomcatMesh } from "./geometry";
 import type { AircraftId } from "../sim/aircraft";
+import { headingOfQuat } from "../sim/world";
 
 /** One decoded state frame from a remote pilot. */
 export interface RemotePose {
@@ -281,8 +282,8 @@ export class RemoteFleet {
     x: number,
     y: number,
     z: number,
-  ): Array<{ id: string; name: string; x: number; z: number; km: number; brgDeg: number }> {
-    const out: Array<{ id: string; name: string; x: number; z: number; km: number; brgDeg: number }> = [];
+  ): Array<{ id: string; name: string; x: number; z: number; km: number; brgDeg: number; headingDeg: number }> {
+    const out: Array<{ id: string; name: string; x: number; z: number; km: number; brgDeg: number; headingDeg: number }> = [];
     for (const r of this.remotes.values()) {
       if (!r.buf.length || performance.now() - r.lastAt > GONE_MS) continue;
       const p = r.buf[r.buf.length - 1].p;
@@ -294,6 +295,8 @@ export class RemoteFleet {
         z: p.z,
         km: Math.hypot(p.x - x, p.y - y, p.z - z) / 1000,
         brgDeg: (brg + 360) % 360,
+        // Which way they are pointing, for the tactical map's chevrons.
+        headingDeg: headingOfQuat({ x: p.qx, y: p.qy, z: p.qz, w: p.qw }),
       });
     }
     return out.sort((a, b) => a.km - b.km);

@@ -187,10 +187,17 @@ const ARREST_DECEL = 27; // m/s^2 (~2.75 g)
 
 // --- the trap ---
 /** How hard a jet may arrive before the gear gives way (m/s of sink, negative
- *  = descending). 11 m/s is ~2165 fpm: a punishing but recoverable arrival,
- *  and it leaves the 4 deg glideslope (about 4.5 m/s at on-speed) plenty of
- *  room to be flown imperfectly. Anything gentler than this lands. */
-const HARD_SINK = -11;
+ *  = descending). 15 m/s is ~2950 fpm. The 4 deg glideslope asks for about
+ *  4.5 m/s at on-speed, so this is over three times the sink a flown approach
+ *  produces — a sloppy, over-controlled, slightly slow arrival lands, and only
+ *  an arrival the strut genuinely cannot take does not. Anything at or inside
+ *  this lands; anything past it does not. */
+export const HARD_SINK = -15;
+/** Forward speed at which arriving stops being survivable (m/s), independent of
+ *  sink. A jet that reaches the deck at 120 m/s (233 kt) is doing nearly twice
+ *  a trap, and no amount of gentle descent makes that a landing: the tyres and
+ *  the hook both have a limit, and this is it. */
+export const IMPACT_SPEED = 120;
 /** Gear contact during a mild bounce can still catch a wire. */
 const TRAP_MAX_CLIMB = 3;
 
@@ -786,6 +793,7 @@ export function stepAircraft(st: AircraftState, inp: FlightInput, dt: number): v
   // --- integrate ---
   st.vel.addScaledVector(accWorld, dt / spec.mass);
   st.pos.addScaledVector(st.vel, dt);
+  holdOnDeck(st);
 
   // A tumbling wreck answers to no control surface: aerodynamic restoring
   // moments nearly vanish, so the tumble from the fatal hit keeps going.
@@ -851,6 +859,45 @@ function groundRef(st: AircraftState): number {
   return groundAt(st.pos.x, st.pos.z).y;
 }
 
+/**
+ * The boat is a floor, not a cliff. A jet that arrived with its gear down and
+ * is rolling out does not get to drive over the side and drown: the deck edge
+ * is a rail. Only the outward part of the velocity is taken off, so the jet
+ * still rolls along the edge the way friction would leave it, instead of
+ * stopping dead the moment it is reached.
+ */
+const ON_DECK_MARGIN = 0.05; // metres inside the hull edge the roll is stopped at
+
+function holdOnDeck(st: AircraftState): void {
+  if (st.deckRoll === undefined) return;
+  const c = carriers()[st.deckRoll];
+  if (!c) return;
+  const [along, across] = worldToDeck(c, st.pos.x, st.pos.z);
+  // The limit is pulled in by a hair: clamping to the exact edge puts the jet
+  // back on a boundary that carrierAt() then reads as *off* the boat on the
+  // next round-trip through the float, which is the whole bug in miniature.
+  const hl = c.deckLength / 2 - ON_DECK_MARGIN;
+  const hw = c.deckWidth / 2 - ON_DECK_MARGIN;
+  const clampedA = clamp(along, -hl, hl);
+  const clampedC = clamp(across, -hw, hw);
+  if (clampedA === along && clampedC === across) return;
+
+  const { fwd, right } = deckAxes(c.headingDeg);
+  // Velocity in deck axes, so the outward component can be dropped one at a
+  // time and the other one is left alone.
+  const vA = st.vel.x * fwd[0] + st.vel.z * fwd[1];
+  const vC = st.vel.x * right[0] + st.vel.z * right[1];
+  const stopA = clampedA !== along && Math.sign(vA) === Math.sign(along);
+  const stopC = clampedC !== across && Math.sign(vC) === Math.sign(across);
+  const nA = stopA ? 0 : vA;
+  const nC = stopC ? 0 : vC;
+  st.vel.x = fwd[0] * nA + right[0] * nC;
+  st.vel.z = fwd[1] * nA + right[1] * nC;
+
+  st.pos.x = c.x + fwd[0] * clampedA + right[0] * clampedC;
+  st.pos.z = c.z + fwd[1] * clampedA + right[1] * clampedC;
+}
+
 // ---------------------------------------------------------------------------
 // Ground contact + landing evaluation
 // ---------------------------------------------------------------------------
@@ -872,7 +919,6 @@ function applyGroundContact(
   const omegaWorld = OMEGAW.copy(st.omega).applyQuaternion(st.quat);
   let contacts = 0;
   let kind: SurfaceKind = st.groundKind;
-  let bellyHit = false;
   // The aircraft's OWN descent at the moment of first contact, not the contact
   // point's: the point velocity carries the flare's rotation, and the wire and
   // the gear both answer to how hard the aeroplane arrives, not to how fast a
@@ -907,7 +953,6 @@ function applyGroundContact(
     const rWorld = RPOINT.copy(world).sub(st.pos);
     const vPoint = VPOINT.copy(st.vel).add(OMEGAC.copy(omegaWorld).cross(rWorld));
 
-    if (!p.wheel && pen > 0.25) bellyHit = true; // structure deep in the dirt
 
     // spring + damper along world up
     const N = Math.min(N_MAX, Math.max(0, p.k * Math.min(pen, 0.5) - p.c * vPoint.y));
@@ -950,43 +995,60 @@ function applyGroundContact(
 
   // --- crash conditions (first-contact only; st.onGround is last step's value) ---
   const firstTouch = contacts > 0 && !st.onGround && st.airborne;
-  if (!st.result) {
-    if (hitWater && firstTouch) {
+  if (!st.result && firstTouch) {
+    // Vertical and horizontal are judged separately, and both use <= / > with
+    // no gap between them: there used to be an arrival at exactly the old
+    // limit that neither branch claimed, so the jet neither trapped nor died.
+    const overloaded = touchdownVy <= HARD_SINK || st.speed > IMPACT_SPEED;
+    if (hitWater) {
       fail(st, "DITCHED", "The Tomcat is not a seaplane. Impact with the sea.");
-    } else if (bellyHit && firstTouch && (st.gearT < .8 || maxWheelPen > .75)) {
-      // Scraping the tail during a pavement roll is drag, not death —
-      // but arriving nose-high from the air is fatal.
-      fail(st, "BELLY IMPACT", "Structure hit the ground. Gear was not down (or down hard).");
-    } else if (hitTerrain && firstTouch) {
+    } else if (st.gearT < .8) {
+      // Gear not extended: there is nothing to land on. This replaces a
+      // "maxWheelPen" test that measured ~0.9 m on every healthy deck landing
+      // against a 0.75 m limit, so the moment the belly grazed — a slightly
+      // nose-down touchdown at a fifth of the allowed sink — it killed the jet.
+      fail(st, "BELLY IMPACT", "Structure hit the ground. Gear was not down.");
+    } else if (hitTerrain) {
       fail(st, "TERRAIN IMPACT", "Only the runway and the carrier deck are survivable surfaces.");
-    } else if (firstTouch && touchdownVy < HARD_SINK) {
-      fail(st, "HARD IMPACT", `Touchdown at ${Math.round(-touchdownVy * 196.85)} fpm — the gear gave way.`);
+    } else if (overloaded) {
+      fail(
+        st,
+        "HARD IMPACT",
+        st.speed > IMPACT_SPEED
+          ? `Arrived at ${Math.round(st.speed * 1.94384)} kt — too fast for the gear to take.`
+          : `Touchdown at ${Math.round(-touchdownVy * 196.85)} fpm — the gear gave way.`,
+      );
     }
+    // With the gear down and both speeds inside their limits, a scrape of the
+    // belly or the tail is drag and a bad smell, not a fireball: the jet lands.
   }
 
   // Short touchdowns stay live: roll into the catch area instead of ending
   // the sortie before the hook can reach it. The corridor includes the gear
   // footprint, so a modest lineup error does not turn a wheel touch into death.
   if (!st.result && hitDeck && st.catCooldown <= 0 && st.gearT > .8 &&
-      ((st.airborne && touchdownVy < TRAP_MAX_CLIMB && touchdownVy > HARD_SINK && st.speed > 15) || st.deckRoll !== undefined)) {
+      ((st.airborne && touchdownVy < TRAP_MAX_CLIMB && touchdownVy > HARD_SINK && st.speed > 5) ||
+       (st.deckRoll !== undefined && !st.arresting))) {
     const c = st.deckRoll === undefined
       ? (carrierAt(st.pos.x, st.pos.z) ?? nearestCarrier(st.pos.x, st.pos.z))
       : carriers()[st.deckRoll];
+    const idx = carriers().indexOf(c);
     const { s, d } = stripCoords(c, st.pos.x, st.pos.z);
-    if (Math.abs(d) <= STRIP_HALF_WIDTH + 6 && s >= -12 && s <= CATCH_S_MAX) {
-      st.deckRoll = carriers().indexOf(c);
-      st.airborne = false;
-      if (s >= CATCH_S_MIN) {
-        st.arresting = true;
-        st.wire = clamp(Math.round((s - WIRE_FIRST_S) / c.wireSpacing) + 1, 1, c.wireCount);
-        st.deckRoll = undefined;
-      }
-    } else {
-      st.deckRoll = undefined;
+    const inArea = Math.abs(d) <= STRIP_HALF_WIDTH + 6 && s >= -12 && s <= CATCH_S_MAX;
+    // Wherever it touched, a gear-down arrival on the boat is a landing roll:
+    // the jet is captured and rolled out instead of being left to slide off
+    // the side and drown (touching down off the centreline used to end with
+    // "The Tomcat is not a seaplane" while sitting on a flight deck).
+    st.deckRoll = idx;
+    st.airborne = false;
+    if (inArea && s >= CATCH_S_MIN) {
+      st.arresting = true;
+      st.wire = clamp(Math.round((s - WIRE_FIRST_S) / c.wireSpacing) + 1, 1, c.wireCount);
+    } else if (!inArea) {
       st.banner = { text: "BOLTER — FULL POWER, GO AROUND", until: st.time + 5 };
     }
   }
-  if (st.deckRoll !== undefined && !hitDeck && st.vel.y > 1) {
+  if (st.deckRoll !== undefined && !st.arresting && !hitDeck && st.vel.y > 1) {
     st.deckRoll = undefined;
     st.airborne = true;
   }
@@ -998,6 +1060,17 @@ function applyGroundContact(
   if (st.runwayLanded && !st.result && hitRunway && st.speed < 12) {
     st.result = { kind: "landing", title: "RUNWAY LANDING", detail: "Landing confirmed. Aircraft recovered, rearmed and repaired." };
     st.runwayLanded = false;
+  }
+  // Same ending for a roll that runs out on the deck without catching a wire.
+  // Without this the jet simply stopped on the roof and the sortie never
+  // resolved: no trap, no crash, no way to fly again short of quitting.
+  if (!st.result && !st.arresting && st.deckRoll !== undefined && !st.airborne && st.speed < 3) {
+    st.result = {
+      kind: "landing",
+      title: "DECK LANDING",
+      detail: "Stopped on deck without a wire. Aircraft recovered, rearmed and repaired.",
+    };
+    st.deckRoll = undefined;
   }
 
   st.wheelPen = maxWheelPen;

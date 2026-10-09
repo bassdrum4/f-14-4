@@ -30,7 +30,7 @@ const EMPTY: HudSnapshot = {
   bearingFieldDeg: 0, worldLabel: "Procedural islands", worldSeed: DEFAULT_SEED,
   radarAltFt: 0,
   playerX: 0, playerZ: 0, playerHeadingDeg: 0, carrierMarkers: [],
-  fieldX: 0, fieldZ: 0, worldExtent: 12000,
+  fieldX: 0, fieldZ: 0, fieldHeadingDeg: 0, fieldLengthM: 0, worldExtent: 12000,
   localHour: 12, dayPhase: "day",
   dfActive: false, dfStrike: false, dfHull: 100, dfKills: 0, dfWave: 1, dfBandits: 0,
   dfNearestKm: 0, dfNearestBrgDeg: 0, enemyMarkers: [],
@@ -219,6 +219,38 @@ function formatClock(hours: number): string {
  * points of interest, which keeps the whole fleet on screen while zooming in
  * tightly on the jet.
  */
+/**
+ * A ship as the tactical map draws it: a hull with a bow, laid along its
+ * heading. The glyph is drawn pointing "up" (0,-1) before the rotation, so
+ * rotating by the heading swings the bow to where the vessel is actually
+ * pointed — the same convention the player's own triangle at the centre
+ * already used. Everything on this map is north-up; a marker that is not
+ * rotated is a marker that lies.
+ */
+function drawHull(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  headingDeg: number,
+  half: number,
+  beam: number,
+  colour: string,
+): void {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate((headingDeg * Math.PI) / 180);
+  ctx.fillStyle = colour;
+  ctx.beginPath();
+  ctx.moveTo(0, -half); // bow
+  ctx.lineTo(beam, -half * 0.45);
+  ctx.lineTo(beam, half * 0.85);
+  ctx.lineTo(-beam, half * 0.85); // stern
+  ctx.lineTo(-beam, -half * 0.45);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
 function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
   // The tactical view is the same drawing, scaled up: `side` is the panel size
@@ -286,31 +318,40 @@ function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
     ctx.strokeRect(px(-e), py(-e), e * 2 * scale, e * 2 * scale);
     ctx.setLineDash([]);
 
-    // --- airfield: a short bar showing the runway orientation (east/west) ---
+    // --- airfield: a bar laid along the runway's real heading ---
+    // It used to be a fixed east/west line regardless of where the runway
+    // actually pointed, which is the one thing a navigation aid must not get
+    // wrong. Everything on this map is drawn north-up, so a marker is only
+    // honest if it is rotated by the same heading the world uses.
     ctx.strokeStyle = "rgba(255, 210, 80, 0.95)";
     ctx.lineWidth = 2;
     const fx = px(hud.fieldX);
     const fy = py(hud.fieldZ);
-    const rw = 1100 * scale;
+    const rw = Math.max(8, Math.max(1100, hud.fieldLengthM) * scale);
+    const fh = (hud.fieldHeadingDeg * Math.PI) / 180;
+    ctx.save();
+    ctx.translate(fx, fy);
+    ctx.rotate(fh);
     ctx.beginPath();
-    ctx.moveTo(fx - rw, fy);
-    ctx.lineTo(fx + rw, fy);
+    ctx.moveTo(0, -rw / 2);
+    ctx.lineTo(0, rw / 2);
     ctx.stroke();
+    ctx.restore();
     ctx.fillStyle = "rgba(255, 210, 80, 0.95)";
     ctx.font = "9px ui-monospace, monospace";
-    ctx.fillText("FIELD", fx + rw + 4, fy + 3);
+    // Label off the north end of the bar, wherever that end happens to be.
+    ctx.fillText("FIELD", fx + Math.sin(fh) * (rw / 2) + 5, fy - Math.cos(fh) * (rw / 2) + 3);
 
     // --- carriers ---
     ctx.font = "9px ui-monospace, monospace";
     for (const m of hud.carrierMarkers) {
       const x = px(m.x);
       const y = py(m.z);
-      if (x < -20 || x > n + 20 || y < -20 || y > n + 20) continue;
+      if (x < -40 || x > n + 40 || y < -40 || y > n + 40) continue;
+      drawHull(ctx, x, y, m.headingDeg, Math.max(7, m.lengthM * scale), m.near ? 4.5 : 3.5,
+        m.near ? "rgba(120, 255, 140, 1)" : "rgba(150, 200, 230, 0.85)");
       ctx.fillStyle = m.near ? "rgba(120, 255, 140, 1)" : "rgba(150, 200, 230, 0.8)";
-      ctx.beginPath();
-      ctx.arc(x, y, m.near ? 4 : 3, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillText(m.name, x + 6, y + 3);
+      ctx.fillText(m.name, x + Math.max(7, m.lengthM * scale) + 5, y + 3);
     }
 
     // --- wingmen (multiplayer): cyan chevrons with callsigns ---
@@ -318,14 +359,18 @@ function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
       const x = px(m.x);
       const y = py(m.z);
       if (x < -20 || x > n + 20 || y < -20 || y > n + 20) continue;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate((m.headingDeg * Math.PI) / 180);
       ctx.fillStyle = hud.battle ? "rgba(255, 130, 100, 0.95)" : "rgba(79, 210, 255, 0.95)";
       ctx.beginPath();
-      ctx.moveTo(x, y - 4);
-      ctx.lineTo(x + 3.6, y + 3);
-      ctx.lineTo(x, y + 1.4);
-      ctx.lineTo(x - 3.6, y + 3);
+      ctx.moveTo(0, -5);
+      ctx.lineTo(3.6, 3);
+      ctx.lineTo(0, 1.4);
+      ctx.lineTo(-3.6, 3);
       ctx.closePath();
       ctx.fill();
+      ctx.restore();
       ctx.fillStyle = hud.battle ? "rgba(255, 130, 100, 0.95)" : "rgba(150, 226, 255, 0.95)";
       ctx.font = "9px ui-monospace, monospace";
       ctx.fillText(m.name.toUpperCase(), x + 6, y + 3);
@@ -337,9 +382,16 @@ function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
       const x = px(m.x);
       const y = py(m.z);
       if (x < -10 || x > n + 10 || y < -10 || y > n + 10) continue;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate((m.headingDeg * Math.PI) / 180);
       ctx.beginPath();
-      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.moveTo(0, -4.5);
+      ctx.lineTo(3, 3);
+      ctx.lineTo(-3, 3);
+      ctx.closePath();
       ctx.fill();
+      ctx.restore();
     }
 
     // --- hostile carrier: a red hull bar, grey once it is going down ---
@@ -349,10 +401,15 @@ function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
       const dead = hud.dfCarrier.status === "sunk" || hud.dfCarrier.status === "sinking";
       ctx.strokeStyle = dead ? "rgba(150, 165, 175, 0.6)" : "rgba(255, 91, 77, 0.95)";
       ctx.lineWidth = 3;
+      const cvHalf = Math.max(7, 140 * scale);
+      ctx.save();
+      ctx.translate(hx, hy);
+      ctx.rotate((hud.dfCarrier.headingDeg * Math.PI) / 180);
       ctx.beginPath();
-      ctx.moveTo(hx - 140 * scale, hy);
-      ctx.lineTo(hx + 140 * scale, hy);
+      ctx.moveTo(0, -cvHalf);
+      ctx.lineTo(0, cvHalf);
       ctx.stroke();
+      ctx.restore();
       ctx.fillStyle = dead ? "rgba(150, 165, 175, 0.75)" : "rgba(255, 130, 110, 0.95)";
       ctx.font = "9px ui-monospace, monospace";        ctx.fillText("OPFOR CV", hx + 6, hy - 4);
     }
