@@ -1,7 +1,7 @@
 {
   "name": "f14-tomcat-simulator",
   "private": true,
-  "version": "1.6.2",
+  "version": "1.6.3",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port ${PORT:-5173}",
@@ -36,6 +36,7 @@
     "check:standalone": "node scripts/check-singlefile.mjs",
     "test:aim": "bun scripts/diag-aim.ts",
     "test:versus": "bun scripts/diag-versus.ts",
+    "test:battle-recovery": "bun scripts/diag-battle-recovery.ts",
     "test:net-authority": "bun scripts/diag-net-authority.ts",
     "test:bomb-envelope": "bun scripts/diag-bomb-envelope.ts",
     "test:performance": "bun scripts/diag-performance.ts"

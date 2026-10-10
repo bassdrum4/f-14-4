@@ -614,6 +614,43 @@ check(
 );
 
 console.log("\n[ceilings]");
+// A host's forwarded departure names the wingman, not the host connection.
+// Losing one link must leave every other pilot connected to the room host.
+const cascadeHost = makePilot();
+cascadeHost.net.open("CASCADE", "HOST", "tomcat");
+await flush();
+const cascadeA = makePilot();
+cascadeA.net.join("CASCADE", "ALPHA", "tomcat");
+await flush();
+const cascadeB = makePilot();
+cascadeB.net.join("CASCADE", "BRAVO", "tomcat");
+await flush();
+const droppedId = cascadeA.net.snapshot.self;
+const hostLink = (cascadeHost.net as unknown as { conns: Map<string, MockConn> }).conns.get(droppedId)!;
+hostLink.close();
+await flush();
+check("a dropped wingman link does not eject other wingmen from the host", cascadeHost.net.snapshot.pilots.some(p => p.name === "BRAVO" && p.linked));
+check("a forwarded departure preserves the surviving wingman's host link", cascadeB.net.snapshot.pilots.some(p => p.host && p.linked));
+check("a forwarded departure retires the named wingman", !cascadeB.net.snapshot.pilots.some(p => p.id === droppedId));
+// The promoted host's public connection has a different id from its owner.
+// A direct departure using that owner id must still remove the public link.
+const oldHost = makePilot();
+oldHost.net.open("HANDOVER", "OLDHOST", "tomcat");
+await flush();
+const successor = makePilot();
+successor.net.join("HANDOVER", "NEWHOST", "tomcat");
+await flush();
+oldHost.net.leave();
+await flush();
+check("the survivor takes over the room", successor.net.snapshot.host);
+const newcomer = makePilot();
+newcomer.net.join("HANDOVER", "NEWCOMER", "tomcat");
+await flush();
+check("a newcomer links to the promoted host", newcomer.net.snapshot.pilots.some(p => p.host && p.linked));
+successor.net.leave();
+await flush();
+check("a promoted host's direct departure clears its public link", !newcomer.net.snapshot.pilots.some(p => p.name === "NEWHOST"));
+
 // The host is allowed to introduce the room, but not to grow it forever.
 const flood = Array.from({ length: 60 }, (_, i) => ({
   id: `f14sim-bravo-p${i}`,

@@ -1113,11 +1113,19 @@ export class Multiplayer {
           this.handlers.onCarrierHit?.(msg.dmg);
         }
         break;
-      case "bye":
-        // The connection says who is leaving: trusting the id in the payload
-        // let any pilot eject a wingman from the roster mid-flight.
-        this.drop(conn.peer, false);
+      case "bye": {
+        // A pilot may retire only its own connection. The host also relays
+        // other pilots' departures: that packet names the wingman, and must
+        // never be read as the host itself leaving. A promoted host's direct
+        // goodbye uses its owner id instead of its public connection id.
+        let id = conn.peer;
+        if (this.isHostConn(conn) && msg.id !== conn.peer && msg.id !== this.pilots.get(conn.peer)?.owner) {
+          if (typeof msg.id !== "string" || !this.pilots.has(msg.id)) break;
+          id = msg.id;
+        }
+        this.drop(id, false);
         break;
+      }
       case "chat": {
         const text = sanitizeChat(msg.text);
         // The callsign comes from the roster, not the packet, so nobody can

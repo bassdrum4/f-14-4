@@ -4,7 +4,7 @@ export type BattleWeapon = 'gun' | 'missile';
 export interface WeaponLaunch { weapon: BattleWeapon; pos: [number,number,number]; vel: [number,number,number] }
 export interface BattleShot extends WeaponLaunch { match: number; life: number; seq: number }
 export interface BattleAction {
-  kind: 'hit' | 'ready' | 'death'; match: number; seq: number;
+  kind: 'hit' | 'ready' | 'death' | 'recover'; match: number; seq: number;
   life: number; victim?: string; victimLife?: number; weapon?: BattleWeapon;
 }
 export interface BattlePilot {
@@ -68,6 +68,12 @@ export class BattleReferee {
       p.ready = true; this.spawn(p, now); return true;
     }
     if (!p.ready || p.hp <= 0 || action.life !== p.life) return false;
+    // The engine checks the recovery surface and speed before forwarding this.
+    // Repair the current life without awarding a death or another spawn shield.
+    if (action.kind === 'recover') {
+      if (p.hp === 100) return false;
+      p.hp = 100; return true;
+    }
     if (action.kind === 'death') { this.down(p, now); return true; }
     if (action.kind !== 'hit' || (action.weapon !== 'gun' && action.weapon !== 'missile')) return false;
     const v = this.pilots.get(action.victim ?? '');

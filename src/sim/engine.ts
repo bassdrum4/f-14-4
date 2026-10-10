@@ -347,6 +347,8 @@ export class Sim {
   private battleDeadLife = -1;
   private battleTickAt = 0;
   private battleReadyAt = 0;
+  private battleRecoveryLife = -1;
+  private battleRecoveryAt = 0;
   private combatRoster: BattleSnapshot | null = null;
   private netListeners = new Set<(s: NetState) => void>();
   /** The room radio: newest last, capped so a long session cannot grow it. */
@@ -564,6 +566,7 @@ export class Sim {
     this.battleLife = -1;
     this.battleDeadLife = -1;
     this.battleReadyAt = 0;
+    this.battleRecoveryLife = -1;
     // size the racks and hull for this airframe before the fight is armed
     this.df.setAircraft(this.state);
     // Mission modes: the bandits / targets are out there from the start, but
@@ -1006,6 +1009,7 @@ export class Sim {
 
   private spawnBattleAircraft(respawn = false): void {
     this.endPod();
+    this.battleRecoveryLife = -1;
     const ids = [this.netState.self, ...this.netState.pilots.map(p => p.id)].sort();
     const slot = Math.max(0, ids.indexOf(this.netState.self));
     // Two boats, one per side: the pair rides the match id, so every pilot in
@@ -1048,6 +1052,14 @@ export class Sim {
     const to = action.victim === this.netState.self ? this.state.pos : contacts.find(p => p.id === action.victim)?.pos;
     const range = from && to ? from.distanceTo(to) : Infinity;
     const aircraft = sender === this.netState.self ? this.settings.aircraft : this.netState.pilots.find(p => p.id === sender)?.aircraft;
+    if (action.kind === "recover") {
+      const velocity = sender === this.netState.self ? this.state.vel : contacts.find(p => p.id === sender)?.vel;
+      if (!from || !velocity) return;
+      const surface = groundAt(from.x, from.z);
+      // A repair claim must agree with the host's view of the aircraft: near
+      // a friendly deck/runway and slow enough to have completed a recovery.
+      if ((surface.kind !== "deck" && surface.kind !== "runway") || Math.abs(from.y - surface.y) > 6 || velocity.length() > 20) return;
+    }
     if (this.battleReferee.action(sender, action, performance.now() / 1000, range, specFor(aircraft ?? "tomcat").gunDamage)) {
       const snapshot = this.battleReferee.snapshot(performance.now() / 1000);
       this.applyBattle(snapshot);
@@ -1095,7 +1107,16 @@ export class Sim {
     }));
     for (const shot of this.df.takeWeaponLaunches()) if (self?.ready && self.hp > 0 && !self.shield) this.net.sendBattleShot({ ...shot, match: this.battle.match, life: self.life, seq: ++this.battleSeq });
     for (const hit of this.df.takePlayerHits()) this.net.sendBattleAction({ kind: "hit", match: this.battle.match, seq: ++this.battleSeq, life: self?.life ?? 0, victim: hit.id, victimLife: hit.life, weapon: hit.weapon });
-    if (self?.ready && this.state.result && this.battleDeadLife !== self.life) {
+    if (self?.ready && self.hp > 0 && this.battleRecoveryLife === self.life) {
+      if (self.hp === 100) this.battleRecoveryLife = -1;
+      else if (now >= this.battleRecoveryAt) {
+        // The pose is published before syncBattle. Retry if an earlier pose
+        // reached the host first; stop as soon as its scoreboard confirms repair.
+        this.battleRecoveryAt = now + .5;
+        this.net.sendBattleAction({ kind: "recover", match: this.battle.match, seq: ++this.battleSeq, life: self.life });
+      }
+    }
+    if (self?.ready && this.state.result?.kind === "crash" && this.battleDeadLife !== self.life) {
       this.battleDeadLife = self.life;
       this.net.sendBattleAction({ kind: "death", match: this.battle.match, seq: ++this.battleSeq, life: self.life });
     }
@@ -1375,11 +1396,12 @@ export class Sim {
       this.df.step(FIXED_DT, this.state, inp.fire === true, false);
       // A wheels-down on a friendly deck or runway is a recovery, not the end:
       // the racks and the hull come back full so the pilot can go again.
-      if (wasAirborne && isRecoverySurface(this.state)) this.refillOnRecovery();
+      if (!this.battleActive && wasAirborne && isRecoverySurface(this.state)) this.refillOnRecovery();
       wasAirborne = this.state.airborne;
       this.acc -= FIXED_DT;
       steps++;
     }
+    if (this.battleActive && (this.state.result?.kind === "wire" || this.state.result?.kind === "landing")) this.completeBattleRecovery();
     if (this.state.result) this.endPod();
     // A fatal crash starts the replay instead of cutting straight to the
     // screen; a trap or a bolter still ends the flight the normal way.
@@ -1391,6 +1413,29 @@ export class Sim {
     this.updateJetPose(alpha);
     this.updateAudio();
     this.updateHud();
+  }
+
+  /** A completed PvP recovery continues the current life from a launch position. */
+  private completeBattleRecovery(): void {
+    const self = this.battle.pilots.find(p => p.id === this.netState.self);
+    if (!self?.ready || self.hp <= 0) return;
+    this.endPod();
+    const landed = this.state;
+    const mission = landed.groundKind === "runway" ? "airfield" : "carrier";
+    if (mission === "carrier") this.spawnCarrier = carriers().indexOf(nearestCarrier(landed.pos.x, landed.pos.z));
+    this.mission = mission;
+    this.state = spawnAircraft(mission, this.spawnCarrier, this.settings.aircraft);
+    const launchBriefing = this.state.banner?.text ?? "READY FOR LAUNCH";
+    this.state.time = landed.time;
+    this.state.flightTime = landed.flightTime;
+    this.df.refill();
+    this.df.setBattleHull(self.hp); // the host confirms hull repair on the wire
+    this.battleRecoveryLife = self.life;
+    this.battleRecoveryAt = 0;
+    this.prevPos.copy(this.state.pos);
+    this.prevQuat.copy(this.state.quat);
+    this.rig.resetFollow();
+    this.pushBanner(`RECOVERED & REARMED — ${launchBriefing}`);
   }
 
   /** Refuel and re-arm on a landing, and say so. */

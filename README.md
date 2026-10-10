@@ -1,7 +1,7 @@
 # F-14 Carrier Simulator
 
-Current published build label: **1.6.2**, reconstructed from the surviving code
-states. See [CHANGELOG.md](CHANGELOG.md) for the counting rule and
+Current published build label: **1.6.3**, continuing the reconstructed version
+sequence. See [CHANGELOG.md](CHANGELOG.md) for the counting rule and
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md)
 for the earlier development, recovered builds and missing release history.
 `package.json` supplies both the in-game badge and the HTML's
@@ -111,6 +111,9 @@ Controls, Graphics, Audio and Interface tabs.
   boat per side, so both ends of the room agree without another packet), have
   five seconds of protection, and respawn three seconds after a death. A death
   costs the hull but **not the ordnance**: only landing re-arms the racks. Incoming tracers and missile plumes are visible, with a missile warning.
+  Completed carrier/runway recoveries preserve the current life and score,
+  re-arm the racks, and return the aircraft to a launch position. Hull repair
+  is confirmed by the host after checking the recovery surface and speed.
   Guns and missiles damage player aircraft; the
   host owns hull, kills, deaths and life numbers. Late arrivals can join an
   active battle from the lobby. Host takeover preserves the scoreboard.
@@ -134,6 +137,7 @@ npm run test:aim
 npm run test:landing
 npm run test:bomb-envelope
 npm run test:versus
+npm run test:battle-recovery
 npm run test:settings
 npm run test:net-authority
 npm run test:mp

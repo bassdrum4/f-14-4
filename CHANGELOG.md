@@ -6,6 +6,18 @@ arrived in large exports with stale 1.0.0 metadata; see
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md) for the surviving
 timeline, recovered intermediate build, and remaining history gaps.
 
+## 1.6.3 — 2026-10-09
+
+- Keep surviving wingmen connected when the host relays another pilot's
+  departure; only the host may name another pilot in a departure notice.
+- Treat completed PvP carrier/runway recoveries as landings, preserving lives
+  and scores. Re-arm and return to a launch position; the host confirms hull
+  repair against the reported aircraft position and speed. Real crashes still
+  count as deaths and trigger the existing respawn.
+- Add local regression coverage for disconnect cascades, promoted-host
+  departures, all recovery results, repair acknowledgement and crash handling.
+  No GitHub Actions changes.
+
 ## 1.6.2 — 2026-10-10
 
 Correct the version using thirteen saved game states, including a deleted
