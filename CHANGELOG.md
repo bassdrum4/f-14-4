@@ -1,10 +1,46 @@
 # Changelog
 
-The numbered entries below cover recent assigned build labels. Earlier
-development arrived in large exports with stale 1.0.0 metadata. See
-[the code history investigation](docs/VERSION-ARCHAEOLOGY.md) for the full
-surviving timeline, the recovered intermediate build, and the remaining
-history gaps. **1.2.2 is not a recovered original version for all that work.**
+The current label uses the code-state reconstruction below. Older entries
+preserve labels that were actually assigned at the time. Earlier development
+arrived in large exports with stale 1.0.0 metadata; see
+[the code history investigation](docs/VERSION-ARCHAEOLOGY.md) for the surviving
+timeline, recovered intermediate build, and remaining history gaps.
+
+## 1.6.2 — 2026-10-10
+
+Correct the version using thirteen saved game states, including a deleted
+October 7 build recovered from `bored`. The previous 1.2.2 calculation covered
+only recent changes and omitted the earlier feature waves.
+
+The rule is one minor increment for each saved state that introduces a
+substantial player-facing system, and one patch increment for a state that
+fixes existing behavior. Group features saved together into the same increment.
+Start from the first saved flight build's 1.0.0 label. Recovery, rename, merge,
+terminology and version-only commits add no feature increment.
+
+| Reconstructed step | Saved code state |
+| --- | --- |
+| 1.0.0 | October 3 flight/carrier simulator baseline. |
+| 1.1.0 | October 5 AI dogfighting. |
+| 1.2.0 | Early October 7 compiled copy: multiple aircraft, guided bombing/strike, multiplayer rooms and profiles. |
+| 1.3.0 | Later October 7 snapshot: missiles and cloud preferences. |
+| 1.3.1 | October 8 gun muzzle/lead and bandit flight fixes. |
+| 1.3.2 | Fixed-step inputs, keyboard focus and quality switching. |
+| 1.4.0 | Room chat and shared host enemies. |
+| 1.4.1 | Five-degree gun correction fixed. |
+| 1.5.0 | Play-first menus, head-to-head combat, scenery and bomb reach checks. |
+| 1.5.1 | Browser rendering and network congestion improvements. |
+| 1.6.0 | In-flight settings, tactical map and radio controls. |
+| 1.6.1 | Multiplayer packet/authority fixes. |
+| 1.6.2 | Visible arresting wires, deck contact, navigation and map-heading fixes. |
+
+**These steps are an explicit reconstruction, not recovered historical releases
+or tags.** Work before the first source export and updates collapsed between
+snapshots remain uncounted. Another convention could assign a different number;
+the code evidence and rule above explain why this build now uses 1.6.2.
+
+This update changes the displayed label and documentation. The source build
+refreshes both standalone deployment files and their generated runtime exports.
 
 ## 1.2.2 — 2026-10-09
 

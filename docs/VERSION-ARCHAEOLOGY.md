@@ -17,6 +17,14 @@ label, not a recovered number for the whole development history.** Counting
 features, commits, days, or downloads cannot establish a unique semantic
 version without the original numbering convention and release records.
 
+The current build uses **1.6.2** under an explicit reconstruction rule: retain
+1.0.0 as the first saved flight-build baseline, increment the minor for each
+substantial feature wave visible in a distinct saved state, and increment the
+patch for fixes. Six feature waves follow that baseline; two fixes follow the
+last feature wave. The complete thirteen-step mapping is in
+[CHANGELOG.md](../CHANGELOG.md). This is a chosen convention grounded in saved
+code, rather than a claim that an older 1.6.2 badge was recovered.
+
 The first commit, October 1's `390a575`, has an empty tree. October 3's first
 source export already contains the flight model, carrier operations, terrain,
 HUD, cameras, sound, settings, and diagnostics. Work before that export cannot
@@ -135,8 +143,9 @@ git rev-list --objects --all
 git fsck --full --no-reflogs --unreachable
 ```
 
-An original project history, old checkout, or earlier build with a genuinely
-incremented badge could resolve the exact number. Until then, any higher
-semantic version would be a newly chosen convention. The code timeline above
-preserves the evidence needed to make that choice without losing the earlier
-work again.
+An original project history, old checkout, or earlier build with an incremented
+badge could resolve the original number and fill in additional updates. The
+chosen 1.6.2 reconstruction accounts for the saved feature waves; it does not
+claim to count unknown updates before or between these snapshots. The timeline
+and counting rule preserve enough evidence to revise the label if that missing
+history becomes available.
