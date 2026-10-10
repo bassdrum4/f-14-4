@@ -12,6 +12,13 @@ export default defineConfig({
   plugins: [
     react(),
     {
+      name: "application-version",
+      transformIndexHtml() {
+        const { version } = JSON.parse(readFileSync(projectPath("./package.json"), "utf8"));
+        return [{ tag: "meta", attrs: { name: "application-version", content: version }, injectTo: "head" }];
+      },
+    },
+    {
       name: "editable-dev-entry",
       apply: "serve",
       transformIndexHtml: {
