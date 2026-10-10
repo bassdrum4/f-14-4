@@ -6,6 +6,7 @@ import { spawnAircraft, stepAircraft, type SimResult } from '../src/sim/flight';
 import { BattleReferee, type BattleAction } from '../src/net/versus';
 import { Dogfight } from '../src/sim/dogfight';
 import { ExplosionField } from '../src/render/effects';
+import { atmosphere } from '../src/sim/atmosphere';
 import { defaultSettings } from '../src/settings';
 import { AIRCRAFT_LIST, type AircraftId } from '../src/sim/aircraft';
 
@@ -114,4 +115,26 @@ for (const aircraft of AIRCRAFT_LIST) {
   sim.receiveBattleAction('a', { kind: 'recover', match: 17, seq: 3, life: 1 });
   assert.equal(ref.snapshot(performance.now() / 1000).pilots[0].hp, 10, 'an airborne claim cannot repair the hull');
   sim.df.dispose(); console.log('PASS host rejects airborne recovery claims');
+}
+
+// Fly real rotary-wing touchdowns: helicopters intentionally emit no landing
+// result, so injecting one would bypass the boundary this regression protects.
+for (const host of [true, false]) for (const mission of ['carrier', 'airfield'] as const) {
+  const { sim, ref, actions } = setup(null, host, 'seahawk');
+  sim.state = spawnAircraft(mission, 2, 'seahawk');
+  sim.state.pos.y += 40; sim.state.onGround = false; sim.state.airborne = true;
+  sim.state.vel.set(0, -2, 0);
+  const spec = sim.state.spec, sigma = atmosphere(sim.state.pos.y).sigma;
+  sim.state.rpm = ((spec.mass * 9.81 / sigma - spec.idleThrust) / (spec.thrustDry - spec.idleThrust)) * .96;
+  sim.state.throttle = sim.state.rpm;
+  sim.input = { sample: () => ({ pitch: 0, roll: 0, yaw: 0, throttleUp: false, throttleDown: false, trimUp: false, trimDown: false, brake: false, catHold: false }) };
+  for (let i = 0; i < 2400 && !sim.state.onGround; i++) sim.stepSim(1 / 120);
+  assert(sim.state.onGround && sim.state.result === null, 'real helicopter touchdown stays flyable');
+  assert.equal(sim.df.hud(sim.state).missiles, 2); assert.equal(sim.df.hud(sim.state).flares, 30);
+  assert.equal(sim.state.spec.id, 'seahawk'); assert.equal(sim.state.catPhase, 'idle');
+  sim.syncBattle();
+  assert(actions.some(a => a.kind === 'recover')); assert(!actions.some(a => a.kind === 'death'));
+  if (host) assert.equal(ref.snapshot(performance.now() / 1000).pilots[0].hp, 100);
+  else assert.equal(sim.df.hud(sim.state).hull, 10, 'wingman waits for the host to acknowledge repair');
+  sim.df.dispose(); console.log(`PASS actual Seahawk ${mission} touchdown (${host ? 'host' : 'wingman'}): rearm and request repair`);
 }

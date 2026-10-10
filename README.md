@@ -1,6 +1,6 @@
 # F-14 Carrier Simulator
 
-Current published build label: **1.6.3**, continuing the reconstructed version
+Current published build label: **1.6.4**, continuing the reconstructed version
 sequence. See [CHANGELOG.md](CHANGELOG.md) for the counting rule and
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md)
 for the earlier development, recovered builds and missing release history.

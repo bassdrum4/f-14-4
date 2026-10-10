@@ -361,7 +361,7 @@ function FlightSetup({ sim, settings, onSettings, onBack }: {
     <span className="menu-world-label">MISSION</span>
     <div className="menu-world-chips">{(["cruise", "dogfight", "strike"] as MissionMode[]).map(m => <button key={m} className={"world-chip" + (mode === m ? " on" : "")} onClick={() => onSettings({ ...settings, missionMode: m })}>{MISSION_MODE_CHIPS[m]}</button>)}</div>
     <p className="menu-note">{MISSION_MODE_LABELS[mode]}</p>
-    <div className="menu-buttons"><Btn primary onClick={() => launch("carrier")}>CAT SHOT — CARRIER</Btn><Btn onClick={() => launch("airfield")}>TAKEOFF — RUNWAY</Btn><Btn onClick={onBack}>BACK</Btn></div>
+    <div className="menu-buttons"><Btn primary onClick={() => launch("carrier")}>{craft.rotorcraft ? "LIFT OFF — CARRIER" : "CAT SHOT — CARRIER"}</Btn><Btn onClick={() => launch("airfield")}>TAKEOFF — RUNWAY</Btn><Btn onClick={onBack}>BACK</Btn></div>
   </div>;
 }
 

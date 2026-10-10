@@ -164,6 +164,14 @@ export class ExplosionField {
     this.fireball(at, kind === "air", scale);
   }
 
+  /** A cartridge ignites with a small flash, without an impact smoke cloud. */
+  flareIgnition(at: THREE.Vector3): void {
+    this.emit(this.fire, at, ZERO, {
+      size0: 0.3, size1: 0.9, ttl: 0.22, opacity: 0.9,
+      hot: 0xfff0c0, cool: 0xff8a30,
+    });
+  }
+
   /**
    * A machine-gun round striking the ground or the sea. Deliberately a little
    * oversized: the splash is what tells the pilot where the burst is landing,

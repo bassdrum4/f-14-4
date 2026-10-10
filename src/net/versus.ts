@@ -1,7 +1,7 @@
 // Host-owned hull, scores and lives. Weapon flight is local for responsive aim;
 // hits carry both life numbers so delayed packets cannot damage a respawn.
 export type BattleWeapon = 'gun' | 'missile';
-export interface WeaponLaunch { weapon: BattleWeapon; pos: [number,number,number]; vel: [number,number,number] }
+export interface WeaponLaunch { weapon: BattleWeapon | 'flare'; pos: [number,number,number]; vel: [number,number,number] }
 export interface BattleShot extends WeaponLaunch { match: number; life: number; seq: number }
 export interface BattleAction {
   kind: 'hit' | 'ready' | 'death' | 'recover'; match: number; seq: number;

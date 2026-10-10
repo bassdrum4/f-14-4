@@ -1077,7 +1077,17 @@ export class Multiplayer {
         break;
       case "battleShot": {
         const shot = msg.shot;
-        if (this.pilots.has(conn.peer) && shot && (shot.weapon === "gun" || shot.weapon === "missile") && Array.isArray(shot.pos) && shot.pos.length === 3 && Array.isArray(shot.vel) && shot.vel.length === 3 && [...shot.pos, ...shot.vel].every(Number.isFinite)) this.handlers.onBattleShot?.(this.pilots.get(conn.peer)?.owner ?? conn.peer, shot);
+        if (
+          this.pilots.has(conn.peer) && shot &&
+          (shot.weapon === "gun" || shot.weapon === "missile" || shot.weapon === "flare") &&
+          Number.isSafeInteger(shot.seq) && shot.seq >= 0 &&
+          Number.isSafeInteger(shot.life) && shot.life >= 0 &&
+          Number.isSafeInteger(shot.match) && shot.match >= 0 &&
+          Array.isArray(shot.pos) && shot.pos.length === 3 &&
+          Array.isArray(shot.vel) && shot.vel.length === 3 &&
+          shot.pos.every(v => Number.isFinite(v) && Math.abs(v) <= 1e7) &&
+          shot.vel.every(v => Number.isFinite(v) && Math.abs(v) <= 2000)
+        ) this.handlers.onBattleShot?.(this.pilots.get(conn.peer)?.owner ?? conn.peer, shot);
         break;
       }
       case "battleAction":

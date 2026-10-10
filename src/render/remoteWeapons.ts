@@ -2,12 +2,13 @@
 // One instanced draw per weapon type keeps a busy room from adding draw calls
 // for every tracer. Spawn packets travel directly over the existing mesh.
 import * as THREE from 'three';
+import { captureFlare, missileWarning, type FlareTarget } from '../sim/countermeasures';
 import { atmosphere } from '../sim/atmosphere';
 import { groundAt } from '../sim/world';
 import type { ExplosionField } from './effects';
 import type { BattleShot } from '../net/versus';
-interface Projectile { sender: string; shot: BattleShot; pos: THREE.Vector3; vel: THREE.Vector3; age: number; trail: number }
-export interface WeaponContact { id: string; pos: THREE.Vector3 }
+interface Projectile { sender: string; shot: BattleShot; pos: THREE.Vector3; vel: THREE.Vector3; age: number; trail: number; decoy: FlareTarget | null; seed: number }
+export interface WeaponContact { id: string; pos: THREE.Vector3; vel?: THREE.Vector3 }
 export class RemoteWeapons {
   private root = new THREE.Group();
   private projectiles: Projectile[] = [];
@@ -19,6 +20,8 @@ export class RemoteWeapons {
   private axis = new THREE.Vector3();
   private nose = new THREE.Vector3(0,0,-1);
   incoming = false;
+  warning: ReturnType<typeof missileWarning> | null = null;
+  private stationary = new THREE.Vector3();
   constructor(scene: THREE.Scene, private blasts: ExplosionField) {
     this.root.name = "remote-weapon-effects";
     this.bullets.count = this.missiles.count = 0;
@@ -26,12 +29,12 @@ export class RemoteWeapons {
     this.root.add(this.bullets,this.missiles);scene.add(this.root);
   }
   add(sender: string, shot: BattleShot): void {
-    if (this.projectiles.length >= 288) return;
-    this.projectiles.push({ sender, shot, pos: new THREE.Vector3(...shot.pos), vel: new THREE.Vector3(...shot.vel), age: 0, trail: 0 });
+    if (shot.weapon === 'flare' || this.projectiles.length >= 288) return;
+    this.projectiles.push({ sender, shot, pos: new THREE.Vector3(...shot.pos), vel: new THREE.Vector3(...shot.vel), age: 0, trail: 0, decoy: null, seed: shot.seq });
   }
-  clear(): void { this.projectiles = []; this.bullets.count = this.missiles.count = 0; this.incoming = false; }
-  step(frameDt: number, contacts: WeaponContact[], self: string): void {
-    let bulletCount=0, missileCount=0;this.incoming=false;
+  clear(): void { this.projectiles = []; this.bullets.count = this.missiles.count = 0; this.incoming = false; this.warning = null; }
+  step(frameDt: number, contacts: WeaponContact[], self: string, flares: readonly FlareTarget[] = []): void {
+    let bulletCount=0, missileCount=0;this.incoming=false;this.warning=null;
     const steps=Math.max(1,Math.ceil(Math.min(frameDt,.1)*120)),dt=Math.min(frameDt,.1)/steps;
     for(let i=this.projectiles.length-1;i>=0;i--){
       const p=this.projectiles[i], missile=p.shot.weapon==='missile';let dead=false;
@@ -49,10 +52,17 @@ export class RemoteWeapons {
         }
         p.pos.addScaledVector(p.vel,dt);
         if(missile&&p.age>.35){
+          if (p.decoy && p.decoy.life <= 0) p.decoy = null;
+          if (!p.decoy) p.decoy = captureFlare({ pos: p.pos, vel: p.vel, life: 26 - p.age, seed: p.seed }, flares, dt, f => f.owner !== p.sender);
           let target: WeaponContact|undefined, best=Infinity;
           for(const c of contacts){if(c.id===p.sender)continue;const d=c.pos.distanceToSquared(p.pos);if(d<best){best=d;target=c;}}
+          if (p.decoy) { target = { id: '', pos: p.decoy.pos }; best = p.decoy.pos.distanceToSquared(p.pos); }
           if(target){
-            if(target.id===self&&best<12000**2)this.incoming=true;
+            if(!p.decoy && target.id===self && best<12000**2) {
+              this.incoming=true;
+              const warning=missileWarning(p.pos,p.vel,target.pos,target.vel ?? this.stationary);
+              if(!this.warning || warning.km < this.warning.km)this.warning=warning;
+            }
             if(best<26**2){this.blasts.spawn(p.pos.clone(),'air',.7);dead=true;continue;}
             const speed=p.vel.length();this.dir.copy(p.vel).normalize();this.aim.copy(target.pos).sub(p.pos).normalize();
             const angle=this.dir.angleTo(this.aim);this.axis.crossVectors(this.dir,this.aim);

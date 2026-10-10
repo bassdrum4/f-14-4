@@ -6,6 +6,20 @@ arrived in large exports with stale 1.0.0 metadata; see
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md) for the surviving
 timeline, recovered intermediate build, and remaining history gaps.
 
+## 1.6.4 — 2026-10-09
+
+- Synchronize PvP flare cartridges, divert damaging player-fired seekers, and
+  show the same countermeasures and missile warnings on the receiving pilot.
+  Validate and deduplicate shot events; keep flare budgets through respawns.
+- Calculate approximate impact time from relative closing velocity, restore
+  pooled flare scale, and use smaller, shorter-lived smoke trails.
+- Re-arm real Seahawk deck/runway touchdowns in PvP, keeping the helicopter
+  parked where it landed and waiting for host confirmation of hull repairs.
+- Animate remote helicopter rotors; make local rotation independent of frame
+  rate. Label collective and lift-off correctly and omit jet approach cues.
+- Round the new aircraft fuselages and refine the Crusader nose and Seahawk
+  tail. Add local regression coverage without changing GitHub Actions.
+
 ## 1.6.3 — 2026-10-09
 
 - Keep surviving wingmen connected when the host relays another pilot's

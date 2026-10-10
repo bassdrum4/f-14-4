@@ -1,5 +1,5 @@
 import { RemoteWeapons } from "../render/remoteWeapons";
-import { BattleReferee, battleCarrierPair, type BattleAction, type BattleSnapshot } from "../net/versus";
+import { BattleReferee, battleCarrierPair, type BattleAction, type BattleSnapshot, type BattleShot } from "../net/versus";
 import { specFor } from "./aircraft";
 // Sim orchestrator: state machine, fixed-timestep sim, render loop, HUD feed.
 
@@ -78,6 +78,7 @@ export interface HudSnapshot {
   sweepDeg: number;
   /** True only for airframes with variable-geometry wings (the Tomcat). */
   sweepable: boolean;
+  rotorcraft: boolean;
   stalled: boolean;
   onGround: boolean;
   catPhase: string;
@@ -243,7 +244,7 @@ function defaultHud(): HudSnapshot {
   return {
     speedKt: 0, altFt: 0, mach: 0, headingDeg: 0, aoaDeg: 0, vsFpm: 0, gLoad: 1,
     throttlePct: 0, rpmPct: 0, ab: 0, abOn: false, gear: true, flaps: false, speedbrake: false,
-    trim: 0.5, sweepDeg: 20, sweepable: false, stalled: false, onGround: true, catPhase: "ready",
+    trim: 0.5, sweepDeg: 20, sweepable: false, rotorcraft: false, stalled: false, onGround: true, catPhase: "ready",
     catProgress: 0, pitchDeg: 0, rollDeg: 0,    cameraMode: "chase", flightTime: 0,
     glide: null,
     distCarrierKm: 0, bearingCarrierDeg: 0, carrierName: "—", distFieldKm: 0,
@@ -343,6 +344,7 @@ export class Sim {
   private battleReferee = new BattleReferee();
   private battle: BattleSnapshot = { match: 0, pilots: [] };
   private battleSeq = 0;
+  private battleSeenShots = new Map<string, number>();
   private battleLife = -1;
   private battleDeadLife = -1;
   private battleTickAt = 0;
@@ -412,10 +414,7 @@ export class Sim {
       onLinkDelay: (id, ms) => this.remoteFleet.setLinkDelay(id, ms),
       onBattleAction: (sender, action) => this.receiveBattleAction(sender, action),
       onBattleState: (snapshot) => this.applyBattle(snapshot),
-      onBattleShot: (sender, shot) => {
-        const pilot = this.battle.pilots.find(p => p.id === sender);
-        if (this.battleActive && shot.match === this.battle.match && pilot?.life === shot.life && !pilot.shield) this.remoteWeapons.add(sender, shot);
-      },
+      onBattleShot: (sender, shot) => this.receiveBattleShot(sender, shot),
     }, peerFactory);
     this.input.attach(canvas);
     window.addEventListener("resize", this.onResize);
@@ -583,7 +582,9 @@ export class Sim {
       else this.df.prepare(this.state);
       this.dfArmed = true;
       const what = strike ? "STRIKE TARGETS ON THE GRID" : "HOSTILE CARRIER INBOUND";
-      this.dfArmText = mission === "carrier"
+      this.dfArmText = this.state.spec.rotorcraft
+        ? `${what} — COLLECTIVE UP (W) TO LIFT OFF`
+        : mission === "carrier"
         ? `${what} — HOLD SPACE TO LAUNCH`
         : `${what} — TAKE OFF TO ${strike ? "ENGAGE" : "INTERCEPT"}`;
       this.state.banner = { text: this.dfArmText, until: Infinity };
@@ -973,7 +974,7 @@ export class Sim {
       const contacts = this.remoteFleet.combatTargets().filter(p => this.battle.pilots.some(row => row.id === p.id && row.hp > 0 && !row.shield));
       const self = this.battle.pilots.find(p => p.id === this.netState.self);
       if (self && self.hp > 0 && !self.shield) contacts.push({ id: this.netState.self, pos: this.state.pos, vel: this.state.vel });
-      this.remoteWeapons.step(frameDt, contacts, this.netState.self);
+      this.remoteWeapons.step(frameDt, contacts, this.netState.self, this.df.flareTargets());
     } else this.remoteWeapons.clear();
     this.updateCamera(frameDt);
     this.updateSun();
@@ -1042,6 +1043,17 @@ export class Sim {
     this.remoteWeapons.clear();
     this.prevPos.copy(st.pos); this.prevQuat.copy(st.quat);
     this.rig.resetFollow(); this.breakupHide = false;
+  }
+
+  private receiveBattleShot(sender: string, shot: BattleShot): void {
+    const pilot = this.battle.pilots.find(p => p.id === sender);
+    if (!this.battleActive || shot.match !== this.battle.match || !pilot?.ready || pilot.hp <= 0 || pilot.life !== shot.life || pilot.shield) return;
+    const key = `${shot.match}/${sender}/${shot.life}`;
+    if (shot.seq <= (this.battleSeenShots.get(key) ?? -1)) return;
+    this.battleSeenShots.set(key, shot.seq);
+    if (this.battleSeenShots.size > 64) this.battleSeenShots.delete(this.battleSeenShots.keys().next().value!);
+    if (shot.weapon === "flare") this.df.receiveRemoteFlare(sender, shot.life, shot);
+    else this.remoteWeapons.add(sender, shot);
   }
 
   private receiveBattleAction(sender: string, action: BattleAction): void {
@@ -1396,7 +1408,10 @@ export class Sim {
       this.df.step(FIXED_DT, this.state, inp.fire === true, false);
       // A wheels-down on a friendly deck or runway is a recovery, not the end:
       // the racks and the hull come back full so the pilot can go again.
-      if (!this.battleActive && wasAirborne && isRecoverySurface(this.state)) this.refillOnRecovery();
+      if (wasAirborne && isRecoverySurface(this.state)) {
+        if (!this.battleActive) this.refillOnRecovery();
+        else if (this.state.spec.rotorcraft && this.state.speed <= 20) this.rearmBattleAircraft();
+      }
       wasAirborne = this.state.airborne;
       this.acc -= FIXED_DT;
       steps++;
@@ -1428,14 +1443,22 @@ export class Sim {
     const launchBriefing = this.state.banner?.text ?? "READY FOR LAUNCH";
     this.state.time = landed.time;
     this.state.flightTime = landed.flightTime;
-    this.df.refill();
-    this.df.setBattleHull(self.hp); // the host confirms hull repair on the wire
-    this.battleRecoveryLife = self.life;
-    this.battleRecoveryAt = 0;
+    this.rearmBattleAircraft();
     this.prevPos.copy(this.state.pos);
     this.prevQuat.copy(this.state.quat);
     this.rig.resetFollow();
     this.pushBanner(`RECOVERED & REARMED — ${launchBriefing}`);
+  }
+
+  /** Stores are local; a valid surface pose lets the host confirm hull repair. */
+  private rearmBattleAircraft(): void {
+    const self = this.battle.pilots.find(p => p.id === this.netState.self);
+    if (!self?.ready || self.hp <= 0) return;
+    this.df.refill();
+    this.df.setBattleHull(self.hp);
+    this.battleRecoveryLife = self.life;
+    this.battleRecoveryAt = 0;
+    this.pushBanner("RECOVERED & REARMED — READY TO LIFT");
   }
 
   /** Refuel and re-arm on a landing, and say so. */
@@ -1551,6 +1574,7 @@ export class Sim {
       trim: st.trim,
       sweepDeg: Math.round(st.sweep),
       sweepable: st.spec.sweepMax > st.spec.sweepMin,
+      rotorcraft: st.spec.rotorcraft === true,
       stalled: st.stalled,
       onGround: st.onGround,
       catPhase: st.catPhase,
@@ -1683,7 +1707,7 @@ export class Sim {
       dfMissilesMax: h.missilesMax,
       dfFlares: h.flares,
       dfFlaresMax: h.flaresMax,
-      dfIncoming: h.incoming,
+      dfIncoming: h.incoming ?? this.remoteWeapons.warning ?? null,
       dfCarrier: h.carrier,
       dfBombsTracking: h.bombsTracking,
       dfBombTracks: this.df.bombPositions().map((p) => ({

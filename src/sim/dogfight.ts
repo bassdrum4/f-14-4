@@ -1,3 +1,4 @@
+import { captureFlare, missileWarning, type FlareTarget } from "./countermeasures";
 import type { BattleWeapon, WeaponLaunch } from "../net/versus";
 import { advanceBomb, canBombReach, BOMB_ARM_TIME as BOMB_ARM, BOMB_DETONATION_RADIUS as LGB_DET } from "./bombTrajectory";
 // Combat layer for the mission modes. Two scenarios share one machinery:
@@ -228,11 +229,9 @@ const FLARE_BURN = 4.5; // s each cartridge burns
 const FLARE_EJECT_DOWN = 14; // m/s ejection, downward (body -Y)
 const FLARE_EJECT_BACK = 5; // m/s ejection, aft (body +Z)
 const FLARE_SPREAD = 3.4; // m/s of per-cartridge scatter
-const FLARE_LOCK_R = 900; // m: a seeker must be this close to see a flare
-const FLARE_LOCK_CONE = 0.6; // rad off boresight the seeker can see
-const FLARE_CAPTURE = 3.6; // 1/s peak capture rate, dead on boresight
 const FLARE_TRAIL = 0.055; // s between smoke puffs behind a burning cartridge
-const MAX_FLARES = 48; // meshes in the decoy pool (salvo x burn/cd, rounded up)
+const MAX_FLARES = 256; // local cartridges plus bounded remote salvos
+const LOCAL_FLARE_RESERVE = 32; // remote effects cannot exhaust the pilot's pool
 const FLARE_GRAVITY = 0.55; // flares are light and draggy, not bricks
 
 // --- bandit air-to-air rounds ---
@@ -266,8 +265,7 @@ interface Missile {
 }
 
 /** One burning countermeasure cartridge: ballistic, short-lived, decoyable. */
-interface Flare {
-  pos: THREE.Vector3;
+interface Flare extends FlareTarget {
   vel: THREE.Vector3;
   life: number; // s of burn left
   trailT: number; // s to the next smoke puff
@@ -920,6 +918,7 @@ export class Dogfight {
   beginVersus(player: AircraftState, refillStores = true): void {
     const bombs = this.bombsLeft;
     const missiles = this.missilesLeft;
+    const flares = this.flaresLeft;
     this.setAircraft(player);
     this.clear();
     this.versus = true;
@@ -928,6 +927,7 @@ export class Dogfight {
     if (!refillStores) {
       this.bombsLeft = Math.min(bombs, this.bombsMax);
       this.missilesLeft = Math.min(missiles, this.missilesMax);
+      this.flaresLeft = Math.min(flares, this.flaresMax);
     }
   }
   setOpponents(opponents: CombatOpponent[]): void { this.opponents = opponents; }
@@ -1470,16 +1470,7 @@ export class Dogfight {
       }
     }
     if (!best || bestD > MISSILE_WARN_R) return null;
-    const dx = best.pos.x - player.pos.x;
-    const dz = best.pos.z - player.pos.z;
-    const closing = DIR.copy(player.pos).sub(best.pos).dot(TMP.copy(best.vel).normalize());
-    return {
-      km: bestD / 1000,
-      brgDeg: (Math.atan2(dx, -dz) * 180) / Math.PI,
-      // How long at the round's current closing speed (it is still accelerating
-      // on the motor, so this is the honest worst case, not a guess).
-      sec: closing > 1 ? bestD / closing : 0,
-    };
+    return missileWarning(best.pos, best.vel, player.pos, player.vel);
   }
 
   /** HUD snapshot of the fight, measured from the player. */
@@ -2196,7 +2187,7 @@ export class Dogfight {
   /**
    * Deploy flares (the countermeasure key): one press ejects a small salvo.
    * Cartridges come off the airframe's spec, so a Crusader with 16 has four
-   * presses and a Tomcat with 30 has seven. Nothing stops a pilot flaring at
+   * presses and a Tomcat with 30 has eight (the last releases two). Nothing stops a pilot flaring at
    * nothing — that is what the count is for.
    */
   requestFlares(player: AircraftState): void {
@@ -2224,8 +2215,6 @@ export class Dogfight {
   /** Eject `n` cartridges from the belly, scattering as they fall away. */
   private deployFlares(player: AircraftState, n: number): void {
     for (let k = 0; k < n; k++) {
-      const mesh = this.flarePool.pop();
-      if (!mesh) return;
       const side = k % 2 === 0 ? 1 : -1;
       const roll = Math.floor(k / 2) === 0 ? 0 : 1;
       const off = new THREE.Vector3(side * (1.2 + roll * 1.4), -1.5, 2.4 + roll * 1.2);
@@ -2236,12 +2225,31 @@ export class Dogfight {
         FLARE_EJECT_BACK,
       ).applyQuaternion(player.quat);
       const vel = player.vel.clone().add(eject);
-      mesh.visible = true;
-      mesh.position.copy(pos);
-      this.root.add(mesh);
-      this.flares.push({ pos, vel, life: FLARE_BURN, trailT: 0, mesh });
-      this.blasts.spawnSpark(pos, false);
+      if (!this.putFlare(pos, vel, null, 0)) return;
+      if (this.versus) this.weaponLaunches.push({ weapon: "flare", pos: pos.toArray(), vel: vel.toArray() });
     }
+  }
+
+  /** A remote cartridge spends no local stores and is never echoed back. */
+  receiveRemoteFlare(owner: string, life: number, shot: WeaponLaunch): boolean {
+    if (!this.versus || shot.weapon !== "flare" || this.flarePool.length <= LOCAL_FLARE_RESERVE) return false;
+    if (this.flares.filter(f => f.owner === owner).length >= 28) return false;
+    return this.putFlare(new THREE.Vector3(...shot.pos), new THREE.Vector3(...shot.vel), owner, life);
+  }
+
+  /** Live references let cosmetic seekers follow the same burning cartridges. */
+  flareTargets(): readonly FlareTarget[] { return this.flares; }
+
+  private putFlare(pos: THREE.Vector3, vel: THREE.Vector3, owner: string | null, ownerLife: number): boolean {
+    const mesh = this.flarePool.pop();
+    if (!mesh) return false;
+    mesh.scale.setScalar(1);
+    mesh.visible = true;
+    mesh.position.copy(pos);
+    this.root.add(mesh);
+    this.flares.push({ pos, vel, life: FLARE_BURN, trailT: 0, mesh, owner, ownerLife });
+    this.blasts.flareIgnition(pos);
+    return true;
   }
 
   /** Fly the cartridges: ballistic, burning, trailing smoke, then gone. */
@@ -2267,12 +2275,13 @@ export class Dogfight {
       f.pos.addScaledVector(f.vel, dt);
       f.trailT -= dt;
       if (f.trailT <= 0) {
-        this.blasts.trail(f.pos, 1.1, 1.5);
+        this.blasts.trail(f.pos, .4, .75);
         f.trailT = FLARE_TRAIL;
       }
       const g = groundAt(f.pos.x, f.pos.z);
       if (f.pos.y <= g.y) {
-        // a cartridge that reaches the surface just goes out
+        // Seekers holding this reference must see that the cartridge went out.
+        f.life = 0;
         f.mesh.visible = false;
         this.flarePool.push(f.mesh);
         this.flares.splice(i, 1);
@@ -2290,28 +2299,9 @@ export class Dogfight {
    * faster the lock lets go. Once a round is captured it stays captured.
    */
   private captureFlare(m: Missile, dt: number): Flare | null {
-    const speed = m.vel.length();
-    if (speed <= 1 || this.flares.length === 0) return null;
-    DIR.copy(m.vel).divideScalar(speed);
-    let best: Flare | null = null;
-    let bestAng = Infinity;
-    for (const f of this.flares) {
-      if (f.life <= 0) continue;
-      TMP.copy(f.pos).sub(m.pos);
-      const d = TMP.length();
-      if (d > FLARE_LOCK_R || d < 1e-3) continue;
-      TMP.divideScalar(d);
-      const ang = DIR.angleTo(TMP);
-      if (ang > FLARE_LOCK_CONE || ang >= bestAng) continue;
-      best = f;
-      bestAng = ang;
-    }
-    if (!best) return null;
-    const rate = FLARE_CAPTURE * (1 - bestAng / FLARE_LOCK_CONE);
-    const roll = hash(
-      m.seed + m.pos.x * 0.31 + m.pos.y * 0.17 + m.pos.z * 0.53 + m.life * 7.7,
-    );
-    return roll < 1 - Math.exp(-rate * dt) ? best : null;
+    return captureFlare(m, this.flares, dt, f => m.hostile
+      ? f.owner === null
+      : this.versus && f.owner !== null && this.opponents.some(o => o.id === f.owner && o.life === f.ownerLife));
   }
 
   /** Take a round out of the fight and back into the mesh pool. */
@@ -2575,8 +2565,18 @@ export class Dogfight {
           const target = m.decoy ? m.decoy.pos : player.pos;
           this.steerSeeker(m, target, dt);
         } else {
-          // --- our own round: nearest live enemy, re-locked every step ---
-          const target = this.nearestMissileTarget(m.pos);
+          if (m.decoy && m.decoy.life <= 0) m.decoy = null;
+          if (!m.decoy) m.decoy = this.captureFlare(m, dt);
+          // A captured PvP seeker fuzes its cartridge, without claiming a hit
+          // or damaging a nearby airframe with the decoy explosion.
+          if (m.decoy) {
+            if (this.steerSeeker(m, m.decoy.pos, dt) < MISSILE_DET) {
+              this.blasts.spawn(m.pos.clone(), "air", .7);
+              this.retireMissile(i, m);
+              continue;
+            }
+          }
+          const target = m.decoy ? null : this.nearestMissileTarget(m.pos);
           if (target) {
             const toT = this.steerSeeker(m, target, dt);
             if (toT < MISSILE_DET) {
@@ -2626,7 +2626,7 @@ export class Dogfight {
             this.damagePlayer(player, MISSILE_PLAYER_DMG);
             hit = "air";
           }
-        } else {
+        } else if (!m.decoy) {
           for (const b of this.bandits) {
             if (b.catT >= 0) continue;
             if (b.pos.distanceTo(m.pos) < MISSILE_AIR_R) {
@@ -2666,7 +2666,10 @@ export class Dogfight {
         const g = groundAt(m.pos.x, m.pos.z);
         if (m.pos.y <= g.y) hit = g.kind === "water" ? "water" : "ground";
       }
-      if (hit) this.impactMissile(i, m.pos, hit, player);
+      if (hit && m.decoy) {
+        this.blasts.spawn(m.pos.clone(), hit, .7);
+        this.retireMissile(i, m);
+      } else if (hit) this.impactMissile(i, m.pos, hit, player);
     }
   }
 

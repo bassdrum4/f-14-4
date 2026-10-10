@@ -390,7 +390,7 @@ function smooth01(t: number): number {
  * null outside the ball-call window, when the jet is parked, or after a result.
  */
 export function glideStateFor(st: AircraftState): GlideState | null {
-  if (st.onGround || st.result) return null;
+  if (st.spec.rotorcraft || st.onGround || st.result) return null;
   const c = carrierAt(st.pos.x, st.pos.z) ?? nearestCarrier(st.pos.x, st.pos.z);
   const { s, d } = stripCoords(c, st.pos.x, st.pos.z);
   // Behind the origin (s past the aim point) there is no slope left to read.

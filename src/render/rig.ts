@@ -48,18 +48,10 @@ export function animateJet(
   jet.gear.scale.y = Math.max(0.08, gearT);
   jet.gear.position.y = (1 - gearT) * 1.1 + (gearT > 0.02 ? s.wheelPen : 0);
 
-  // rotorcraft: the main disc and the tail rotor spin with engine spool. The
-  // blades are driven on frame time (not sim time) so the disc keeps turning
-  // while paused, and the rate reads as a spinning blur rather than a strobing
-  // set of blades at low frame rates.
-  if (jet.rotor) {
-    const spin = (0.25 + 0.75 * clampSym(s.rpm, 1)) * 38;
-    jet.rotor.rotation.y = (jet.rotor.rotation.y + spin * dt) % (Math.PI * 2);
-  }
-  if (jet.tailRotor) {
-    const spin = (0.25 + 0.75 * clampSym(s.rpm, 1)) * 70;
-    jet.tailRotor.rotation.x = (jet.tailRotor.rotation.x + spin * dt) % (Math.PI * 2);
-  }
+  // A governed rotor runs at a steady rate. Use simulation time, so frame
+  // rate does not change its speed and paused flight stays visually paused.
+  if (jet.rotor) jet.rotor.rotation.y = (s.time * 27) % (Math.PI * 2);
+  if (jet.tailRotor) jet.tailRotor.rotation.x = (s.time * 70) % (Math.PI * 2);
 
   // afterburner flame
   const flameMat = jet.afterburner.material as THREE.MeshBasicMaterial;

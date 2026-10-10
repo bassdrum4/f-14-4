@@ -200,6 +200,7 @@ interface Pilot {
   launches: Array<{ mission: string; carrier: number }>;
   modes: string[];
   battleStates: number;
+  shots: Array<{ sender: string; shot: unknown }>;
   links: Array<{ id: string; ms: number }>;
 }
 
@@ -212,6 +213,7 @@ function makePilot(): Pilot {
     launches: [],
     modes: [],
     battleStates: 0,
+    shots: [],
     links: [],
   };
   rec.net = new Multiplayer(
@@ -222,6 +224,7 @@ function makePilot(): Pilot {
       onLaunch: (mission, carrier) => rec.launches.push({ mission, carrier }),
       onMode: (mode) => rec.modes.push(mode),
       onBattleState: () => rec.battleStates++,
+      onBattleShot: (sender, shot) => rec.shots.push({ sender, shot }),
       onLinkDelay: (id, ms) => rec.links.push({ id, ms }),
     },
     (id) => new MockPeer(broker, id) as unknown as Peer,
@@ -302,6 +305,16 @@ await flush();
 
 // The host announces itself as the room peer id: wingmen address it by that.
 const hostId = host.net.snapshot.self;
+{
+  const id = host.net.snapshot.pilots.find(p => p.linked)!.id;
+  const flare = { weapon: 'flare', seq: 1, life: 1, match: 17, pos: [0, 2000, 0], vel: [0, -14, 0] };
+  const before = host.shots.length;
+  deliver(host.net, id, { t: 'battleShot', shot: flare });
+  check('a flare cartridge crosses the peer protocol with its connection identity', host.shots.length === before + 1 && host.shots[host.shots.length - 1].sender === id);
+  for (const shot of [{ ...flare, seq: null }, { ...flare, life: -1 }, { ...flare, match: '17' }, { ...flare, pos: [0, null, 0] }, { ...flare, vel: [0, -1e8, 0] }]) deliver(host.net, id, { t: 'battleShot', shot });
+  check('malformed flare packets are rejected', host.shots.length === before + 1);
+}
+
 const roster = () => host.net.snapshot.pilots.map((p) => p.name);
 check("the wingmen are on the host's roster", roster().join() === "GOOSE,SLIDER", roster().join());
 

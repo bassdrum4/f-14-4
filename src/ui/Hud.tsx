@@ -24,7 +24,7 @@ export function useHud(sim: Sim | null): HudSnapshot {
 const EMPTY: HudSnapshot = {
   speedKt: 0, altFt: 0, mach: 0, headingDeg: 0, aoaDeg: 0, vsFpm: 0, gLoad: 1,
   throttlePct: 0, rpmPct: 0, ab: 0, abOn: false, gear: true, flaps: false, speedbrake: false,
-  trim: 0.5, sweepDeg: 20, sweepable: false, stalled: false, onGround: true, catPhase: "ready",
+  trim: 0.5, sweepDeg: 20, sweepable: false, rotorcraft: false, stalled: false, onGround: true, catPhase: "ready",
   catProgress: 0, pitchDeg: 0, rollDeg: 0, cameraMode: "chase", flightTime: 0,
   distCarrierKm: 0, bearingCarrierDeg: 0, carrierName: "—", distFieldKm: 0,
   bearingFieldDeg: 0, worldLabel: "Procedural islands", worldSeed: DEFAULT_SEED,
@@ -105,13 +105,15 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
         <div className="hud-eng">
           {/* One throttle readout: the bar carries the percentage and the AB
               flag, so a separate RPM line would just repeat it. */}
-          <ThrottleBar pct={hud.throttlePct} ab={hud.ab} />
+          <ThrottleBar pct={hud.throttlePct} ab={hud.ab} collective={hud.rotorcraft} />
         </div>
         <div className="hud-toggles">
           <Tag on={hud.gear} text="GEAR" warn={!hud.gear && !hud.onGround} />
-          <Tag on={hud.flaps} text="FLAPS" />
-          <Tag on={hud.speedbrake} text="S-BRAKE" />
-          <Tag on={hud.trim > 0.52 || hud.trim < 0.48} text="TRIM" />
+          {!hud.rotorcraft && <>
+            <Tag on={hud.flaps} text="FLAPS" />
+            <Tag on={hud.speedbrake} text="S-BRAKE" />
+            <Tag on={hud.trim > 0.52 || hud.trim < 0.48} text="TRIM" />
+          </>}
           {/* Armed but not lit reads amber: the switch is up, the throttle
               is not yet at max, so there is no burner yet. */}
           {(hud.abOn || hud.ab > 0.05) && (
@@ -194,12 +196,12 @@ function Gauge({
   );
 }
 
-function ThrottleBar({ pct, ab }: { pct: number; ab: number }) {
+function ThrottleBar({ pct, ab, collective }: { pct: number; ab: number; collective: boolean }) {
   return (
     <div className="hud-throttle">
       <div className="hud-throttle-fill" style={{ width: `${pct}%` }} />
       {ab > 0.05 && <div className="hud-throttle-ab" style={{ width: `${Math.min(100, pct * 0.6)}%` }} />}
-      <span>THR {pct}%{ab > 0.05 ? " AB" : ""}</span>
+      <span>{collective ? "COLL" : "THR"} {pct}%{ab > 0.05 ? " AB" : ""}</span>
     </div>
   );
 }
@@ -516,7 +518,7 @@ function TargetBoxes({ sim, gunCross }: { sim: Sim | null; gunCross: boolean }) 
         ctx.fillStyle = "rgba(255, 176, 120, 0.95)";
         ctx.fillText(
           `${inc.km.toFixed(1)} KM · ${((inc.brgDeg + 360) % 360).toFixed(0)}° · ` +
-            (inc.sec > 0 ? `${inc.sec.toFixed(0)} S TO IMPACT · ` : "CLOSING · ") +
+            (inc.sec > 0 ? `~${Math.max(1, Math.ceil(inc.sec))} S TO IMPACT · ` : "OPENING · ") +
             `[Z] FLARES ${hud.dfFlares}`,
           w / 2,
           h * 0.24 + 20,

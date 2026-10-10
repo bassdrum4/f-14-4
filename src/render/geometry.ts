@@ -565,17 +565,17 @@ function buildCrusaderMesh(paint: "gray" | "bandit"): TomcatMesh {
   const group = new THREE.Group();
 
   // --- fuselage: a tube with a nose inlet (nose at -Z) ---
-  add(group, taperedBox(1.32, 1.3, 1.55, 1.5, 1.5, 0, -0.04), matBody, 0, -0.05, -7.35); // inlet lip
-  add(group, taperedBox(1.55, 1.5, 1.72, 1.6, 4.6), matBody, 0, 0, -4.3); // forward
-  add(group, taperedBox(1.72, 1.6, 1.86, 1.72, 6.4), matBody, 0, 0, 1.2); // mid
-  add(group, taperedBox(1.86, 1.72, 1.5, 1.2, 3.6, 0, 0.16), matBody, 0, 0, 6.2); // aft
+  add(group, new THREE.CylinderGeometry(.775, .66, 1.5, 14).rotateX(Math.PI / 2), matBody, 0, -0.05, -7.35); // inlet lip
+  add(group, new THREE.CylinderGeometry(.86, .775, 4.6, 14).rotateX(Math.PI / 2), matBody, 0, 0, -4.3); // forward
+  add(group, new THREE.CylinderGeometry(.93, .86, 6.4, 14).rotateX(Math.PI / 2), matBody, 0, 0, 1.2); // mid
+  add(group, new THREE.CylinderGeometry(.75, .93, 3.6, 14).rotateX(Math.PI / 2), matBody, 0, 0, 6.2); // aft
   add(group, taperedBox(1.1, 0.5, 1.35, 0.6, 2.2), matBody, 0, 0.78, -0.4); // dorsal spine
 
-  // nose inlet: a dark ring with the translating centrebody
-  const ring = add(group, new THREE.CylinderGeometry(0.64, 0.64, 0.34, 16, 1, true), matDark, 0, -0.05, -8.1);
+  // Low intake and a rounded upper nose distinguish the Crusader silhouette.
+  const ring = add(group, new THREE.CylinderGeometry(0.48, 0.48, 0.34, 16, 1, true), matDark, 0, -0.3, -8.1);
   ring.rotation.x = Math.PI / 2;
-  const spike = add(group, new THREE.ConeGeometry(0.34, 0.95, 12), matDark, 0, -0.05, -8.25);
-  spike.rotation.x = -Math.PI / 2;
+  const upperNose = add(group, new THREE.SphereGeometry(.62, 14, 10), matBody, 0, .4, -7.65);
+  upperNose.scale.set(1, .65, 1.45);
 
   // canopy, set forward of the wing
   const canopy = add(group, new THREE.SphereGeometry(0.78, 16, 12), matGlass, 0, 0.95, -4.0);
@@ -653,9 +653,8 @@ function buildSeahawkMesh(paint: "gray" | "bandit"): TomcatMesh {
   // --- fuselage (nose at -Z): a rounded nose into a boxy cabin and tail boom ---
   const nose = add(group, new THREE.SphereGeometry(1.15, 16, 12), matBody, 0, -0.1, -5.6);
   nose.scale.set(1.0, 1.0, 1.9);
-  add(group, taperedBox(2.3, 2.1, 2.5, 2.35, 4.2), matBody, 0, -0.05, -2.2);
-  add(group, taperedBox(2.5, 2.35, 2.3, 2.1, 4.6), matBody, 0, -0.05, 1.6);
-  add(group, taperedBox(2.3, 2.1, 1.0, 0.95, 5.4, 0, 0.35), matBody, 0, 0.25, 6.0); // tail boom
+  add(group, new THREE.CapsuleGeometry(1.15, 6.3, 4, 12).rotateX(Math.PI / 2), matBody, 0, -0.05, -0.2);
+  add(group, new THREE.CylinderGeometry(.32, .85, 5.4, 12).rotateX(Math.PI / 2), matBody, 0, 0.4, 6.0); // tail boom
   add(group, taperedBox(1.6, 0.4, 1.9, 0.5, 3.4), matBody, 0, 1.2, -0.4); // engine deck
 
   // canopy, set well forward

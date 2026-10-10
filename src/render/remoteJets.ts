@@ -404,6 +404,10 @@ export class RemoteFleet {
         r.mesh.wings[0].rotation.y = -sweep;
         r.mesh.wings[1].rotation.y = sweep;
       }
+      // Remote packets contain no collective; present a governed rotor rate
+      // on frame time rather than leaving the helicopter's blades frozen.
+      if (r.mesh.rotor) r.mesh.rotor.rotation.y = (r.mesh.rotor.rotation.y + 27 * dtMs / 1000) % (Math.PI * 2);
+      if (r.mesh.tailRotor) r.mesh.tailRotor.rotation.x = (r.mesh.tailRotor.rotation.x + 70 * dtMs / 1000) % (Math.PI * 2);
       r.mesh.gear.visible = (a.p.flags & FLAG_GEAR) !== 0;
       const ab = (a.p.flags & FLAG_AB) !== 0;
       r.mesh.afterburner.visible = ab;
