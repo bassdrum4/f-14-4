@@ -1,5 +1,11 @@
 # Changelog
 
+The numbered entries below cover recent assigned build labels. Earlier
+development arrived in large exports with stale 1.0.0 metadata. See
+[the code history investigation](docs/VERSION-ARCHAEOLOGY.md) for the full
+surviving timeline, the recovered intermediate build, and the remaining
+history gaps. **1.2.2 is not a recovered original version for all that work.**
+
 ## 1.2.2 — 2026-10-09
 
 The current release includes the changes below. The displayed version stayed
@@ -17,12 +23,13 @@ at 1.1.1 while these updates landed; this release corrects that drift.
 - Both deployed HTML files now expose their package version as metadata; the
   standalone check rejects stale versions or differing deployment copies.
 
-### How the version was reconstructed
+### How recent build labels were assigned
 
-Git history contains no release tags. The following is a reasoned mapping of
-changes to minor/patch updates, anchored to versions that were actually shown
-in published builds. **1.2.0 and 1.2.1 are reconstructed milestones, not claimed
-historical releases or tags.** Merge/build commits are not separate updates.
+Git history contains no release tags. The following maps recent changes to
+minor/patch updates using the labels assigned in October 9's published builds.
+It does not account for the full development history before those labels.
+**1.2.0 and 1.2.1 are reconstructed milestones, not claimed historical releases
+or tags.** Merge/build commits are not separate updates.
 
 | Version | Evidence | Reason |
 | --- | --- | --- |
@@ -33,6 +40,7 @@ historical releases or tags.** Merge/build commits are not separate updates.
 | 1.2.2 (current) | [`7323eca`](https://github.com/bassdrum4/f-14-4/commit/7323eca4b0d9bb4238c524d1c6ecd4448122af90), plus version correction | Landing, cable visibility, navigation and map corrections warrant the next patch. |
 
 Older snapshots repeatedly carried the default 1.0.0 even as their features
-changed. That metadata does not establish additional numbered releases. This
-reconstruction preserves published 1.1.0/1.1.1 labels and does not rewrite Git
-history or invent older version numbers.
+changed. Comparing source and compiled copies establishes additional game
+states, including an intermediate October 7 build recovered from `bored`,
+but does not recover their original release numbers. The recent numbering
+preserves published 1.1.0/1.1.1 labels; the earlier history remains incomplete.

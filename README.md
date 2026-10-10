@@ -1,8 +1,10 @@
 # F-14 Carrier Simulator
 
-Current release: **1.2.2**. See [CHANGELOG.md](CHANGELOG.md) for the version
-reconstruction and the changes behind each milestone. `package.json` supplies
-both the in-game badge and the HTML's `application-version` metadata.
+Current published build label: **1.2.2**. See [CHANGELOG.md](CHANGELOG.md) for
+recent numbering and [the code history investigation](docs/VERSION-ARCHAEOLOGY.md)
+for the earlier development, recovered builds and missing release history.
+`package.json` supplies both the in-game badge and the HTML's
+`application-version` metadata.
 
 The **current** simulator lives in typed TypeScript/React modules in `src/`.
 This source was recovered from the newest feature-complete project
