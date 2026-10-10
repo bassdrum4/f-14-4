@@ -49,7 +49,7 @@ const store = new MemStorage();
 // --- a collector we control ----------------------------------------------
 
 // The feedback module ships a JSON payload to the configured Apps Script URL.
-// Code.gs reads the message fields and the optional api-key header off the POST.
+// The backend reads the message fields and the optional api-key header off the POST.
 interface Hit {
   path: string;
   body: Record<string, unknown>;
@@ -108,6 +108,10 @@ const env = import.meta.env as Record<string, string | undefined>;
 delete env.VITE_FEEDBACK_ENDPOINT;
 delete env.VITE_FEEDBACK_KEY;
 
+/** The shared backend the sim ships with (src/gamestate.ts). */
+const SHARED_BACKEND =
+  "https://script.google.com/macros/s/AKfycbwsrT3N6toVVVaQ4oxHFs6iWwzD3NrWbrhUe0pcqipuIm2x8gs31i-LSOWZKpVIlLnb/exec";
+
 const {
   buildEntry,
   clearPending,
@@ -121,9 +125,16 @@ const {
   submitFeedback,
 } = await import("../src/feedback/feedback");
 
-// --- 1. unconfigured: nothing is sent, nothing is lost --------------------
+// --- 1. no usable collector: nothing is sent, nothing is lost ------------
+//
+// The collector is the shared backend now, so the only way to have none is a
+// value that is not a URL — a developer's typo, or something the host mangled.
+// It has to fail closed: keep the report, post nothing anywhere.
 {
-  check("with no endpoint the module reports itself unconfigured", !feedbackConfigured());
+  env.VITE_FEEDBACK_ENDPOINT = "not a url";
+  check("an unusable endpoint is reported as a problem",
+    feedbackEndpointProblem() !== null, String(feedbackEndpointProblem()));
+  check("and the module reads as unconfigured", !feedbackConfigured());
   check("a fresh queue is empty", pendingCount() === 0, String(pendingCount()));
 
   const res = await submitFeedback(
@@ -149,8 +160,8 @@ const {
   check("the queued entry has a unique id", typeof queued.id === "string" && queued.id.length > 0, String(queued.id));
 
   const flushed = await flushFeedback();
-  check("flushing with no endpoint sends nothing", flushed === 0, String(flushed));
-  check("the unconfigured submission is still queued", pendingCount() === 1, String(pendingCount()));
+  check("flushing without a usable endpoint sends nothing", flushed === 0, String(flushed));
+  check("the submission is still queued", pendingCount() === 1, String(pendingCount()));
 }
 
 // --- 2. configured: the submission is delivered and dequeued --------------
@@ -174,7 +185,7 @@ const {
   check("the body carries the callsign", body.callsign === "Iceman", String(body.callsign));
   check("the email is trimmed", body.email === "rio@example.com", String(body.email));
   check("with context off, no context rides along", body.context === undefined, JSON.stringify(body.context));
-  // The envelope Code.gs pattern-matches on before appending the row.
+  // The envelope the collector pattern-matches on before appending the row.
   check("the payload is tagged for this app", body.app === "f14sim", String(body.app));
   check("the payload is tagged as feedback", body.type === "feedback", String(body.type));
 }
@@ -212,7 +223,7 @@ const {
   delete env.VITE_FEEDBACK_KEY;
 }
 
-// --- 5. the payload always matches what Code.gs appends to the sheet -------
+// --- 5. the payload always matches what the collector appends to the sheet -
 {
   env.VITE_FEEDBACK_ENDPOINT = `${base}/macros/s/ABC123def-/_exec`;
   hits.length = 0;
@@ -319,28 +330,37 @@ const {
   env.VITE_FEEDBACK_ENDPOINT = `${base}/collect`;
   check("a real http URL is still accepted", feedbackConfigured());
   delete env.VITE_FEEDBACK_ENDPOINT;
-  check("removing it leaves the module unconfigured", !feedbackConfigured());
+  check("with no override the shared backend is the collector",
+    feedbackConfigured() && feedbackEndpoint() === SHARED_BACKEND, String(feedbackEndpoint()));
 }
 
-// --- 9. a platform-wrapped value must not silence the collector -----------
+// --- 9. a wrapped value, and a production build ---------------------------
 //
 // The production env store hands `vite build` an encrypted envelope instead
 // of the plaintext URL. That blob is not a URL, but going dark would strand
-// every report in localStorage — the built-in collector copy has to take over.
+// every report in localStorage — the shared backend has to take over.
 {
   const wrapped = "eyJ2IjoidjIiLCJjIjoi" + "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWY".repeat(20) + "==";
   env.VITE_FEEDBACK_ENDPOINT = wrapped;
   check("a wrapped value still yields a configured collector", feedbackConfigured());
-  check("it falls back to the built-in Apps Script URL",
-    feedbackEndpoint() ===
-      "https://script.google.com/macros/s/AKfycbyvrTV3PRKm4EX6E3VDnsQ6MjLkYWVgRhw3IML1g0LBijifmv-lQGsxVyaQHZWVcrF0xQ/exec",
-    String(feedbackEndpoint()));
+  check("it falls back to the shared backend URL",
+    feedbackEndpoint() === SHARED_BACKEND, String(feedbackEndpoint()));
   check("a wrapped value reports no configuration problem",
     feedbackEndpointProblem() === null, String(feedbackEndpointProblem()));
 
   // A short pasted token must keep failing closed — no silent redirect.
   env.VITE_FEEDBACK_ENDPOINT = "eyJ2IjoidjIiLCJjIjoiYmFyZXRva2Vu";
   check("a short pasted token is still refused", !feedbackConfigured());
+
+  // A production build ignores the variable outright, whatever it holds: a
+  // stale deployment URL in the host's env store must not redirect live
+  // reports at a script that cannot take them. (Vite inlines PROD=true into
+  // the built bundle; here it is set on the same env object the module reads.)
+  env.PROD = "true";
+  env.VITE_FEEDBACK_ENDPOINT = `${base}/stale-collector`;
+  check("a production build posts to the shared backend, not the env value",
+    feedbackEndpoint() === SHARED_BACKEND, String(feedbackEndpoint()));
+  delete env.PROD;
   delete env.VITE_FEEDBACK_ENDPOINT;
 }
 

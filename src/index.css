@@ -259,6 +259,8 @@ html, body, #root {
   letter-spacing: 0.02em;
   max-width: min(560px, 52vw);
 }
+.hud-flare { color: var(--hud-amber); letter-spacing: 0.03em; }
+.hud-flare.empty { color: #ff8f7d; }
 .hud-cv { color: #ff8f7d; letter-spacing: 0.04em; }
 .hud-cam { opacity: 0.6; font-size: 9px; letter-spacing: 0.1em; }
 

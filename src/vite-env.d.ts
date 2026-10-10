@@ -1,14 +1,15 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  /** Google Apps Script web app that collects feedback (see Code.gs):
-   *  https://script.google.com/macros/s/<SCRIPT_ID>/exec
-   *  A valid value wins; when it is missing or is the production store's
-   *  encrypted wrapper, the client falls back to the built-in collector URL. */
+  /** Optional: a *different* Google Apps Script web app to collect feedback
+   *  (https://script.google.com/macros/s/<SCRIPT_ID>/exec) instead of the
+   *  shared backend in gamestate.ts. Development builds honour it (the
+   *  headless checks point it at a local stand-in); production builds ignore it
+   *  so a stale host value cannot redirect live reports. */
   readonly VITE_FEEDBACK_ENDPOINT?: string;
   /** Optional shared secret. Sent as an `api-key` header and `access_key` in
    *  the body; set the same value as FEEDBACK_KEY in the script's Script
-   *  Properties and Code.gs will reject anything that does not match. A
+   *  Properties and the backend will reject anything that does not match. A
    *  wrapped (unusable) value is ignored rather than sent. */
   readonly VITE_FEEDBACK_KEY?: string;
 

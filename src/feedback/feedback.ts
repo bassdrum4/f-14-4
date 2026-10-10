@@ -1,28 +1,32 @@
 // Feedback storage.
 //
 // The sim is a static site, so there is no server of its own to receive
-// feedback. Submissions are posted to a Google Apps Script web app deployed
-// from Code.gs — a free, no-backend collector that exposes a publicly
-// callable URL and appends each report to a Google Sheet.
+// feedback. Submissions are posted to the same Google Apps Script web app that
+// stores the pilot profiles (Gamestate.gs in the repo root, endpoint in
+// gamestate.ts) — a free, no-backend collector that appends each report to a
+// Feedback tab in the same spreadsheet.
+//
+// It used to post to a separate Code.gs collector, with its own URL to deploy
+// and keep in step with the profile store. When the two got crossed the form
+// posted profile-shaped JSON at the profile store and every report came back
+// "callsign is required". One URL, one deployment.
 //
 // Environment (Settings → Environment / .env.local):
-//   VITE_FEEDBACK_ENDPOINT  — the Apps Script deployment URL of the form
-//                             https://script.google.com/macros/s/<SCRIPT_ID>/exec
-//                             (or /dev while you are still developing it).
+//   VITE_FEEDBACK_ENDPOINT  — optional. Only needed to send reports to a
+//                             *different* Apps Script deployment (the URL of
+//                             the form .../macros/s/<SCRIPT_ID>/exec). Blank
+//                             or unusable falls back to the shared backend.
 //   VITE_FEEDBACK_KEY       — optional shared secret. Sent as an `api-key`
 //                             header and as `access_key` in the body; set the
 //                             same value in the script's Script Properties as
-//                             FEEDBACK_KEY and Code.gs will reject anything
-//                             that does not match.
-//
-// A usable VITE_FEEDBACK_ENDPOINT always wins, but the build carries a
-// built-in copy of the collector URL as well: the production env store wraps
-// values in an encrypted envelope before they reach `vite build`, and a
-// wrapped value is not a URL. See BUILT_IN_ENDPOINT below.
+//                             FEEDBACK_KEY and the backend will reject
+//                             anything that does not match.
 //
 // Submissions are never dropped: the report is written to the local queue
 // first, then flushed to Apps Script, and a failed collector simply keeps
 // the report queued for the next retry until the collector is back up.
+
+import { GAMESTATE_ENDPOINT } from "../gamestate";
 
 export type FeedbackKind = "bug" | "idea" | "other";
 
@@ -62,13 +66,8 @@ const VERSION = 1;
 const POST_TIMEOUT_MS = 10_000;
 
 /**
- * The deployed Apps Script web app URL, or null when none is configured.
- *
- * The value is validated rather than trusted. A scheme-less entry — a pasted
- * token, a bare script id — would be resolved against the site's own origin by
- * fetch(), and the SPA answers *any* path with `200 text/html`. The client would
- * then report "delivered" while the report was stored nowhere at all. Only an
- * absolute http(s) URL is a collector.
+ * The deployed Apps Script web app URL, or null when the resolved value is not
+ * a usable one (see feedbackEndpointStatus).
  */
 export function feedbackEndpoint(): string | null {
   const status = feedbackEndpointStatus();
@@ -79,26 +78,11 @@ export type EndpointStatus =
   | { ok: true; url: string }
   | { ok: false; reason: string };
 
-/** Why a configured endpoint is unusable, or null when it is fine/absent. */
+/** Why the configured endpoint is unusable, or null when it is fine. */
 export function feedbackEndpointProblem(): string | null {
   const status = feedbackEndpointStatus();
   return status.ok ? null : status.reason;
 }
-
-/**
- * The collector baked into the build, used only when the configured value is
- * an unreadable envelope.
- *
- * The production env store wraps values in an encrypted blob
- * (`{"v":"v2",…}`, base64, ~1.3 KB) and hands that wrapper to `vite build`,
- * so the deployed bundle would otherwise see something that is not a URL and
- * go dark. The Apps Script deployment URL is public configuration — it ships
- * in the client bundle either way — so a built-in copy keeps delivery
- * working. A usable env value (preview, local, or a future platform fix)
- * still wins.
- */
-const BUILT_IN_ENDPOINT =
-  "https://script.google.com/macros/s/AKfycbyvrTV3PRKm4EX6E3VDnsQ6MjLkYWVgRhw3IML1g0LBijifmv-lQGsxVyaQHZWVcrF0xQ/exec";
 
 /**
  * True for a platform-wrapped env value: a long base64 blob that no one
@@ -111,12 +95,41 @@ function looksLikeWrappedValue(value: string): boolean {
   return /^[A-Za-z0-9+/=_-]+$/.test(value); // envelope passed base64
 }
 
-/** Read and validate VITE_FEEDBACK_ENDPOINT in one pass. */
-export function feedbackEndpointStatus(): EndpointStatus {
+/**
+ * The collector the reports go to.
+ *
+ * One URL for the whole backend, taken from the profile store (Gamestate.gs
+ * answers both halves — see its header), so a report can never be posted at a
+ * deployment that does not understand it. That crossed wire is exactly how the
+ * form broke: it shipped its own collector URL in VITE_FEEDBACK_ENDPOINT, that
+ * variable held the profile store's deployment, and every report came back
+ * "callsign is required".
+ *
+ * A development build may still override it with VITE_FEEDBACK_ENDPOINT — that
+ * is how the headless checks point the client at a local stand-in server, and
+ * how a developer can run a separate collector while iterating. A production
+ * build ignores the variable outright: a stale or mangled value in the host's
+ * env store must not redirect live reports somewhere that cannot take them.
+ */
+function resolvedEndpoint(): string {
   const raw = (import.meta.env.VITE_FEEDBACK_ENDPOINT as string | undefined) ?? "";
   const value = raw.trim();
-  if (!value) return { ok: false, reason: "" };
-  return validateEndpoint(looksLikeWrappedValue(value) ? BUILT_IN_ENDPOINT : value);
+  // A development override, when it is a plausible URL. A wrapped platform
+  // envelope is not one, and neither is anything the host mangled: those fall
+  // through to the shared backend instead of going dark.
+  if (!import.meta.env.PROD && value && !looksLikeWrappedValue(value)) return value;
+  return GAMESTATE_ENDPOINT;
+}
+
+/**
+ * The endpoint, validated. The value is validated rather than trusted: a
+ * scheme-less entry — a pasted token, a bare script id — would be resolved
+ * against the site's own origin by fetch(), and the SPA answers *any* path with
+ * `200 text/html`, so the client would report "delivered" while the report was
+ * stored nowhere at all. Only an absolute http(s) URL is a collector.
+ */
+export function feedbackEndpointStatus(): EndpointStatus {
+  return validateEndpoint(resolvedEndpoint());
 }
 
 function validateEndpoint(value: string): EndpointStatus {
@@ -153,7 +166,7 @@ function feedbackKey(): string | null {
   const trimmed = key.trim();
   if (!trimmed) return null;
   // A platform-wrapped value would be sent verbatim and fail the script's
-  // check on every POST. Sending no key is the honest option: Code.gs only
+  // check on every POST. Sending no key is the honest option: the backend only
   // demands one when FEEDBACK_KEY is set in its Script Properties.
   if (looksLikeWrappedValue(trimmed)) return null;
   return trimmed;
@@ -219,7 +232,7 @@ export function buildEntry(input: FeedbackInput, context: FeedbackContext | null
  *
  * The body is JSON, but the Content-Type is deliberately `text/plain`: that
  * makes the request a CORS *simple request*, so the browser skips the OPTIONS
- * preflight that Apps Script web apps handle inconsistently. Code.gs reads
+ * preflight that Apps Script web apps handle inconsistently. The backend reads
  * `e.postData.contents`, which is content-type agnostic, so the payload is
  * unchanged.
  *

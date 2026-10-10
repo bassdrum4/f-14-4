@@ -217,12 +217,60 @@ const MISSILE_STATIONS: Array<[number, number, number]> = [
   [4.6, -1.1, -0.4],
 ];
 
+// --- countermeasures ---
+// A press ejects a small salvo of burning cartridges. They inherit the jet's
+// velocity, fall away with drag, and burn for a few seconds; a hostile seeker
+// that sees one inside its cone can be decoyed onto it (see captureFlare), which
+// is the whole point of carrying them. Amounts come off the airframe's spec.
+const FLARE_SALVO = 4; // cartridges per press
+const FLARE_CD = 0.7; // s between presses
+const FLARE_BURN = 4.5; // s each cartridge burns
+const FLARE_EJECT_DOWN = 14; // m/s ejection, downward (body -Y)
+const FLARE_EJECT_BACK = 5; // m/s ejection, aft (body +Z)
+const FLARE_SPREAD = 3.4; // m/s of per-cartridge scatter
+const FLARE_LOCK_R = 900; // m: a seeker must be this close to see a flare
+const FLARE_LOCK_CONE = 0.6; // rad off boresight the seeker can see
+const FLARE_CAPTURE = 3.6; // 1/s peak capture rate, dead on boresight
+const FLARE_TRAIL = 0.055; // s between smoke puffs behind a burning cartridge
+const MAX_FLARES = 48; // meshes in the decoy pool (salvo x burn/cd, rounded up)
+const FLARE_GRAVITY = 0.55; // flares are light and draggy, not bricks
+
+// --- bandit air-to-air rounds ---
+// Aggressors carry a couple of rounds each, so "missile inbound" is a thing the
+// pilot has to answer — and answering it is what the flares are for.
+const BANDIT_MISSILE_LOAD = 2; // rounds per bandit
+const BANDIT_MISSILE_ARM_DELAY = 16; // s a fresh bandit waits before its first shot
+const BANDIT_MISSILE_CD = 22; // s between one bandit's shots
+const BANDIT_MISSILE_MIN = 700; // m: inside this the shot is a merge, not a launch
+const BANDIT_MISSILE_MAX = 5200; // m: outside this the round cannot reach
+const BANDIT_MISSILE_CONE = 0.5; // rad off the bandit's bore to take the shot
+const MISSILE_LIFE = 26; // s before a round runs out of energy and is gone
+const MISSILE_PLAYER_DMG = 34; // warhead damage against the player's hull
+const MISSILE_WARN_R = 9000; // m: the RWR call-out range
+
 interface Missile {
   pos: THREE.Vector3;
   vel: THREE.Vector3;
   motor: number; // s of burn left
   arm: number; // s until the seeker is live
   trailT: number; // s until the next plume puff
+  mesh: THREE.Object3D;
+  /** Fired by a bandit at the player (hostile rounds hunt the jet, not bandits). */
+  hostile: boolean;
+  /** s of flight left before the round runs out of energy. */
+  life: number;
+  /** The flare this seeker has been decoyed onto, if any. */
+  decoy: Flare | null;
+  /** Deterministic per-round noise seed for the capture roll. */
+  seed: number;
+}
+
+/** One burning countermeasure cartridge: ballistic, short-lived, decoyable. */
+interface Flare {
+  pos: THREE.Vector3;
+  vel: THREE.Vector3;
+  life: number; // s of burn left
+  trailT: number; // s to the next smoke puff
   mesh: THREE.Object3D;
 }
 
@@ -234,6 +282,9 @@ interface Bandit {
   bank: number; // smoothed roll for looks, rad
   speed: number; // m/s
   fireCd: number; // s until next shot / burst decision
+  /** Air-to-air rounds left on this bandit's rails, and the reload between them. */
+  missiles: number;
+  missileCd: number;
   burst: number; // rounds left in the current burst
   evadeT: number; // s of jink remaining
   /** s until the bandit may break again: after a break it extends and
@@ -402,6 +453,11 @@ export interface DogfightHud {
   /** Missiles on the rails (types with none always read 0/0). */
   missiles: number;
   missilesMax: number;
+  /** Countermeasure cartridges left (types with none always read 0/0). */
+  flares: number;
+  flaresMax: number;
+  /** The nearest hostile round in the air, for the RWR call-out. */
+  incoming: { km: number; brgDeg: number; sec: number } | null;
   nearestKm: number;
   nearestBrgDeg: number;
   /** Map markers: where it is, and which way it is pointed. */
@@ -554,6 +610,12 @@ export class Dogfight {
   private missilesLeft = 0;
   private missilesMax = 0; // set from the flown airframe's spec
   private missileCd = 0;
+  // flares / countermeasures
+  private flares: Flare[] = [];
+  private flarePool: THREE.Object3D[] = [];
+  private flaresLeft = 0;
+  private flaresMax = 0; // set from the flown airframe's spec
+  private flareCd = 0;
   private station = 0;
   private bombCd = 0;
   /** Releases asked for by the target pod, waiting on the release cooldown. */
@@ -708,6 +770,26 @@ export class Dogfight {
       this.root.add(g);
       this.missilePool.push(g);
     }
+    // flares: a small brilliantly hot cartridge with an additive glow. A decoy
+    // has to read as a burning flare from the cockpit, so it is a light source
+    // first and a shape second (basic material, tone-mapping off).
+    const flareBody = new THREE.CylinderGeometry(0.16, 0.16, 0.5, 8);
+    flareBody.rotateX(Math.PI / 2);
+    const flareMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0, toneMapped: false });
+    const flareGlowMat = new THREE.MeshBasicMaterial({
+      color: 0xff9d3c, transparent: true, opacity: 0.75,
+      blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+    });
+    const flareGlow = new THREE.SphereGeometry(0.85, 8, 6);
+    for (let i = 0; i < MAX_FLARES; i++) {
+      const g = new THREE.Group();
+      g.add(new THREE.Mesh(flareBody, flareMat));
+      g.add(new THREE.Mesh(flareGlow, flareGlowMat));
+      g.visible = false;
+      g.frustumCulled = false;
+      this.root.add(g);
+      this.flarePool.push(g);
+    }
     // laser spot marker: a ring on the ground under the designation
     this.designator = new THREE.Mesh(
       new THREE.RingGeometry(7, 10, 26),
@@ -739,9 +821,11 @@ export class Dogfight {
     const spec = player.spec;
     this.bombsMax = spec.bombs;
     this.missilesMax = spec.missiles;
+    this.flaresMax = spec.flares;
     this.hullMax = spec.hull;
     if (!this.active) this.bombsLeft = this.bombsMax;
     if (!this.active) this.missilesLeft = this.missilesMax;
+    if (!this.active) this.flaresLeft = this.flaresMax;
   }
 
   prepare(player: AircraftState): void {
@@ -759,6 +843,7 @@ export class Dogfight {
   refill(): void {
     this.bombsLeft = this.bombsMax;
     this.missilesLeft = this.missilesMax;
+    this.flaresLeft = this.flaresMax;
     this.hull = this.hullMax;
   }
 
@@ -1122,6 +1207,9 @@ export class Dogfight {
       burst: 0,
       evadeT: 0,
       evadeCd: 0,
+      // A mirrored bandit is the host's aircraft: the host fires its rounds.
+      missiles: 0,
+      missileCd: Infinity,
       phase: hash(p.id * 11.3) * Math.PI * 2,
       mesh,
       catT: p.onDeck ? 0 : -1,
@@ -1234,6 +1322,13 @@ export class Dogfight {
     this.missiles = [];
     this.missilesLeft = this.missilesMax;
     this.missileCd = 0;
+    for (const f of this.flares) {
+      f.mesh.visible = false;
+      this.flarePool.push(f.mesh);
+    }
+    this.flares = [];
+    this.flaresLeft = this.flaresMax;
+    this.flareCd = 0;
     this.impactAge = Infinity;
     this.releaseAge = Infinity;
     this.setDesignation(null);
@@ -1257,6 +1352,8 @@ export class Dogfight {
     this.bombPool = [];
     this.missiles = [];
     this.missilePool = [];
+    this.flares = [];
+    this.flarePool = [];
     this.cv = null;
     this.designation = null;
     this.designator.geometry.dispose();
@@ -1291,6 +1388,9 @@ export class Dogfight {
     this.stepBombs(dt, player, bombHeld && !player.result);
     // Missiles likewise: one in the air keeps hunting after the shooter is gone.
     this.stepMissiles(dt, player);
+    // Flares burn in every mode: a cruise-leg cartridge still has to fall away
+    // and go out, and the countermeasure cooldown has to run.
+    this.stepFlares(dt);
     this.stepDesignator(player);
     if (player.result) return false;
     // The guns are live in every scenario — plinking at the sea on a cruise
@@ -1303,6 +1403,7 @@ export class Dogfight {
       for (const b of this.bandits) {
         this.stepMirrorBandit(b, dt);
         if (this.active && b.catT < 0) this.banditGuns(b, dt, player);
+        this.banditMissiles(b, dt, player);
       }
     }
     // The boat motors in whether or not the shooting has started: with the
@@ -1342,6 +1443,7 @@ export class Dogfight {
         const b = this.bandits[i];
         if (!this.stepBandit(b, dt, player)) continue;
         this.banditGuns(b, dt, player);
+        this.banditMissiles(b, dt, player);
       }
     }
     this.stepCollisions(player);
@@ -1349,6 +1451,35 @@ export class Dogfight {
     this.stepFlashes(dt);
     if (!this.mirror) this.stepWaves(dt, player);
     return false;
+  }
+
+  /**
+   * The nearest hostile round in the air, as the RWR would call it: slant
+   * range, bearing from the jet's nose, and the seconds it needs to arrive.
+   * Null when nothing is inbound.
+   */
+  private incomingMissile(player: AircraftState): DogfightHud["incoming"] {
+    let best: Missile | null = null;
+    let bestD = Infinity;
+    for (const m of this.missiles) {
+      if (!m.hostile || m.decoy) continue; // a decoyed round is no longer a threat
+      const d = m.pos.distanceTo(player.pos);
+      if (d < bestD) {
+        bestD = d;
+        best = m;
+      }
+    }
+    if (!best || bestD > MISSILE_WARN_R) return null;
+    const dx = best.pos.x - player.pos.x;
+    const dz = best.pos.z - player.pos.z;
+    const closing = DIR.copy(player.pos).sub(best.pos).dot(TMP.copy(best.vel).normalize());
+    return {
+      km: bestD / 1000,
+      brgDeg: (Math.atan2(dx, -dz) * 180) / Math.PI,
+      // How long at the round's current closing speed (it is still accelerating
+      // on the motor, so this is the honest worst case, not a guess).
+      sec: closing > 1 ? bestD / closing : 0,
+    };
   }
 
   /** HUD snapshot of the fight, measured from the player. */
@@ -1428,6 +1559,9 @@ export class Dogfight {
       bombsTracking: this.bombs.filter((b) => b.guided).length,
       missiles: this.missilesLeft,
       missilesMax: this.missilesMax,
+      flares: this.flaresLeft,
+      flaresMax: this.flaresMax,
+      incoming: this.incomingMissile(player),
       designated: this.designation
         ? (() => {
             const d = this.designation!;
@@ -1491,6 +1625,9 @@ export class Dogfight {
       bombsTracking: this.bombs.filter((b) => b.guided).length,
       missiles: this.missilesLeft,
       missilesMax: this.missilesMax,
+      flares: this.flaresLeft,
+      flaresMax: this.flaresMax,
+      incoming: this.incomingMissile(player),
       designated: this.designation
         ? (() => {
             const d = this.designation!;
@@ -1831,6 +1968,8 @@ export class Dogfight {
       burst: 0,
       evadeT: 0,
       evadeCd: 0,
+      missiles: BANDIT_MISSILE_LOAD,
+      missileCd: BANDIT_MISSILE_ARM_DELAY + hash(id * 7.3) * 6,
       phase: hash(id * 11.3) * Math.PI * 2,
       mesh,
       catT: 0,
@@ -2051,6 +2190,252 @@ export class Dogfight {
   // -------------------------------------------------------------------------
   // Missiles
 
+  // -------------------------------------------------------------------------
+  // Countermeasures (flares)
+
+  /**
+   * Deploy flares (the countermeasure key): one press ejects a small salvo.
+   * Cartridges come off the airframe's spec, so a Crusader with 16 has four
+   * presses and a Tomcat with 30 has seven. Nothing stops a pilot flaring at
+   * nothing — that is what the count is for.
+   */
+  requestFlares(player: AircraftState): void {
+    if (this.flareCd > 0 || player.result) return;
+    if (this.flaresLeft <= 0) {
+      this.banner(player, "NO FLARES LEFT");
+      return;
+    }
+    if (player.onGround) {
+      this.banner(player, "FLARES — AIRBORNE ONLY");
+      return;
+    }
+    const n = Math.min(FLARE_SALVO, this.flaresLeft);
+    this.deployFlares(player, n);
+    this.flaresLeft -= n;
+    this.flareCd = FLARE_CD;
+    this.banner(
+      player,
+      this.flaresLeft > 0
+        ? `FLARES AWAY — ${this.flaresLeft} LEFT`
+        : "FLARES — LAST SALVO AWAY",
+    );
+  }
+
+  /** Eject `n` cartridges from the belly, scattering as they fall away. */
+  private deployFlares(player: AircraftState, n: number): void {
+    for (let k = 0; k < n; k++) {
+      const mesh = this.flarePool.pop();
+      if (!mesh) return;
+      const side = k % 2 === 0 ? 1 : -1;
+      const roll = Math.floor(k / 2) === 0 ? 0 : 1;
+      const off = new THREE.Vector3(side * (1.2 + roll * 1.4), -1.5, 2.4 + roll * 1.2);
+      const pos = player.pos.clone().add(off.applyQuaternion(player.quat));
+      const eject = new THREE.Vector3(
+        side * (FLARE_SPREAD + roll * 1.1),
+        -FLARE_EJECT_DOWN,
+        FLARE_EJECT_BACK,
+      ).applyQuaternion(player.quat);
+      const vel = player.vel.clone().add(eject);
+      mesh.visible = true;
+      mesh.position.copy(pos);
+      this.root.add(mesh);
+      this.flares.push({ pos, vel, life: FLARE_BURN, trailT: 0, mesh });
+      this.blasts.spawnSpark(pos, false);
+    }
+  }
+
+  /** Fly the cartridges: ballistic, burning, trailing smoke, then gone. */
+  private stepFlares(dt: number): void {
+    this.flareCd = Math.max(0, this.flareCd - dt);
+    if (this.flares.length === 0) return;
+    for (let i = this.flares.length - 1; i >= 0; i--) {
+      const f = this.flares[i];
+      f.life -= dt;
+      if (f.life <= 0) {
+        f.mesh.visible = false;
+        this.flarePool.push(f.mesh);
+        this.flares.splice(i, 1);
+        continue;
+      }
+      const sp = f.vel.length();
+      if (sp > 1) {
+        // small and light: it slows hard and falls away from the jet
+        const k = (0.5 * atmosphere(f.pos.y).rho * 0.05 * sp) / 1.2;
+        f.vel.multiplyScalar(Math.max(0, 1 - k * dt));
+      }
+      f.vel.y -= GRAVITY * FLARE_GRAVITY * dt;
+      f.pos.addScaledVector(f.vel, dt);
+      f.trailT -= dt;
+      if (f.trailT <= 0) {
+        this.blasts.trail(f.pos, 1.1, 1.5);
+        f.trailT = FLARE_TRAIL;
+      }
+      const g = groundAt(f.pos.x, f.pos.z);
+      if (f.pos.y <= g.y) {
+        // a cartridge that reaches the surface just goes out
+        f.mesh.visible = false;
+        this.flarePool.push(f.mesh);
+        this.flares.splice(i, 1);
+        continue;
+      }
+      f.mesh.position.copy(f.pos);
+      const fade = Math.min(1, f.life / 0.8);
+      f.mesh.scale.setScalar(fade);
+    }
+  }
+
+  /**
+   * Can this seeker be talked out of the jet? A burning flare inside the
+   * seeker's cone and range is a decoy; the closer to boresight it sits, the
+   * faster the lock lets go. Once a round is captured it stays captured.
+   */
+  private captureFlare(m: Missile, dt: number): Flare | null {
+    const speed = m.vel.length();
+    if (speed <= 1 || this.flares.length === 0) return null;
+    DIR.copy(m.vel).divideScalar(speed);
+    let best: Flare | null = null;
+    let bestAng = Infinity;
+    for (const f of this.flares) {
+      if (f.life <= 0) continue;
+      TMP.copy(f.pos).sub(m.pos);
+      const d = TMP.length();
+      if (d > FLARE_LOCK_R || d < 1e-3) continue;
+      TMP.divideScalar(d);
+      const ang = DIR.angleTo(TMP);
+      if (ang > FLARE_LOCK_CONE || ang >= bestAng) continue;
+      best = f;
+      bestAng = ang;
+    }
+    if (!best) return null;
+    const rate = FLARE_CAPTURE * (1 - bestAng / FLARE_LOCK_CONE);
+    const roll = hash(
+      m.seed + m.pos.x * 0.31 + m.pos.y * 0.17 + m.pos.z * 0.53 + m.life * 7.7,
+    );
+    return roll < 1 - Math.exp(-rate * dt) ? best : null;
+  }
+
+  /** Take a round out of the fight and back into the mesh pool. */
+  private retireMissile(i: number, m: Missile): void {
+    m.mesh.visible = false;
+    this.missilePool.push(m.mesh);
+    this.missiles.splice(i, 1);
+  }
+
+  /**
+   * Aggressors carry a couple of rounds each, so "missile inbound" is a real
+   * event in a dogfight. A bandit inside its launch envelope, roughly on
+   * boresight and with the player in sight takes the shot.
+   */
+  private banditMissiles(b: Bandit, dt: number, player: AircraftState): void {
+    if (b.catT >= 0 || b.missiles <= 0) return;
+    b.missileCd -= dt;
+    if (b.missileCd > 0 || player.result) return;
+    // An air-to-air round is for an aircraft in the air. A jet parked or
+    // rolling on the deck is a gun target, not a missile shot: the seeker has
+    // the ground behind it and no closure to work with, and it keeps a pilot
+    // who is still on the ground from being the subject of a launch.
+    if (player.onGround) return;
+    FWD.set(0, 0, -1).applyQuaternion(b.quat);
+    TO_P.copy(player.pos).sub(b.pos);
+    const dist = TO_P.length();
+    if (dist < BANDIT_MISSILE_MIN || dist > BANDIT_MISSILE_MAX) return;
+    if (FWD.angleTo(TO_P) > BANDIT_MISSILE_CONE) return;
+    if (terrainBlocks(b.pos, player.pos)) return;
+    if (!this.fireHostileMissile(b, player)) return;
+    b.missiles--;
+    // A re-attack is a fresh setup: give the pilot time to break and flare.
+    b.missileCd = BANDIT_MISSILE_CD + hash(b.id * 5.7 + player.time) * 8;
+  }
+
+  /** One rail shot: down and outboard first, then the motor lights. */
+  private fireHostileMissile(b: Bandit, player: AircraftState): boolean {
+    const side = hash(b.id * 3.7 + b.pos.z) > 0.5 ? 1 : -1;
+    const pos = b.pos.clone().add(new THREE.Vector3(side * 3.4, -1.4, 0.6).applyQuaternion(b.quat));
+    const vel = new THREE.Vector3(0, 0, -1)
+      .applyQuaternion(b.quat)
+      .multiplyScalar(Math.max(b.speed, 140))
+      .add(new THREE.Vector3(side * 4, -3, 0).applyQuaternion(b.quat));
+    if (!this.putHostileRound(pos, vel, hash(b.id * 2.3 + player.time) * 97)) return false;
+    this.threatT = THREAT_HOLD;
+    this.banner(player, "MISSILE INBOUND — BREAK AND FLARE");
+    return true;
+  }
+
+  /**
+   * Put one hostile round in the air from `pos` with `vel` (the warhead then
+   * chases the player until a flare decoys it). Shared by the bandit launch
+   * above and the diagnostics hook below, so a test flies the same round the
+   * sim does.
+   */
+  private putHostileRound(pos: THREE.Vector3, vel: THREE.Vector3, seed: number): boolean {
+    const mesh = this.missilePool.pop();
+    if (!mesh) return false;
+    mesh.visible = true;
+    mesh.position.copy(pos);
+    mesh.quaternion.setFromUnitVectors(NOSE_Z, DIR.copy(vel).normalize());
+    this.blasts.spawnSpark(pos, false);
+    this.blasts.trail(pos, 1.3, 1.6);
+    this.flash(pos);
+    this.missiles.push({
+      pos,
+      vel,
+      motor: MISSILE_MOTOR,
+      arm: MISSILE_ARM,
+      trailT: 0,
+      mesh,
+      hostile: true,
+      life: MISSILE_LIFE,
+      decoy: null,
+      seed,
+    });
+    return true;
+  }
+
+  // --- diagnostics (headless checks; see scripts/diag-flares.ts) ------------
+
+  /** Live decoys in the air. */
+  flareCount(): number {
+    return this.flares.length;
+  }
+
+  /** Every hostile round in the air: where it is, and whether a flare has it. */
+  hostileRounds(): Array<{ x: number; y: number; z: number; decoyed: boolean }> {
+    const out: Array<{ x: number; y: number; z: number; decoyed: boolean }> = [];
+    for (const m of this.missiles) {
+      if (m.hostile) out.push({ x: m.pos.x, y: m.pos.y, z: m.pos.z, decoyed: m.decoy !== null });
+    }
+    return out;
+  }
+
+  /**
+   * Fire one hostile round from a point and heading, as if a bandit had. Used
+   * by the headless countermeasure check so the decoy logic can be flown
+   * without waiting on a bandit's launch geometry.
+   */
+  fireHostileRoundForTest(pos: THREE.Vector3, vel: THREE.Vector3, seed = 1): boolean {
+    return this.putHostileRound(pos, vel, seed);
+  }
+
+  /** Steer one seeker head onto a point; returns the range to it. */
+  private steerSeeker(m: Missile, target: THREE.Vector3, dt: number): number {
+    const speed = m.vel.length();
+    if (speed <= 1) return Infinity;
+    DIR.copy(m.vel).divideScalar(speed);
+    TMP.copy(target).sub(m.pos);
+    const toT = TMP.length();
+    if (toT < 1e-3) return 0;
+    TMP.divideScalar(toT);
+    const ang = DIR.angleTo(TMP);
+    if (ang > 1e-4) {
+      AXIS.crossVectors(DIR, TMP);
+      if (AXIS.lengthSq() < 1e-8) AXIS.set(0, 1, 0);
+      AXIS.normalize();
+      DIR.applyAxisAngle(AXIS, Math.min(ang, MISSILE_TURN * dt));
+      m.vel.copy(DIR).multiplyScalar(speed);
+    }
+    return toT;
+  }
+
   /**
    * Ask for one missile launch (the missile key). The shot is taken on the
    * next sim step if a live target exists and the jet is airborne; the racks
@@ -2133,6 +2518,10 @@ export class Dogfight {
       arm: MISSILE_ARM,
       trailT: 0,
       mesh,
+      hostile: false,
+      life: MISSILE_LIFE,
+      decoy: null,
+      seed: hash(pos.x * 1.7 + pos.z * 0.9 + this.missiles.length),
     });
     if (this.versus) this.weaponLaunches.push({ weapon: "missile", pos: pos.toArray(), vel: vel.toArray() });
     this.missilesLeft--;
@@ -2148,6 +2537,12 @@ export class Dogfight {
     this.missileCd = Math.max(0, this.missileCd - dt);
     for (let i = this.missiles.length - 1; i >= 0; i--) {
       const m = this.missiles[i];
+      // --- a round that runs out of energy is gone ---
+      m.life -= dt;
+      if (m.life <= 0) {
+        this.retireMissile(i, m);
+        continue;
+      }
       // --- motor: thrust, then an unpowered coast with drag and sag ---
       if (m.motor > 0) {
         m.motor -= dt;
@@ -2168,28 +2563,25 @@ export class Dogfight {
       }
       m.pos.addScaledVector(m.vel, dt);
 
-      // --- seeker: nearest live enemy, re-locked every step ---
+      // --- seeker ---
       m.arm -= dt;
       if (m.arm <= 0) {
-        const target = this.nearestMissileTarget(m.pos);
-        if (target) {
-          const speed = m.vel.length();
-          if (speed > 1) {
-            DIR.copy(m.vel).divideScalar(speed);
-            TMP.copy(target).sub(m.pos);
-            const toT = TMP.length();
+        if (m.hostile) {
+          // A hostile round hunts the player — unless a flare has fooled it.
+          // The capture is sticky: a seeker that went for the flare keeps the
+          // flare, which is why a burst of cartridges works at all.
+          if (m.decoy && m.decoy.life <= 0) m.decoy = null;
+          if (!m.decoy) m.decoy = this.captureFlare(m, dt);
+          const target = m.decoy ? m.decoy.pos : player.pos;
+          this.steerSeeker(m, target, dt);
+        } else {
+          // --- our own round: nearest live enemy, re-locked every step ---
+          const target = this.nearestMissileTarget(m.pos);
+          if (target) {
+            const toT = this.steerSeeker(m, target, dt);
             if (toT < MISSILE_DET) {
               this.impactMissile(i, m.pos, "air", player);
               continue;
-            }
-            TMP.divideScalar(toT);
-            const ang = DIR.angleTo(TMP);
-            if (ang > 1e-4) {
-              AXIS.crossVectors(DIR, TMP);
-              if (AXIS.lengthSq() < 1e-8) AXIS.set(0, 1, 0);
-              AXIS.normalize();
-              DIR.applyAxisAngle(AXIS, Math.min(ang, MISSILE_TURN * dt));
-              m.vel.copy(DIR).multiplyScalar(speed);
             }
           }
         }
@@ -2205,39 +2597,69 @@ export class Dogfight {
       m.mesh.position.copy(m.pos);
       m.mesh.quaternion.setFromUnitVectors(NOSE_Z, DIR.copy(m.vel).normalize());
 
-      // --- detonations: any airframe, the boat's deck, or the surface ---
+      // --- detonations: the seeker's own target, the boat's deck, or the
+      // surface. The fuze only goes live once the round has cleared its
+      // launcher: a warhead whose fuze could see the launching aircraft (it
+      // sits a few metres off the rail) blew the shooter out of the sky with
+      // its own weapon on the first step. ---
+      const armed = m.arm <= 0;
       let hit: BlastKind | null = null;
-      for (const b of this.bandits) {
-        if (b.catT >= 0) continue;
-        if (b.pos.distanceTo(m.pos) < MISSILE_AIR_R) {
-          this.hitT = HIT_FLASH;
-          this.damageBandit(b, MISSILE_HP, player);
-          hit = "air";
-          break;
+      if (armed) {
+        if (m.hostile) {
+          // A bandit's round belongs to the bandits' side: it fuzes the player
+          // (or a flare), never a friendly airframe, or the pack shot itself
+          // down as its own rounds left the rail.
+          const decoyed = m.decoy !== null;
+          // A decoyed round goes off on the cartridge that fooled it, and the
+          // jet is untouched: that is the whole exchange the pilot paid for.
+          if (decoyed && m.decoy!.pos.distanceTo(m.pos) < MISSILE_DET) {
+            this.blasts.spawn(TMP.copy(m.pos), "air", 1.0);
+            this.retireMissile(i, m);
+            continue;
+          }
+          // A seeker that has gone for a flare is no longer looking at the
+          // jet: the fuze follows the flare, so a cartridge dropped a few
+          // metres off the wing still breaks the attack instead of trading a
+          // flare for the warhead's splash.
+          if (!decoyed && player.pos.distanceTo(m.pos) < MISSILE_AIR_R) {
+            this.hitT = HIT_FLASH;
+            this.damagePlayer(player, MISSILE_PLAYER_DMG);
+            hit = "air";
+          }
+        } else {
+          for (const b of this.bandits) {
+            if (b.catT >= 0) continue;
+            if (b.pos.distanceTo(m.pos) < MISSILE_AIR_R) {
+              this.hitT = HIT_FLASH;
+              this.damageBandit(b, MISSILE_HP, player);
+              hit = "air";
+              break;
+            }
+          }
+          if (!hit && this.opponents.some(o => o.pos.distanceTo(m.pos) < MISSILE_AIR_R)) hit = "air";
         }
-      }
-      if (!hit && this.opponents.some(o => o.pos.distanceTo(m.pos) < MISSILE_AIR_R)) hit = "air";
-      if (!hit) {
-        for (const t of this.strikeTargets) {
-          if (t.dead) continue;
-          TMP.copy(t.pos);
-          TMP.y += 8;
-          if (TMP.distanceTo(m.pos) < t.radius + MISSILE_DET) {
-            hit = "ground";
-            break;
+        if (!hit) {
+          for (const t of this.strikeTargets) {
+            if (t.dead) continue;
+            TMP.copy(t.pos);
+            TMP.y += 8;
+            if (TMP.distanceTo(m.pos) < t.radius + MISSILE_DET) {
+              hit = "ground";
+              break;
+            }
           }
         }
-      }
-      if (!hit) {
-        const cv = this.cv;
-        if (
-          cv &&
-          cv.status !== "sinking" &&
-          cv.status !== "sunk" &&
-          m.pos.y <= cv.def.deckY + 4 &&
-          isOnDeck(cv.def, m.pos.x, m.pos.z)
-        ) {
-          hit = "ground";
+        if (!hit) {
+          const cv = this.cv;
+          if (
+            cv &&
+            cv.status !== "sinking" &&
+            cv.status !== "sunk" &&
+            m.pos.y <= cv.def.deckY + 4 &&
+            isOnDeck(cv.def, m.pos.x, m.pos.z)
+          ) {
+            hit = "ground";
+          }
         }
       }
       if (!hit) {

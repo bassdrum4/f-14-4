@@ -90,9 +90,13 @@ function airPlayer(id: AircraftId): AircraftState {
   return st;
 }
 
-// --- 1. the registry: three distinct types with distinct capabilities ---
+// --- 1. the registry: five distinct types with distinct capabilities ---
 {
-  check("three airframes are offered", AIRCRAFT_LIST.length === 3, `${AIRCRAFT_LIST.length}`);
+  check("five airframes are offered", AIRCRAFT_LIST.length === 5, `${AIRCRAFT_LIST.length}`);
+  check("the picker offers the Tomcat, Hornet, Crusader, Intruder and Seahawk",
+    ["tomcat", "hornet", "crusader", "intruder", "seahawk"].every((id) =>
+      AIRCRAFT_LIST.some((a) => a.id === id)),
+    AIRCRAFT_LIST.map((a) => a.id).join(" "));
   const ids = new Set(AIRCRAFT_LIST.map((a) => a.id));
   check("airframe ids are unique", ids.size === AIRCRAFT_LIST.length);
   const fighter = AIRCRAFT.tomcat;

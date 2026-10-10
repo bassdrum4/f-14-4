@@ -222,9 +222,14 @@ console.log("--- plumbing ---");
   const bound = down("ArrowUp");
   check("a bound key is prevented from scrolling the page", bound.prevented);
   up("ArrowUp");
-  const unbound = down("KeyZ");
-  check("an unbound key is left alone", !unbound.prevented);
-  up("KeyZ");
+  // Any code nobody has bound, read off the live table: adding a keybind (the
+  // flare key, for one) must not silently make this check meaningless.
+  const unboundCode = ["KeyH", "KeyJ", "KeyK", "KeyL", "F7"].find(
+    (c) => !Object.values(m.bindings).includes(c),
+  )!;
+  const unbound = down(unboundCode);
+  check(`an unbound key is left alone (${unboundCode})`, !unbound.prevented);
+  up(unboundCode);
 
   m.clearEdges();
   down("ArrowUp");

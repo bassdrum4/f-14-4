@@ -22,6 +22,9 @@ export interface TomcatMesh {
   afterburner: THREE.Mesh;
   /** False for fixed-wing types: the rig leaves their wings where built. */
   sweepable?: boolean;
+  /** Rotary wing: the main rotor disc and the tail rotor, spun by the rig. */
+  rotor?: THREE.Object3D;
+  tailRotor?: THREE.Object3D;
 }
 
 const MAT_BODY = new THREE.MeshStandardMaterial({
@@ -555,13 +558,220 @@ function buildIntruderMesh(paint: "gray" | "bandit"): TomcatMesh {
   };
 }
 
+
+/** F-8E Crusader: the last gunfighter — supersonic, high swept wing, nose inlet. */
+function buildCrusaderMesh(paint: "gray" | "bandit"): TomcatMesh {
+  const { matBody, matDark, matThin, matGlass } = makeMats(paint);
+  const group = new THREE.Group();
+
+  // --- fuselage: a tube with a nose inlet (nose at -Z) ---
+  add(group, taperedBox(1.32, 1.3, 1.55, 1.5, 1.5, 0, -0.04), matBody, 0, -0.05, -7.35); // inlet lip
+  add(group, taperedBox(1.55, 1.5, 1.72, 1.6, 4.6), matBody, 0, 0, -4.3); // forward
+  add(group, taperedBox(1.72, 1.6, 1.86, 1.72, 6.4), matBody, 0, 0, 1.2); // mid
+  add(group, taperedBox(1.86, 1.72, 1.5, 1.2, 3.6, 0, 0.16), matBody, 0, 0, 6.2); // aft
+  add(group, taperedBox(1.1, 0.5, 1.35, 0.6, 2.2), matBody, 0, 0.78, -0.4); // dorsal spine
+
+  // nose inlet: a dark ring with the translating centrebody
+  const ring = add(group, new THREE.CylinderGeometry(0.64, 0.64, 0.34, 16, 1, true), matDark, 0, -0.05, -8.1);
+  ring.rotation.x = Math.PI / 2;
+  const spike = add(group, new THREE.ConeGeometry(0.34, 0.95, 12), matDark, 0, -0.05, -8.25);
+  spike.rotation.x = -Math.PI / 2;
+
+  // canopy, set forward of the wing
+  const canopy = add(group, new THREE.SphereGeometry(0.78, 16, 12), matGlass, 0, 0.95, -4.0);
+  canopy.scale.set(0.95, 0.82, 2.2);
+
+  // single tall fin with the rudder mounted on it
+  const fin = add(group, taperedBox(0.2, 2.9, 0.16, 1.9, 2.6, 0.55, 0), matBody, 0, 1.7, 6.35);
+  const rud = add(fin, new THREE.BoxGeometry(0.1, 2.0, 0.7), matThin, 0.2, -0.42, 1.35);
+  const rudders: [THREE.Mesh, THREE.Mesh] = [rud, rud];
+  // ventral fins under the tail
+  for (const sx of [-1, 1]) {
+    add(group, taperedBox(0.12, 0.72, 0.1, 0.42, 1.5, 0, 0.2), matThin, sx * 0.92, -0.85, 6.2);
+  }
+
+  // exhaust nozzle + burner
+  const nozzle = add(group, new THREE.CylinderGeometry(0.55, 0.62, 1.0, 14, 1, true), matDark, 0, 0, 7.75);
+  nozzle.rotation.x = Math.PI / 2;
+  const afterburner = new THREE.Mesh(new THREE.ConeGeometry(0.5, 2.4, 12, 1, true), MAT_FLAME.clone());
+  afterburner.rotation.x = Math.PI / 2;
+  afterburner.position.set(0, 0, 9.05);
+  group.add(afterburner);
+
+  // --- high-mounted swept wing (the F-8's variable-incidence wing) ---
+  const wings: [THREE.Group, THREE.Group] = [new THREE.Group(), new THREE.Group()];
+  const wingPanels: [THREE.Mesh, THREE.Mesh] = [] as unknown as [THREE.Mesh, THREE.Mesh];
+  const flaps: [THREE.Group, THREE.Group] = [] as unknown as [THREE.Group, THREE.Group];
+  for (let i = 0; i < 2; i++) {
+    const sx = i === 0 ? 1 : -1;
+    // 42 deg quarter-chord sweep, mounted high on the fuselage
+    const w = buildWingPair(sx, [1.0, 0.5, 0.6], 3.3, 1.5, 4.5, (42 * Math.PI) / 180, matThin);
+    group.add(w.pivot);
+    wings[i] = w.pivot;
+    wingPanels[i] = w.panel;
+    flaps[i] = w.flap;
+  }
+
+  // --- low all-moving tailplane ---
+  const stabs: [THREE.Group, THREE.Group] = [new THREE.Group(), new THREE.Group()];
+  for (let i = 0; i < 2; i++) {
+    const sx = i === 0 ? 1 : -1;
+    const pivot = new THREE.Group();
+    pivot.position.set(sx * 0.95, -0.5, 6.0);
+    const geom = taperedBox(1.9, 0.15, 1.0, 0.07, 2.4);
+    geom.translate(0, 0, 1.2);
+    const panel = new THREE.Mesh(geom, matThin);
+    panel.rotation.y = sx * (Math.PI / 2);
+    pivot.add(panel);
+    pivot.rotation.z = -sx * 0.05;
+    group.add(pivot);
+    stabs[i] = pivot;
+  }
+
+  const gear = buildGearLegs(matDark);
+  group.add(gear);
+  const intakes = new THREE.Group(); // the F-8's inlet is the nose, kept for the rig
+  group.add(intakes);
+  finishShip(
+    group,
+    afterburner,
+    { leftTip: [-5.5, 0.55, 0.6], rightTip: [5.5, 0.55, 0.6], tail: [0, 3.0, 7.4], beacon: [0, 1.5, -0.4] },
+    { right: wingPanels[0], left: wingPanels[1], tipSpan: 4.4 },
+  );
+
+  return {
+    group, wings, wingPanels, stabs, rudders, flaps, gear, canopy, intakes, afterburner,
+    sweepable: false,
+  };
+}
+
+/** SH-60B Seahawk: a four-blade rotor, a fat fuselage and a long tail boom. */
+function buildSeahawkMesh(paint: "gray" | "bandit"): TomcatMesh {
+  const { matBody, matDark, matThin, matGlass } = makeMats(paint);
+  const group = new THREE.Group();
+
+  // --- fuselage (nose at -Z): a rounded nose into a boxy cabin and tail boom ---
+  const nose = add(group, new THREE.SphereGeometry(1.15, 16, 12), matBody, 0, -0.1, -5.6);
+  nose.scale.set(1.0, 1.0, 1.9);
+  add(group, taperedBox(2.3, 2.1, 2.5, 2.35, 4.2), matBody, 0, -0.05, -2.2);
+  add(group, taperedBox(2.5, 2.35, 2.3, 2.1, 4.6), matBody, 0, -0.05, 1.6);
+  add(group, taperedBox(2.3, 2.1, 1.0, 0.95, 5.4, 0, 0.35), matBody, 0, 0.25, 6.0); // tail boom
+  add(group, taperedBox(1.6, 0.4, 1.9, 0.5, 3.4), matBody, 0, 1.2, -0.4); // engine deck
+
+  // canopy, set well forward
+  const canopy = add(group, new THREE.SphereGeometry(0.9, 16, 12), matGlass, 0, 0.7, -4.4);
+  canopy.scale.set(1.05, 0.7, 1.7);
+
+  // engine cowl intakes on the upper deck
+  const intakes = new THREE.Group();
+  for (const sx of [-1, 1]) {
+    add(intakes, new THREE.CylinderGeometry(0.42, 0.42, 0.5, 14), matDark, sx * 0.55, 1.5, 0.6).rotation.x = Math.PI / 2;
+  }
+  group.add(intakes);
+
+  // --- single tall fin + tail rotor (two blades, vertical plane) ---
+  const fin = add(group, taperedBox(0.2, 2.6, 0.16, 1.6, 2.4, 0.5, 0), matBody, 0, 1.7, 8.2);
+  const rud = add(fin, new THREE.BoxGeometry(0.1, 1.7, 0.6), matThin, 0.18, -0.4, 1.25);
+  const rudders: [THREE.Mesh, THREE.Mesh] = [rud, rud];
+  const tailRotor = new THREE.Group();
+  tailRotor.position.set(0.35, 2.0, 8.7);
+  for (let i = 0; i < 2; i++) {
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.05, 1.9), matThin);
+    blade.rotation.x = (i * Math.PI) / 2;
+    blade.position.y = 0;
+    tailRotor.add(blade);
+  }
+  group.add(tailRotor);
+
+  // --- main rotor: four blades on a mast above the cabin ---
+  const rotor = new THREE.Group();
+  rotor.position.set(0, 2.65, -0.4);
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 0.9, 12), matDark);
+  mast.position.y = -0.35;
+  rotor.add(mast);
+  for (let i = 0; i < 4; i++) {
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(7.4, 0.12, 0.62), matThin);
+    blade.position.x = 3.75;
+    const arm = new THREE.Group();
+    arm.rotation.y = (i * Math.PI) / 2;
+    arm.add(blade);
+    rotor.add(arm);
+  }
+  group.add(rotor);
+
+  // --- stabs (the Seahawk's small stabilator), fixed wing slots for the rig ---
+  const stabs: [THREE.Group, THREE.Group] = [new THREE.Group(), new THREE.Group()];
+  for (let i = 0; i < 2; i++) {
+    const sx = i === 0 ? 1 : -1;
+    const pivot = new THREE.Group();
+    pivot.position.set(sx * 0.4, 0.4, 7.2);
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.12, 1.0), matThin);
+    panel.position.x = sx * 1.0;
+    pivot.add(panel);
+    group.add(pivot);
+    stabs[i] = pivot;
+  }
+
+  // Rig slots the airframe does not really have, kept so shared animation code works.
+  const wings: [THREE.Group, THREE.Group] = [new THREE.Group(), new THREE.Group()];
+  const wingPanels: [THREE.Mesh, THREE.Mesh] = [] as unknown as [THREE.Mesh, THREE.Mesh];
+  const flaps: [THREE.Group, THREE.Group] = [] as unknown as [THREE.Group, THREE.Group];
+  for (let i = 0; i < 2; i++) {
+    const pivot = new THREE.Group();
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.01, 0.01), matThin);
+    pivot.add(panel);
+    group.add(pivot);
+    wings[i] = pivot;
+    wingPanels[i] = panel;
+    const flap = new THREE.Group();
+    pivot.add(flap);
+    flaps[i] = flap;
+  }
+
+  // --- landing gear: two mains and a tail wheel, tyre soles on the deck line ---
+  const gear = new THREE.Group();
+  for (const sx of [-1, 1]) {
+    add(gear, new THREE.CylinderGeometry(0.1, 0.1, 1.0, 8), matDark, sx * 1.7, -1.35, 0.9);
+    const mw = wheel(0.33, 0.14);
+    mw.position.set(sx * 1.7, -1.7, 0.9);
+    gear.add(mw);
+  }
+  add(gear, new THREE.CylinderGeometry(0.08, 0.08, 0.9, 8), matDark, 0, -1.28, -5.6);
+  const tw = wheel(0.3, 0.12);
+  tw.position.set(0, -1.73, -5.6);
+  gear.add(tw);
+  group.add(gear);
+
+  // inert burner mesh so the shared rig has something to drive (never lit)
+  const afterburner = new THREE.Mesh(new THREE.ConeGeometry(0.3, 1.2, 10, 1, true), MAT_FLAME.clone());
+  afterburner.rotation.x = Math.PI / 2;
+  afterburner.position.set(0, 0.3, 8.4);
+  afterburner.visible = false;
+  group.add(afterburner);
+
+  finishShip(
+    group,
+    afterburner,
+    { leftTip: [-8.2, 2.65, -0.4], rightTip: [8.2, 2.65, -0.4], tail: [0, 3.2, 8.6], beacon: [0, 1.7, -0.4] },
+  );
+
+  return {
+    group, wings, wingPanels, stabs, rudders, flaps, gear, canopy, intakes, afterburner,
+    sweepable: false, rotor, tailRotor,
+  };
+}
+
 /** Build the player's airframe. Any unknown id falls back to the Tomcat. */
 export function buildAircraft(id: AircraftId, paint: "gray" | "bandit" = "gray"): TomcatMesh {
   switch (id) {
     case "hornet":
       return buildHornetMesh(paint);
+    case "crusader":
+      return buildCrusaderMesh(paint);
     case "intruder":
       return buildIntruderMesh(paint);
+    case "seahawk":
+      return buildSeahawkMesh(paint);
     case "tomcat":
     default:
       return buildTomcatMesh(paint);

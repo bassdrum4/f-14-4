@@ -1,6 +1,6 @@
 // User settings + keybindings, persisted to localStorage.
 
-import { DEFAULT_AIRCRAFT, type AircraftId } from "./sim/aircraft";
+import { DEFAULT_AIRCRAFT, isAircraftId, type AircraftId } from "./sim/aircraft";
 
 export type Quality = "low" | "medium" | "high";
 
@@ -26,6 +26,7 @@ export type Action =
   | "fire"
   | "bomb"
   | "missile"
+  | "flares"
   | "settings"
   | "map";
 
@@ -51,6 +52,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   fire: "Fire guns",
   bomb: "Bombs / target pod (click to designate)",
   missile: "Fire missile (nearest target)",
+  flares: "Flares (countermeasures)",
   settings: "Settings (in flight)",
   map: "Tactical map (big / small)",
 };
@@ -77,6 +79,7 @@ export const DEFAULT_BINDINGS: Record<Action, string> = {
   fire: "KeyQ",
   bomb: "KeyR",
   missile: "KeyE",
+  flares: "KeyZ",
   settings: "KeyO",
   map: "KeyM",
 };
@@ -208,10 +211,7 @@ export function loadSettings(): Settings {
           ? parsed.quality
           : base.quality,
       adaptiveResolution: typeof parsed.adaptiveResolution === "boolean" ? parsed.adaptiveResolution : base.adaptiveResolution,
-      aircraft:
-        parsed.aircraft === "tomcat" || parsed.aircraft === "hornet" || parsed.aircraft === "intruder"
-          ? parsed.aircraft
-          : base.aircraft,
+      aircraft: isAircraftId(parsed.aircraft) ? parsed.aircraft : base.aircraft,
       missionMode:
         parsed.missionMode === "dogfight" || parsed.missionMode === "cruise" || parsed.missionMode === "strike" || parsed.missionMode === "versus"
           ? parsed.missionMode

@@ -2,8 +2,9 @@
 //
 // The backend is a free Apps Script web app (Gamestate.gs in the repo root):
 // POST { action:"save", callsign, gamestate } writes the profile, and
-// POST { action:"get", callsign } fetches it back. Same deal as the feedback
-// collector — no server of our own, the profile lives in a Google Sheet.
+// POST { action:"get", callsign } fetches it back. The same deployment also
+// takes the feedback form's reports (POST { type:"feedback", … }), so there is
+// one endpoint, one sheet and one thing to deploy — see feedback.ts.
 //
 // The endpoint is hardcoded on purpose (it is not a secret, and the sim is a
 // single file that runs anywhere): paste the /exec URL from the Apps Script
@@ -14,7 +15,7 @@
  * its URL here. While it is blank, cloud fetch/saves are skipped quietly and
  * the sim behaves exactly as before (localStorage only).
  */
-const GAMESTATE_ENDPOINT = "https://script.google.com/macros/s/AKfycbwsrT3N6toVVVaQ4oxHFs6iWwzD3NrWbrhUe0pcqipuIm2x8gs31i-LSOWZKpVIlLnb/exec";
+export const GAMESTATE_ENDPOINT = "https://script.google.com/macros/s/AKfycbwsrT3N6toVVVaQ4oxHFs6iWwzD3NrWbrhUe0pcqipuIm2x8gs31i-LSOWZKpVIlLnb/exec";
 
 const TIMEOUT_MS = 9000;
 
@@ -84,7 +85,7 @@ export async function saveGamestate(callsign: string, profile: GamestateProfile)
 /**
  * The POST is sent as text/plain so the browser treats it as a CORS simple
  * request and skips the preflight that Apps Script handles inconsistently
- * (see Code.gs for the same explanation from the other side).
+ * (the same explanation, from the other side, is in Gamestate.gs).
  */
 async function post(body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
   const ctrl = new AbortController();

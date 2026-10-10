@@ -38,6 +38,7 @@ const EMPTY: HudSnapshot = {
   aircraftName: "F-14A TOMCAT",
   dfBombs: 0, dfBombsMax: 6, dfBombsAway: 0, dfCarrier: null,
   dfMissiles: 0, dfMissilesMax: 0,
+  dfFlares: 0, dfFlaresMax: 0, dfIncoming: null,
   glide: null,
   dfBombsTracking: 0, dfBombTracks: [], dfDesignated: null,
   dfReleased: null, dfLanded: null, pod: false, bigMap: false,
@@ -149,6 +150,11 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
           {hud.dfMissilesMax > 0 && (
             <div className={hud.dfMissiles > 0 ? "hud-laser" : undefined}>
               MSL {hud.dfMissiles}/{hud.dfMissilesMax} · [E] FIRE · SEEKS NEAREST
+            </div>
+          )}
+          {hud.dfFlaresMax > 0 && (
+            <div className={hud.dfFlares > 0 ? "hud-flare" : "hud-flare empty"}>
+              FLARE {hud.dfFlares}/{hud.dfFlaresMax} · [Z] DEPLOY — DECOYS INBOUND MISSILES
             </div>
           )}
           {hud.dfDesignated && (
@@ -497,8 +503,29 @@ function TargetBoxes({ sim, gunCross }: { sim: Sim | null; gunCross: boolean }) 
         ctx.fillRect(0, 0, w, h);
       }
 
+      // a hostile round is in the air: range, bearing and the seconds left,
+      // with the countermeasure printed on it (the pilot's answer, on screen)
+      const inc = hud.dfIncoming;
+      if (inc) {
+        const pulse = 0.6 + 0.4 * Math.sin(performance.now() / 110);
+        ctx.textAlign = "center";
+        ctx.fillStyle = `rgba(255, 58, 44, ${pulse.toFixed(3)})`;
+        ctx.font = "700 18px ui-monospace, monospace";
+        ctx.fillText("MISSILE INBOUND", w / 2, h * 0.24);
+        ctx.font = "600 13px ui-monospace, monospace";
+        ctx.fillStyle = "rgba(255, 176, 120, 0.95)";
+        ctx.fillText(
+          `${inc.km.toFixed(1)} KM · ${((inc.brgDeg + 360) % 360).toFixed(0)}° · ` +
+            (inc.sec > 0 ? `${inc.sec.toFixed(0)} S TO IMPACT · ` : "CLOSING · ") +
+            `[Z] FLARES ${hud.dfFlares}`,
+          w / 2,
+          h * 0.24 + 20,
+        );
+        ctx.textAlign = "left";
+      }
+
       // rounds are in the air, from someone who has us in his cone
-      if (hud.dfThreat) {
+      if (hud.dfThreat && !inc) {
         ctx.fillStyle = "rgba(255, 91, 77, 0.95)";
         ctx.font = "600 13px ui-monospace, monospace";
         ctx.textAlign = "center";

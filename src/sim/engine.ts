@@ -148,6 +148,11 @@ export interface HudSnapshot {
   /** Missiles on the rails (0/0 for airframes without them). */
   dfMissiles: number;
   dfMissilesMax: number;
+  /** Countermeasure cartridges on the jet (0/0 for types without them). */
+  dfFlares: number;
+  dfFlaresMax: number;
+  /** The nearest hostile round in the air, for the RWR call-out. */
+  dfIncoming: { km: number; brgDeg: number; sec: number } | null;
   dfCarrier: HostileCarrierHud | null;
   /** Guided bombs still tracking the laser. */
   dfBombsTracking: number;
@@ -253,6 +258,7 @@ function defaultHud(): HudSnapshot {
     aircraftName: "F-14A TOMCAT",
     dfBombs: 6, dfBombsMax: 6, dfBombsAway: 0, dfCarrier: null,
     dfMissiles: 2, dfMissilesMax: 2,
+    dfFlares: 30, dfFlaresMax: 30, dfIncoming: null,
     dfBombsTracking: 0, dfBombTracks: [], dfDesignated: null,
     dfReleased: null, dfLanded: null, pod: false, bigMap: false,
     remotes: [], netStatus: "idle", netRoom: "", netHost: false, netPilots: 0,
@@ -1236,6 +1242,7 @@ export class Sim {
     if (this.pod) this.handlePodClick();
     // A missile launch is an edge, like gear or flaps: one press, one shot.
     if (this.input.take("missile")) this.df.requestMissile(this.state);
+    if (this.input.take("flares")) this.df.requestFlares(this.state);
     if (this.input.take("gear")) {
       if (this.state.onGround && this.state.speed < 1) {
         this.pushBanner("GEAR LOCKED — cannot retract while parked");
@@ -1391,8 +1398,9 @@ export class Sim {
     this.df.refill();
     const h = this.df.hud(this.state);
     const msl = h.missilesMax > 0 ? ` · ${h.missiles}/${h.missilesMax} MSL` : "";
+    const flr = h.flaresMax > 0 ? ` · ${h.flares}/${h.flaresMax} FLARE` : "";
     this.state.banner = {
-      text: `REARMED & REPAIRED — ${h.bombs}/${h.bombsMax} BOMBS${msl} · HULL ${h.hull}%`,
+      text: `REARMED & REPAIRED — ${h.bombs}/${h.bombsMax} BOMBS${msl}${flr} · HULL ${h.hull}%`,
       until: this.state.time + 4,
     };
   }
@@ -1596,6 +1604,9 @@ export class Sim {
     | "dfBombsAway"
     | "dfMissiles"
     | "dfMissilesMax"
+    | "dfFlares"
+    | "dfFlaresMax"
+    | "dfIncoming"
     | "dfCarrier"
     | "dfBombsTracking"
     | "dfBombTracks"
@@ -1625,6 +1636,9 @@ export class Sim {
       dfBombsAway: h.bombsAway,
       dfMissiles: h.missiles,
       dfMissilesMax: h.missilesMax,
+      dfFlares: h.flares,
+      dfFlaresMax: h.flaresMax,
+      dfIncoming: h.incoming,
       dfCarrier: h.carrier,
       dfBombsTracking: h.bombsTracking,
       dfBombTracks: this.df.bombPositions().map((p) => ({

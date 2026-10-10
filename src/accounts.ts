@@ -13,6 +13,7 @@
 // informal by design — no passwords, no security boundary.
 
 import { saveSettings, type Settings } from "./settings";
+import { isAircraftId } from "./sim/aircraft";
 import { fetchGamestate, saveGamestate, type GamestateProfile } from "./gamestate";
 
 /** Who this pilot is: just the callsign. The cloud profiles are keyed on it. */
@@ -174,7 +175,7 @@ export function profileOf(s: Settings): GamestateProfile {
  */
 export function applyGamestate(current: Settings, profile: GamestateProfile): Settings {
   const next: Settings = { ...current, bindings: { ...current.bindings } };
-  if (profile.aircraft === "tomcat" || profile.aircraft === "hornet" || profile.aircraft === "intruder") {
+  if (isAircraftId(profile.aircraft)) {
     next.aircraft = profile.aircraft;
   }
   if (profile.missionMode === "dogfight" || profile.missionMode === "cruise" || profile.missionMode === "strike" || profile.missionMode === "versus") {

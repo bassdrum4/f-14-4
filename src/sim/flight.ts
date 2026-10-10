@@ -306,6 +306,10 @@ export interface AircraftState {
   /** Commanded pitch attitude (rad). The stick walks it, the elevator holds
    *  the nose on it; it only moves when the pilot asks. See PITCH_RATE_MAX. */
   pitchRef: number;
+  /** Commanded roll attitude (rad, + = left bank). Rotary wing only: the cyclic
+   *  walks it and the rotor disc tilts with it, which is how a helicopter
+   *  translates. Fixed-wing types leave it at zero. */
+  rollRef: number;
   sweepT: number; // 0..1 (0 = 20deg, 1 = 68deg)
   sweep: number; // smoothed degrees
 
@@ -430,6 +434,7 @@ export function spawnAircraft(
   let quat: Quaternion;
   let catPhase: CatPhase = "idle";
   const ride = rideHeight(spec);
+  const rotor = spec.rotorcraft === true;
 
   // Spawn at the static ride height so the jet starts settled on its gear
   // instead of dropping onto it.
@@ -438,7 +443,8 @@ export function spawnAircraft(
     pos = cat.start.clone();
     pos.y = fleet[idx].deckY + ride;
     quat = headingQuat(fleet[idx].headingDeg);
-    catPhase = "ready";
+    // A helicopter does not need the catapult: it lifts off the spot.
+    catPhase = rotor ? "idle" : "ready";
   } else {
     // West end of the runway, facing east
     const x = af.centerX - af.runwayLength / 2 + 120;
@@ -459,13 +465,14 @@ export function spawnAircraft(
     abLevel: 0,
     gearDown: true,
     gearT: 1,
-    flapsDown: true,
-    flapT: 1,
+    flapsDown: !rotor,
+    flapT: rotor ? 0 : 1,
     speedbrake: false,
     sbT: 0,
     brakeOn: false,
     trim: 0.5,
     pitchRef: 0,
+    rollRef: 0,
     sweepT: 0,
     sweep: spec.sweepMin,
     speed: 0,
@@ -488,8 +495,15 @@ export function spawnAircraft(
     flightTime: 0,
     time: 0,
     result: null,
-    banner:
-      mission === "carrier"
+    banner: rotor
+      ? {
+          text:
+            mission === "carrier"
+              ? `CARRIER ${fleet[idx].name} — COLLECTIVE UP (W) TO LIFT OFF`
+              : "COLLECTIVE UP (W) TO LIFT — CYCLIC TILTS TO FLY",
+          until: 30,
+        }
+      : mission === "carrier"
         ? { text: `CARRIER ${fleet[idx].name} — HOLD SPACE FOR CATAPULT`, until: 30 }
         : { text: "THROTTLE UP (W) — ROTATE AT 150 KT", until: 30 },
     prevPos: pos.clone(),
@@ -565,6 +579,12 @@ export function stepAircraft(st: AircraftState, inp: FlightInput, dt: number): v
   st.gearT = clamp(st.gearT + (st.gearDown ? dt / 1.8 : -dt / 1.8), 0, 1);
   st.flapT = clamp(st.flapT + (st.flapsDown ? dt / 2.2 : -dt / 2.2), 0, 1);
   st.sbT = clamp(st.sbT + (st.speedbrake ? dt / 0.9 : -dt / 0.9), 0, 1);
+
+  // --- rotary wing: a different machine, a different model (stepRotorcraft) ---
+  if (st.spec.rotorcraft) {
+    stepRotorcraft(st, inp, dt);
+    return;
+  }
 
   // --- catapult sequence ---
   if (st.catPhase === "ready" && inp.catHold) {
@@ -855,6 +875,150 @@ export function stepAircraft(st: AircraftState, inp: FlightInput, dt: number): v
   st.gLoad = st.onGround ? 1 : liftAccel / GRAVITY;
 }
 
+// ---------------------------------------------------------------------------
+// Rotary wing
+//
+// A helicopter is not a wing with a throttle. The collective (the throttle
+// axis) sets the rotor's total thrust along the mast; the cyclic (pitch/roll)
+// walks a COMMANDED pitch/roll attitude that an attitude-hold loop flies to;
+// and the pedals command a yaw rate from the tail rotor. Because the rotor
+// thrust points along the body's up axis, tilting the airframe is what makes
+// the machine accelerate horizontally — the same physics that makes a real
+// helicopter need a nose-down attitude to go forward. Hovering is the level
+// equilibrium where rotor thrust equals weight.
+//
+// The model is deliberately an attitude-command controller rather than a torque
+// model: a helicopter is statically unstable about pitch and roll, and asking a
+// keyboard pilot to constantly correct a divergent airframe is not fun. Tapping
+// the cyclic sets an attitude the machine holds, so "tap forward twice and
+// cruise" is the whole flight technique.
+// ---------------------------------------------------------------------------
+
+/** Maximum commanded nose-up/nose-down attitude, rad (about 29 deg). */
+const HELI_MAX_TILT = 0.5;
+/** Maximum commanded bank, rad (about 40 deg). */
+const HELI_MAX_BANK = 0.7;
+/** How fast the cyclic walks the commanded attitude, rad/s. */
+const HELI_CYCLIC_RATE = 0.9;
+/** Attitude error to commanded body rate, 1/s. */
+const HELI_ATT_GAIN = 3.0;
+const HELI_PITCH_RATE_MAX = 0.95; // rad/s
+const HELI_ROLL_RATE_MAX = 1.6; // rad/s
+const HELI_YAW_RATE = 0.95; // rad/s from full pedal
+const HELI_RATE_TAU = 0.26; // s: rate-loop time constant
+/** Parasite drag area, m^2 (fuselage, rotor head, skids). Bounds top speed. */
+const HELI_DRAG_AREA = 3.1;
+
+/** Dedicated scratch: applyGroundContact() owns UPF, so the rotor's up axis
+ *  needs its own vectors. */
+const HUP = new Vector3();
+const HRT = new Vector3();
+
+function stepRotorcraft(st: AircraftState, inp: FlightInput, dt: number): void {
+  const spec = st.spec;
+  const atm = atmosphere(st.pos.y);
+
+  // --- attitude command (cyclic) ---
+  HUP.set(0, 1, 0).applyQuaternion(st.quat);
+  BFWD.set(0, 0, -1).applyQuaternion(st.quat);
+  HRT.set(1, 0, 0).applyQuaternion(st.quat);
+  const pitchAtt = Math.asin(clamp(BFWD.y, -1, 1));
+  const rollAtt = Math.asin(clamp(HRT.y, -1, 1));
+  // On the ground the cyclic is lazy and self-centres, so the machine does not
+  // lean on its stops while parked; in the air it holds whatever is commanded.
+  const auth = st.onGround ? 0.35 : 1;
+  st.pitchRef = clamp(
+    st.pitchRef + inp.pitch * HELI_CYCLIC_RATE * auth * dt,
+    -HELI_MAX_TILT,
+    HELI_MAX_TILT,
+  );
+  st.rollRef = clamp(
+    st.rollRef - inp.roll * HELI_CYCLIC_RATE * auth * dt,
+    -HELI_MAX_BANK,
+    HELI_MAX_BANK,
+  );
+  if (st.onGround) {
+    st.pitchRef += (0 - st.pitchRef) * (1 - Math.exp(-dt / 1.2));
+    st.rollRef += (0 - st.rollRef) * (1 - Math.exp(-dt / 1.2));
+  }
+  const qCmd = clamp(HELI_ATT_GAIN * (st.pitchRef - pitchAtt), -HELI_PITCH_RATE_MAX, HELI_PITCH_RATE_MAX);
+  const pCmd = clamp(HELI_ATT_GAIN * (st.rollRef - rollAtt), -HELI_ROLL_RATE_MAX, HELI_ROLL_RATE_MAX);
+  const yCmd = -inp.yaw * HELI_YAW_RATE; // omega.y + = nose left
+  const k = 1 - Math.exp(-dt / HELI_RATE_TAU);
+  st.omega.x += (qCmd - st.omega.x) * k;
+  st.omega.z += (pCmd - st.omega.z) * k;
+  st.omega.y += (yCmd - st.omega.y) * k;
+
+  // --- collective: the lever, not a jet throttle ---
+  // A helicopter's primary control is the collective, and the governor holds
+  // rotor RPM for it: there is no 2-second spool to sit through. Flying the
+  // model off the jet's throttle ramp made every height change lag the key by
+  // seconds, which is unflyable in a hover. `rpm` doubles as the collective
+  // fraction the rotor model reads (and the HUD's throttle bar shows).
+  const collRate = 1.1; // fraction per second of collective travel
+  if (inp.throttleUp) st.rpm = clamp(st.rpm + collRate * dt, 0, 1);
+  if (inp.throttleDown) st.rpm = clamp(st.rpm - collRate * dt, 0, 1);
+  st.throttle = st.rpm;
+  // Skids, not retractable gear: the lever does nothing and the machine is
+  // always ready to set down.
+  st.gearDown = true;
+  st.gearT = 1;
+  st.flapsDown = false;
+  st.flapT = 0;
+
+  // --- rotor thrust (collective) ---
+  const coll = st.rpm;
+  let thrust = (spec.idleThrust + (spec.thrustDry - spec.idleThrust) * coll) * atm.sigma;
+  if (st.crashFall) thrust = 0;
+
+  // --- forces (world): rotor along body up, gravity, parasite drag ---
+  const acc = FF.set(HUP.x * thrust, HUP.y * thrust - spec.mass * GRAVITY, HUP.z * thrust);
+  const V = st.vel.length();
+  if (V > 0.4) {
+    const D = 0.5 * atm.rho * HELI_DRAG_AREA * V * V;
+    acc.addScaledVector(st.vel, -D / V);
+  }
+
+  // --- ground contact, integration, ground reaction (shared with every type) ---
+  const ground = applyGroundContact(st, dt, inp, acc, spec);
+  st.vel.addScaledVector(acc, dt / spec.mass);
+  st.pos.addScaledVector(st.vel, dt);
+  holdOnDeck(st);
+
+  st.quat
+    .multiply(DQ.set(st.omega.x * dt * 0.5, st.omega.y * dt * 0.5, st.omega.z * dt * 0.5, 1).normalize())
+    .normalize();
+
+  if (ground.contacts > 0) {
+    if (ground.torqueBody) {
+      st.omega.x += (ground.torqueBody.x / spec.iPitch) * dt;
+      st.omega.y += (ground.torqueBody.y / spec.iYaw) * dt;
+      st.omega.z += (ground.torqueBody.z / spec.iRoll) * dt;
+    }
+    // The tyres bite: settle the attitude instead of letting the rate loop
+    // fight the springs.
+    st.omega.multiplyScalar(Math.exp(-dt * 2.5));
+  }
+
+  // --- derived state ---
+  st.speed = st.vel.length();
+  st.mach = st.speed / atm.soundSpeed;
+  st.vspeed = st.vel.y;
+  BFWD.set(0, 0, -1).applyQuaternion(st.quat);
+  st.headingDeg = ((Math.atan2(BFWD.x, -BFWD.z) * 180) / Math.PI + 360) % 360;
+  st.alpha = 0;
+  st.stalled = false;
+  st.sweepT = 0;
+  st.sweep = spec.sweepMin;
+  st.gLoad = st.onGround
+    ? 1
+    : (thrust * HUP.y) / Math.max(spec.mass * GRAVITY, 1);
+  st.onGround = ground.contacts > 0;
+  st.groundKind = ground.kind;
+  if (st.onGround) st.airborne = false;
+  else if (st.pos.y > groundRef(st) + 2.5 && st.flightTime > 1) st.airborne = true;
+}
+
 function groundRef(st: AircraftState): number {
   return groundAt(st.pos.x, st.pos.z).y;
 }
@@ -1001,7 +1165,13 @@ function applyGroundContact(
     // limit that neither branch claimed, so the jet neither trapped nor died.
     const overloaded = touchdownVy <= HARD_SINK || st.speed > IMPACT_SPEED;
     if (hitWater) {
-      fail(st, "DITCHED", "The Tomcat is not a seaplane. Impact with the sea.");
+      fail(
+        st,
+        "DITCHED",
+        st.spec.rotorcraft
+          ? "The rotor disc came down on water. Helicopters do not float."
+          : `${st.spec.name} is not a seaplane. Impact with the sea.`,
+      );
     } else if (st.gearT < .8) {
       // Gear not extended: there is nothing to land on. This replaces a
       // "maxWheelPen" test that measured ~0.9 m on every healthy deck landing
@@ -1016,7 +1186,9 @@ function applyGroundContact(
         "HARD IMPACT",
         st.speed > IMPACT_SPEED
           ? `Arrived at ${Math.round(st.speed * 1.94384)} kt — too fast for the gear to take.`
-          : `Touchdown at ${Math.round(-touchdownVy * 196.85)} fpm — the gear gave way.`,
+          : `Touchdown at ${Math.round(-touchdownVy * 196.85)} fpm — the ${
+              st.spec.rotorcraft ? "skids" : "gear"
+            } gave way.`,
       );
     }
     // With the gear down and both speeds inside their limits, a scrape of the
@@ -1026,7 +1198,9 @@ function applyGroundContact(
   // Short touchdowns stay live: roll into the catch area instead of ending
   // the sortie before the hook can reach it. The corridor includes the gear
   // footprint, so a modest lineup error does not turn a wheel touch into death.
-  if (!st.result && hitDeck && st.catCooldown <= 0 && st.gearT > .8 &&
+  // A helicopter has no tailhook: the deck is a place to land, not to be
+  // arrested, so the wire logic is skipped for rotary wing.
+  if (!spec.rotorcraft && !st.result && hitDeck && st.catCooldown <= 0 && st.gearT > .8 &&
       ((st.airborne && touchdownVy < TRAP_MAX_CLIMB && touchdownVy > HARD_SINK && st.speed > 5) ||
        (st.deckRoll !== undefined && !st.arresting))) {
     const c = st.deckRoll === undefined
@@ -1052,7 +1226,7 @@ function applyGroundContact(
     st.deckRoll = undefined;
     st.airborne = true;
   }
-  if (!st.result && hitRunway && st.airborne && st.gearT > .8 && touchdownVy > HARD_SINK) {
+  if (!spec.rotorcraft && !st.result && hitRunway && st.airborne && st.gearT > .8 && touchdownVy > HARD_SINK) {
     st.banner = { text: "TOUCHDOWN — IDLE THROTTLE, HOLD B TO BRAKE", until: st.time + 8 };
     st.airborne = false;
     st.runwayLanded = true;

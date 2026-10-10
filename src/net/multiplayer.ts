@@ -51,7 +51,7 @@ import type { BattleAction, BattleSnapshot, BattleShot } from "./versus";
 
 import { Peer, type DataConnection } from "peerjs";
 import type { AircraftId } from "../sim/aircraft";
-import { DEFAULT_AIRCRAFT } from "../sim/aircraft";
+import { DEFAULT_AIRCRAFT, isAircraftId } from "../sim/aircraft";
 import type { MissionKind } from "../sim/flight";
 import { setLinkDelayMs, type RemotePose } from "../render/remoteJets";
 import type { CarrierStatus, EnemySnapshot } from "../sim/dogfight";
@@ -415,7 +415,7 @@ export function sanitizeName(raw: unknown): string {
  * ships has to collapse to a known one rather than be believed.
  */
 export function sanitizeAircraft(raw: unknown): AircraftId {
-  return raw === "tomcat" || raw === "hornet" || raw === "intruder" ? raw : DEFAULT_AIRCRAFT;
+  return isAircraftId(raw) ? raw : DEFAULT_AIRCRAFT;
 }
 
 /** Longest chat line the wire will carry; anything past it is cut. */
