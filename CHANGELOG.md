@@ -6,6 +6,22 @@ arrived in large exports with stale 1.0.0 metadata; see
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md) for the surviving
 timeline, recovered intermediate build, and remaining history gaps.
 
+## 1.7.2 — 2026-10-11
+
+- Give wave-1 Aggressors a 1.1-second evasive reaction delay and wave-2
+  fighters a 0.65-second delay, with gentler, shorter evasive maneuvers and
+  longer cooldowns. Keep difficulty with each launched aircraft, and retain
+  full collision and terrain avoidance. Wave 3 onward retains veteran agility.
+- Add readable hit/destruction messages and distinct volume-controlled audio
+  cues. Throttle burst sounds and keep destruction visible through later hits.
+- Show damage percentages and health bars on wounded fighters, with smoke
+  below half health on both host and mirrored aircraft.
+- Add the Strike and Aggressor operation upgrades to docs/IDEAS.md as TODOs,
+  including convoy interdiction, fleet defense, target consequences, enemy
+  roles, finite objectives, optional recovery, and shared co-op progression.
+- Add local regressions for difficulty progression, interrupted threats,
+  surviving early-wave fighters, confirmation priority, expiry, and reset.
+
 ## 1.7.1 — 2026-10-11
 
 - Keep Aggressor waves 1–2 guns-only. Fighters launched from wave 3 onward

@@ -100,6 +100,27 @@ export class AudioEngine {
     this.windSrc.start();
   }
 
+  /** Brief hit tick; a two-note rising tone distinguishes a destroyed target. */
+  combatFeedback(kind: "hit" | "destroyed"): void {
+    const ctx = this.ctx, master = this.master;
+    if (!ctx || !master || ctx.state !== "running" || this.volume <= 0) return;
+    const tones = kind === "destroyed" ? [660, 990] : [1250];
+    for (let i = 0; i < tones.length; i++) {
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      const start = ctx.currentTime + i * 0.1;
+      const duration = kind === "destroyed" ? 0.16 : 0.065;
+      osc.type = "sine";
+      osc.frequency.value = tones[i];
+      gain.gain.setValueAtTime(0, start);
+      gain.gain.linearRampToValueAtTime(kind === "destroyed" ? 0.22 : 0.16, start + 0.005);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
+      osc.connect(gain).connect(master);
+      osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+      osc.start(start);
+      osc.stop(start + duration);
+    }
+  }
+
   resume(): void {
     void this.ctx?.resume();
   }

@@ -109,7 +109,7 @@ const KEEP_APART = 240; // m — bandits shoulder away from each other
 const MERGE_DIST = 420; // m — slide past the player rather than through them
 const PANIC_DIST = 150; // m — inside this, break away hard from the player
 const THREAT_HOLD = 0.45; // s — rounds-inbound warning after a round goes out
-const HIT_FLASH = 0.25; // s — hit-marker flash after player rounds connect
+const HIT_FLASH = 0.5; // s — hit-marker flash after player rounds connect
 const DAMAGE_FLASH = 0.55; // s — red pulse when the player takes hits
 const MAX_TRACERS = 80;
 const MAX_FLASHES = 6;
@@ -273,6 +273,13 @@ interface Flare extends FlareTarget {
   mesh: THREE.Object3D;
 }
 
+const ROOKIE_SKILL = { reaction: 1.1, jink: 0.45, turn: 0.75, duration: 1.1, cooldown: 14 };
+const INTERMEDIATE_SKILL = { reaction: 0.65, jink: 0.7, turn: 0.9, duration: 1.4, cooldown: 11 };
+const VETERAN_SKILL = { reaction: 0, jink: 1, turn: 1, duration: 1.8, cooldown: 9 };
+function fighterSkill(wave: number) {
+  return wave <= 1 ? ROOKIE_SKILL : wave === 2 ? INTERMEDIATE_SKILL : VETERAN_SKILL;
+}
+
 interface Bandit {
   id: number;
   hp: number;
@@ -289,6 +296,9 @@ interface Bandit {
   /** s until the bandit may break again: after a break it extends and
    *  re-engages like a real pilot instead of jinking forever. */
   evadeCd: number;
+  launchWave?: number; // difficulty stays with this aircraft after waves advance
+  reactionT?: number; // sustained threat time before an evasive response
+  smokeT?: number;
   phase: number; // per-bandit jink phase
   mesh: TomcatMesh;
   /** >= 0 while the bandit is still rolling on the catapult; -1 in the air. */
@@ -468,10 +478,11 @@ export interface DogfightHud {
   firing: boolean;
   /** 1 -> 0 hit-marker flash: our rounds connected with a bandit. */
   hitT: number;
+  confirmation: { text: string; kind: "hit" | "destroyed"; remaining: number } | null;
   /** 1 -> 0 damage flash: we are taking hits. */
   damageT: number;
   /** Per-bandit 3D position + gun lead point, for the HUD designators. */
-  spots: Array<{ x: number; y: number; z: number; lx: number; ly: number; lz: number; km: number }>;
+  spots: Array<{ x: number; y: number; z: number; lx: number; ly: number; lz: number; km: number; health?: number }>;
   /** Bombs still on the racks. */
   bombs: number;
   bombsMax: number;
@@ -586,6 +597,9 @@ export class Dogfight {
   private waveTimer = 0;
   private threatT = 0;
   private hitT = 0;
+  private confirmation: DogfightHud["confirmation"] = null;
+  private feedbackSoundCd = 0;
+  onCombatFeedback?: (kind: "hit" | "destroyed") => void;
   private damageT = 0;
   private root = new THREE.Group();
   private tracerPool: THREE.Mesh[] = [];
@@ -1259,6 +1273,16 @@ export class Dogfight {
     b.mesh.gear.visible = b.catT >= 0;
     b.mesh.group.position.copy(b.pos);
     b.mesh.group.quaternion.copy(b.quat);
+    this.stepDamageSmoke(b, dt);
+  }
+
+  private stepDamageSmoke(b: Bandit, dt: number): void {
+    if (b.hp > BANDIT_HP * 0.5) return;
+    b.smokeT = (b.smokeT ?? 0) - dt;
+    if (b.smokeT <= 0) {
+      this.blasts.trail(b.pos, 1.3, 2.4);
+      b.smokeT = 0.18;
+    }
   }
 
   /**
@@ -1270,11 +1294,25 @@ export class Dogfight {
     // Last line of defence for damage that arrives over the wire: a non-finite
     // or negative number would make the bandit impossible to kill.
     if (!Number.isFinite(dmg) || dmg <= 0) return;
+    if (b.hp <= 0) return;
     b.hp -= Math.min(dmg, MAX_CLAIMED_HIT);
+    if (b.hp > 0) this.confirmDamage("AIRCRAFT HIT", "hit");
     if (this.mirror) this.hitsOut.push({ id: b.id, dmg });
     if (b.hp <= 0) {
       if (this.mirror) this.takenDown.set(b.id, performance.now());
       this.killBandit(b, player);
+    }
+  }
+
+  /** Keep destruction readable even when another burst connects immediately. */
+  private confirmDamage(text: string, kind: "hit" | "destroyed"): void {
+    this.hitT = HIT_FLASH;
+    if (kind === "destroyed" || this.confirmation?.kind !== "destroyed") {
+      this.confirmation = { text, kind, remaining: kind === "destroyed" ? 2.2 : 0.85 };
+    }
+    if (kind === "destroyed" || this.feedbackSoundCd <= 0) {
+      this.onCombatFeedback?.(kind);
+      this.feedbackSoundCd = kind === "destroyed" ? 0.4 : 0.16;
     }
   }
 
@@ -1300,6 +1338,8 @@ export class Dogfight {
     this.muzzleT = 0;
     this.threatT = 0;
     this.hitT = 0;
+    this.confirmation = null;
+    this.feedbackSoundCd = 0;
     this.damageT = 0;
     this.launchQueued = 0;
     this.launchTimer = 0;
@@ -1383,6 +1423,11 @@ export class Dogfight {
     // have its hit marked, and the mark has to expire).
     if (this.releaseAge !== Infinity) this.releaseAge += dt;
     if (this.impactAge !== Infinity) this.impactAge += dt;
+    this.feedbackSoundCd = Math.max(0, this.feedbackSoundCd - dt);
+    if (this.confirmation) {
+      this.confirmation.remaining -= dt;
+      if (this.confirmation.remaining <= 0) this.confirmation = null;
+    }
     // The muzzle flash rides the nose for a moment after each round leaves, so
     // it tracks the jet instead of blinking at an old position.
     if (this.muzzleT > 0) {
@@ -1501,7 +1546,7 @@ export class Dogfight {
     // Lead points: where the player's rounds and a bandit meet, for the HUD's
     // gun cue. Rounds leave at MUZZLE_V plus the shooter's own speed.
     const gunSpeed = Math.max(MUZZLE_V + player.vel.length(), 1);
-    const spots = this.bandits.map((b) => {
+    const spots: DogfightHud["spots"] = this.bandits.map((b) => {
       const dist = b.pos.distanceTo(player.pos);
       const vel = DIR.set(0, 0, -1).applyQuaternion(b.quat).multiplyScalar(b.speed).sub(player.vel);
       let tof = Math.min(dist / gunSpeed, 2);
@@ -1513,7 +1558,7 @@ export class Dogfight {
       lx = b.pos.x + vel.x * tof;
       ly = b.pos.y + vel.y * tof;
       lz = b.pos.z + vel.z * tof;
-      return { x: b.pos.x, y: b.pos.y, z: b.pos.z, lx, ly, lz, km: dist / 1000 };
+      return { x: b.pos.x, y: b.pos.y, z: b.pos.z, lx, ly, lz, km: dist / 1000, health: Math.max(0, b.hp / BANDIT_HP) };
     });
     for (const opponent of this.opponents) {
       const dist = opponent.pos.distanceTo(player.pos);
@@ -1553,6 +1598,7 @@ export class Dogfight {
       threat: this.threatT > 0,
       firing: this.gunLive,
       hitT: this.hitT / HIT_FLASH,
+      confirmation: this.confirmation ? { ...this.confirmation } : null,
       damageT: this.damageT / DAMAGE_FLASH,
       spots,
       bombs: this.bombsLeft,
@@ -1619,6 +1665,7 @@ export class Dogfight {
       threat: false,
       firing: this.gunLive,
       hitT: this.hitT / HIT_FLASH,
+      confirmation: this.confirmation ? { ...this.confirmation } : null,
       damageT: 0,
       spots,
       bombs: this.bombsLeft,
@@ -1971,6 +2018,9 @@ export class Dogfight {
       burst: 0,
       evadeT: 0,
       evadeCd: 0,
+      launchWave: this.wave,
+      reactionT: 0,
+      smokeT: 0,
       missiles: this.wave >= BANDIT_MISSILE_FIRST_WAVE ? BANDIT_MISSILE_LOAD : 0,
       missileCd: BANDIT_MISSILE_ARM_DELAY + hash(id * 7.3) * 6,
       phase: hash(id * 11.3) * Math.PI * 2,
@@ -2761,9 +2811,11 @@ export class Dogfight {
       cv.sinkT = 0;
       cv.speed = 0;
       this.launchQueued = 0;
+      this.confirmDamage("CARRIER DISABLED", "destroyed");
       this.kills++; // the boat counts as a kill
       this.banner(player, `DIRECT HIT — ${CV_NAME} IS SINKING — NO MORE LAUNCHES`);
     } else {
+      this.confirmDamage("CARRIER HIT", "hit");
       this.banner(player, `DIRECT HIT — ${CV_NAME} HULL ${cv.hp}%`);
     }
   }
@@ -2793,7 +2845,8 @@ export class Dogfight {
     if (t.dead) return;
     t.hp -= dmg;
     this.hitT = HIT_FLASH;
-    if (t.hp > 0) return;
+    if (t.hp > 0) { this.confirmDamage("TARGET HIT", "hit"); return; }
+    this.confirmDamage("TARGET DESTROYED", "destroyed");
     t.dead = true;
     t.wreckT = 0;
     t.smokeT = 0.6;
@@ -3030,6 +3083,7 @@ export class Dogfight {
     TO_P.copy(player.pos).sub(b.pos);
     const dist = TO_P.length();
 
+    const skill = fighterSkill(b.launchWave ?? this.wave);
     // --- pick a mode: engage, or break when threatened ---
     // Being on the bandit's six is the classic chase; being lined up in the
     // player's own gun cone counts too, so the pack reacts instead of boring in.
@@ -3041,12 +3095,19 @@ export class Dogfight {
       PFWD.dot(TO_P) < -NOSE_CONE_COS * dist;
     if (b.evadeT > 0) {
       b.evadeT -= dt;
-      if (b.evadeT <= 0) b.evadeCd = 9 + hash(b.id + player.time * 1.3) * 5;
+      if (b.evadeT <= 0) b.evadeCd = skill.cooldown + hash(b.id + player.time * 1.3) * 5;
     } else if (b.evadeCd > 0) {
       b.evadeCd -= dt;
     } else if ((onSix && dist < EVADE_DIST) || nosed) {
-      b.evadeT = 1.8 + hash(b.id + player.time) * 1.2;
+      b.reactionT = (b.reactionT ?? 0) + dt;
+      if (b.reactionT >= skill.reaction) {
+        b.evadeT = skill.duration + hash(b.id + player.time) * 1.2 * skill.jink;
+        b.reactionT = 0;
+      }
+    } else {
+      b.reactionT = 0;
     }
+    if (b.evadeT > 0 || b.evadeCd > 0) b.reactionT = 0;
 
     // --- afterburner: lit for the merge, the evade and the chase; it cycles
     // so the plume blinks like a pilot riding the burner in bursts ---
@@ -3069,8 +3130,8 @@ export class Dogfight {
       // jink: weave around the current heading with a climb bias
       TMP.set(1, 0, 0).applyQuaternion(b.quat); // right wing
       DESIRED.copy(FWD)
-        .addScaledVector(TMP, Math.sin(player.time * 1.9 + b.phase) * 0.7)
-        .addScaledVector(WORLD_UP, Math.cos(player.time * 1.4 + b.phase) * 0.35 + 0.2);
+        .addScaledVector(TMP, Math.sin(player.time * 1.9 + b.phase) * 0.7 * skill.jink)
+        .addScaledVector(WORLD_UP, (Math.cos(player.time * 1.4 + b.phase) * 0.35 + 0.2) * skill.jink);
       DESIRED.normalize();
       b.speed += (BANDIT_SPEED.evade - b.speed) * (1 - Math.exp(-dt / 1.2));
     } else {
@@ -3150,7 +3211,8 @@ export class Dogfight {
         Math.max(b.speed, BANDIT_SPEED.min) / BANDIT_TURN_RADIUS,
         BANDIT_TURN_FLOOR,
       );
-      FWD.applyAxisAngle(AXIS, Math.min(angle, turnCap * dt));
+      const evadeScale = b.evadeT > 0 && dist > MERGE_DIST && needClimb <= 0 ? skill.turn : 1;
+      FWD.applyAxisAngle(AXIS, Math.min(angle, turnCap * evadeScale * dt));
     }
     const bankTarget = angle > 0.05 ? turnSign * Math.min(angle * 1.6, 1.15) : 0;
     b.bank += (bankTarget - b.bank) * (1 - Math.exp(-dt * 2.5));
@@ -3161,6 +3223,7 @@ export class Dogfight {
     b.mesh.group.position.copy(b.pos);
     b.mesh.group.quaternion.copy(b.quat);
 
+    this.stepDamageSmoke(b, dt);
     // --- terrain: a bandit that hits the ground or the sea breaks up ---
     const g = groundAt(b.pos.x, b.pos.z);
     if (b.pos.y <= g.y + 2) {
@@ -3342,6 +3405,7 @@ export class Dogfight {
   private killBandit(b: Bandit, player: AircraftState): void {
     this.removeBandit(b);
     this.kills++;
+    this.confirmDamage("AIRCRAFT DESTROYED", "destroyed");
     // it broke up in the air: fireball, debris and a bright core
     this.blasts.spawn(b.pos.clone(), "air", 1);
     this.flash(b.pos);

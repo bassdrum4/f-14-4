@@ -333,9 +333,10 @@ check("hit marker flashes when our rounds connect", sawHit);
     wave2Seen !== null && wave2Seen.dist < 500 && wave2Seen.y < 30, JSON.stringify(wave2Seen));
 }
 
-// --- 6. a bandit being lined up on breaks instead of boring in ---
+// --- 6. a veteran being lined up on breaks instead of boring in ---
 player = airPlayer();
 df.begin(player);
+(df as unknown as { wave: number }).wave = 3;
 {
   let closed = false;
   let maxSpeed = 0, evaded = false;
@@ -598,6 +599,79 @@ df.begin(player);
   check('early-wave survivors remain guns-only in later waves',
     early.missiles === 0 && internals.missiles.length === before);
   mission.dispose();
+}
+
+// --- difficulty progression and readable damage feedback ---
+{
+  function fixture(wave: number) {
+    const scene = new Scene();
+    const mission = new Dogfight(scene, new ExplosionField(scene));
+    const pilot = airPlayer();
+    pilot.pos.y = 2500;
+    mission.begin(pilot);
+    const d = mission as any;
+    d.wave = wave;
+    d.launchOne(pilot, d.cv);
+    const bandit = d.bandits[0];
+    bandit.catT = -1;
+    bandit.climbT = 0;
+    bandit.speed = 200;
+    function threaten(dt: number) {
+      bandit.pos.copy(pilot.pos).add(new Vector3(0, 0, -500));
+      bandit.quat.identity();
+      pilot.time += dt;
+      d.stepBandit(bandit, dt, pilot);
+    }
+    return { mission, pilot, d, bandit, threaten };
+  }
+  for (const [wave, delay] of [[1, 1.1], [2, 0.65], [3, 0]]) {
+    const f = fixture(wave);
+    f.threaten(0.05);
+    check(`wave ${wave} ${delay ? 'waits before evading' : 'reacts immediately'}`,
+      delay ? f.bandit.evadeT === 0 : f.bandit.evadeT > 0);
+    if (delay) {
+      // No uninterrupted threat means no accumulated reaction credit.
+      f.bandit.pos.copy(f.pilot.pos).add(new Vector3(0, 0, -2000));
+      f.d.stepBandit(f.bandit, 0.05, f.pilot);
+      check(`wave ${wave} forgets an interrupted threat`, f.bandit.reactionT === 0);
+      f.d.wave = 5; // advancing the mission does not upgrade an existing rookie
+      for (let t = 0; t < delay + 0.05 && !f.bandit.evadeT; t += 0.05) f.threaten(0.05);
+      check(`wave ${wave} eventually evades a sustained threat`, f.bandit.evadeT > 0);
+      check(`wave ${wave} keeps its launch difficulty`, f.bandit.launchWave === wave);
+      check(`wave ${wave} makes a shorter evasive maneuver`, f.bandit.evadeT < 2.25);
+      f.bandit.evadeT = 0.01;
+      f.threaten(0.05);
+      check(`wave ${wave} has a longer recovery between dodges`,
+        f.bandit.evadeCd >= (wave === 1 ? 14 : 11));
+    }
+    f.mission.dispose();
+  }
+  const f = fixture(1);
+  const sounds: string[] = [];
+  f.mission.onCombatFeedback = kind => sounds.push(kind);
+  const hp = f.bandit.hp;
+  f.d.damageBandit(f.bandit, 1, f.pilot);
+  const hit = f.mission.hud(f.pilot);
+  check('a real hit shows readable aircraft damage', hit.confirmation?.text === 'AIRCRAFT HIT' &&
+    hit.spots[0].health! < 1 && hit.hitT > 0);
+  f.d.damageBandit(f.bandit, 1, f.pilot);
+  check('continuous hits throttle their confirmation sound', sounds.length === 1);
+  f.d.damageBandit(f.bandit, hp, f.pilot);
+  check('a lethal hit has a separate destruction confirmation',
+    f.mission.hud(f.pilot).confirmation?.kind === 'destroyed' && sounds[sounds.length - 1] === 'destroyed');
+  const soundCount = sounds.length;
+  f.d.damageBandit(f.bandit, hp, f.pilot);
+  check('a destroyed aircraft cannot confirm twice', sounds.length === soundCount);
+  f.d.launchOne(f.pilot, f.d.cv);
+  f.d.damageBandit(f.d.bandits[0], 1, f.pilot);
+  check('a following hit does not hide the destruction message',
+    f.mission.hud(f.pilot).confirmation?.kind === 'destroyed');
+  f.d.active = false;
+  f.mission.step(2.3, f.pilot, false);
+  check('confirmation expires even after the fight stops', f.mission.hud(f.pilot).confirmation === null);
+  f.mission.clear();
+  check('restart clears damage confirmation', f.mission.hud(f.pilot).confirmation === null);
+  f.mission.dispose();
 }
 
 // --- 10. clear + dispose are clean ---

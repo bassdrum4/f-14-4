@@ -145,8 +145,9 @@ export interface HudSnapshot {
   /** The player's trigger is down (muzzle flash + bright bullet ladder). */
   gunFiring: boolean;
   dfHitT: number;
+  dfConfirmation: { text: string; kind: "hit" | "destroyed"; remaining: number } | null;
   dfDamageT: number;
-  dfSpots: Array<{ x: number; y: number; z: number; lx: number; ly: number; lz: number; km: number }>;
+  dfSpots: Array<{ x: number; y: number; z: number; lx: number; ly: number; lz: number; km: number; health?: number }>;
   /** The airframe the player is flying, for the HUD label. */
   aircraftName: string;
   dfBombs: number;
@@ -261,7 +262,7 @@ function defaultHud(): HudSnapshot {
     localHour: 12, dayPhase: "day",
     dfActive: false, dfStrike: false, dfHull: 100, dfKills: 0, dfWave: 1, dfBandits: 0,
     dfNearestKm: 0, dfNearestBrgDeg: 0, enemyMarkers: [],
-    dfThreat: false, gunFiring: false, dfHitT: 0, dfDamageT: 0, dfSpots: [],
+    dfThreat: false, gunFiring: false, dfHitT: 0, dfConfirmation: null, dfDamageT: 0, dfSpots: [],
     aircraftName: "F-14A TOMCAT",
     dfBombs: 6, dfBombsMax: 6, dfBombsAway: 0, dfCarrier: null,
     dfMissiles: 2, dfMissilesMax: 2,
@@ -400,6 +401,9 @@ export class Sim {
     this.audio.setVolume(settings.volume);
     this.explosions = new ExplosionField(this.renderer.scene, settings.quality);
     this.df = new Dogfight(this.renderer.scene, this.explosions);
+    this.df.onCombatFeedback = kind => {
+      if (this.phase === "flying") this.audio.combatFeedback(kind);
+    };
     // Multiplayer: wingman meshes live in the same scene; the P2P session
     // stays idle (and costs nothing) until the pilot opens or joins a room.
     this.remoteFleet = new RemoteFleet(this.renderer.scene);
@@ -1770,6 +1774,7 @@ export class Sim {
     | "dfThreat"
     | "gunFiring"
     | "dfHitT"
+    | "dfConfirmation"
     | "dfDamageT"
     | "dfSpots"
     | "dfBombs"
@@ -1802,6 +1807,7 @@ export class Sim {
       dfThreat: h.threat || (this.battleActive && this.remoteWeapons.incoming),
       gunFiring: h.firing,
       dfHitT: h.hitT,
+      dfConfirmation: h.confirmation,
       dfDamageT: h.damageT,
       dfSpots: h.spots,
       dfBombs: h.bombs,

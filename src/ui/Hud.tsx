@@ -35,7 +35,7 @@ const EMPTY: HudSnapshot = {
   localHour: 12, dayPhase: "day",
   dfActive: false, dfStrike: false, dfHull: 100, dfKills: 0, dfWave: 1, dfBandits: 0,
   dfNearestKm: 0, dfNearestBrgDeg: 0, enemyMarkers: [],
-  dfThreat: false, gunFiring: false, dfHitT: 0, dfDamageT: 0, dfSpots: [],
+  dfThreat: false, gunFiring: false, dfHitT: 0, dfConfirmation: null, dfDamageT: 0, dfSpots: [],
   aircraftName: "F-14A TOMCAT",
   dfBombs: 0, dfBombsMax: 6, dfBombsAway: 0, dfCarrier: null,
   dfMissiles: 0, dfMissilesMax: 0,
@@ -576,6 +576,26 @@ function TargetBoxes({ sim, gunCross }: { sim: Sim | null; gunCross: boolean }) 
         ctx.fillStyle = "rgba(255, 150, 130, 0.9)";
         ctx.font = "10px ui-monospace, monospace";
         ctx.fillText(`${s.km.toFixed(1)}`, tx + r + 4, ty + 3);
+        if (s.health !== undefined && s.health < 1) {
+          ctx.fillStyle = "rgba(6,18,26,0.85)";
+          ctx.fillRect(tx - 22, ty + r + 5, 44, 5);
+          ctx.fillStyle = s.health <= 0.5 ? "#ffd250" : "#b7edff";
+          ctx.fillRect(tx - 22, ty + r + 5, 44 * s.health, 5);
+          ctx.fillText(`DMG ${Math.round((1 - s.health) * 100)}%`, tx + r + 4, ty + 17);
+        }
+      }
+
+      const confirmation = hud.dfConfirmation;
+      if (confirmation) {
+        ctx.save();
+        ctx.textAlign = "center";
+        ctx.font = `${confirmation.kind === "destroyed" ? 700 : 600} 15px ui-monospace, monospace`;
+        const width = ctx.measureText(confirmation.text).width + 28;
+        ctx.fillStyle = "rgba(6, 18, 26, 0.82)";
+        ctx.fillRect(w / 2 - width / 2, h / 2 + 42, width, 29);
+        ctx.fillStyle = confirmation.kind === "destroyed" ? "#ffd250" : "#f2ffff";
+        ctx.fillText(confirmation.text, w / 2, h / 2 + 62);
+        ctx.restore();
       }
 
       // our rounds connected

@@ -6,6 +6,44 @@ you want based on everything you have asked for so far.
 
 ---
 
+## Mission upgrades TODO — 2026-10-11
+
+Start with **Stop the Convoy** for Strike and **Fleet Defense** for Aggressor.
+Keep quick bombing controls, short briefings, and optional recovery intact.
+
+- [ ] Replace endless-wave-only progression with finite operations, clear
+  success/failure conditions, and an optional endless mode.
+- [ ] Strike / Stop the Convoy: transports head toward a destination; escorts
+  defend them. Damaging transports slows their arrival. Let players choose
+  between immediately attacking transports and clearing escorts first.
+- [ ] Strike variants: airbase attack, coastal-defense suppression, and fleet
+  crippling. Give each a primary objective and optional supporting targets.
+- [ ] Make targets affect the operation: radar damage weakens defensive
+  coordination, fuel fires threaten nearby structures, flight-deck damage
+  stops launches, and propulsion damage slows ships.
+- [ ] Add readable strike defenses: signaled anti-aircraft guns and limited
+  patrol fighters, with clear warnings and opportunities for another pass.
+- [ ] Aggressor / Fleet Defense: scout flight, escorted bomber strike against
+  the friendly carrier, then a counterattack opening before the next launch.
+  Intercepting scouts should delay the strike; friendly-carrier damage matters.
+- [ ] Give enemies roles, finite ammunition, and retreat behavior. Bombers
+  pursue the fleet while escorts engage the player; damaged/empty fighters
+  withdraw rather than chase forever.
+- [ ] Vary Aggressor operations with split attacks, fighter sweeps followed by
+  strikes, withdrawals, and a final launch from a badly damaged carrier.
+- [ ] Show one current objective and concise radio updates with useful arrival
+  estimates. On completion offer finish now, optional landing/recovery bonus,
+  or another operation; a difficult landing must not block mission completion.
+- [ ] Share operation state and objectives in co-op, including late joins and
+  host migration. Test objectives, failure paths, rearm, retry, and recovery.
+- [ ] Before adding pressure, improve target selection, persistent offscreen
+  arrows, altitude/closure guidance, and explicit firing-window feedback.
+
+Delivered prerequisites: waves 1–2 have no enemy missiles, slower evasive
+reactions, and gentler maneuvering; combat has hit/destruction feedback.
+
+---
+
 ## What I read from your asks
 
 The pattern across your requests is **readability over realism**:
