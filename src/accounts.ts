@@ -67,11 +67,21 @@ function parseStore(raw: string | null): Store {
   }
 }
 
+let sessionRaw: string | null = null;
+let sessionOnly = false;
+function readStoreRaw(): string | null {
+  if (sessionOnly) return sessionRaw;
+  try { const target = storage(); return target ? target.getItem(STORE_KEY) : sessionRaw; }
+  catch { return sessionRaw; }
+}
 function writeStore(store: Store): void {
   try {
-    storage()?.setItem(STORE_KEY, JSON.stringify(store));
+    sessionRaw = JSON.stringify(store);
+    const target = storage();
+    if (target) target.setItem(STORE_KEY, sessionRaw);
+    else sessionOnly = true;
   } catch {
-    /* storage unavailable — the account lasts for this session only */
+    sessionOnly = true;
   }
   notify();
 }
@@ -90,7 +100,7 @@ let cacheReady = false;
  * `useSyncExternalStore` snapshot.
  */
 export function currentAccount(): Account | null {
-  const raw = storage()?.getItem(STORE_KEY) ?? null;
+  const raw = readStoreRaw();
   if (!cacheReady || raw !== cachedRaw) {
     cachedRaw = raw;
     cachedAccount = accountFromRaw(raw);
@@ -139,7 +149,7 @@ export function normalizeUsername(raw: string): string {
 export function setCallsign(raw: string): AccountResult {
   const username = normalizeUsername(raw);
   if (username.length < 2) return { ok: false, error: "Callsigns need at least 2 characters." };
-  const store = parseStore(storage()?.getItem(STORE_KEY) ?? null);
+  const store = parseStore(readStoreRaw());
   store.session = username;
   if (!store.createdAt) store.createdAt = Date.now();
   writeStore(store);
@@ -161,6 +171,7 @@ export function profileOf(s: Settings): GamestateProfile {
     volume: s.volume,
     sensitivity: s.sensitivity,
     quality: s.quality,
+    adaptiveResolution: s.adaptiveResolution,
     minimap: s.minimap,
     hudLadder: s.hudLadder,
     hudGunCross: s.hudGunCross,
@@ -190,6 +201,7 @@ export function applyGamestate(current: Settings, profile: GamestateProfile): Se
   if (profile.quality === "low" || profile.quality === "medium" || profile.quality === "high") {
     next.quality = profile.quality;
   }
+  if (typeof profile.adaptiveResolution === "boolean") next.adaptiveResolution = profile.adaptiveResolution;
   if (typeof profile.minimap === "boolean") next.minimap = profile.minimap;
   if (typeof profile.hudLadder === "boolean") next.hudLadder = profile.hudLadder;
   if (typeof profile.hudGunCross === "boolean") next.hudGunCross = profile.hudGunCross;

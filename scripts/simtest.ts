@@ -176,8 +176,8 @@ function idle() {
     const c = ARCHIPELAGO.carriers[idx];
     const st = spawnAircraft("carrier", idx);
     const inp = { ...idle(), catHold: true };
-    // hold cat ~1s: throttle maxes and catapult charges
-    for (let i = 0; i < 240; i++) stepAircraft(st, { ...inp, throttleUp: true }, DT);
+    // Raise power and wait for the engine before tensioning the catapult
+    for (let i = 0; i < 540; i++) stepAircraft(st, { ...inp, throttleUp: true }, DT);
     check(`${c.name}: cat fires after charge`, st.catPhase === "firing" || st.catPhase === "idle", st.catPhase);
     let t = 0;
     while (st.catPhase === "firing" && t < 5) {

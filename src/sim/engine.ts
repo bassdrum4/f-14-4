@@ -32,7 +32,7 @@ import {
   worldSeedForRoom,
 } from "../sim/world";
 import type { TerrainPaint } from "../render/scene";
-import { CYCLE_MINUTES_PER_DAY, type MissionMode, type Settings } from "../settings";
+import { CYCLE_MINUTES_PER_DAY, keyLabel, type MissionMode, type Settings } from "../settings";
 import { HOME_SITE, dayPhase, sunPosition, sunVector, type DayPhase } from "../sim/sun";
 import { Dogfight, type CarrierStatus, type GunCue } from "../sim/dogfight";
 import { ExplosionField } from "../render/effects";
@@ -423,7 +423,7 @@ export class Sim {
     }, peerFactory);
     this.input.attach(canvas);
     window.addEventListener("resize", this.onResize);
-    this.state = spawnAircraft("carrier", 0, settings.aircraft);
+    this.state = spawnAircraft("carrier", 0, settings.aircraft, settings.bindings);
     this.updateJetPose(1);
     this.updateHud();
     this.raf = requestAnimationFrame(this.loop);
@@ -448,7 +448,7 @@ export class Sim {
     // Changing airframe: rebuild the mesh and re-park the jet on the new type.
     if (aircraftChanged) {
       this.renderer.setAircraft(s.aircraft);
-      this.state = spawnAircraft(this.mission, this.spawnCarrier, s.aircraft);
+      this.state = spawnAircraft(this.mission, this.spawnCarrier, s.aircraft, s.bindings);
       this.prevPos.copy(this.state.pos);
       this.prevQuat.copy(this.state.quat);
       this.df.setAircraft(this.state);
@@ -561,12 +561,13 @@ export class Sim {
 
   private beginMission(mission: MissionKind, carrierIndex: number): void {
     this.mission = mission;
+    this.recoveryPending = false;
     this.endPod();
     this.crashSeq = null;
     this.pendingRoom = false;
     this.settingsRequest = false;
     this.breakupHide = false;
-    this.state = spawnAircraft(mission, carrierIndex, this.settings.aircraft);
+    this.state = spawnAircraft(mission, carrierIndex, this.settings.aircraft, this.settings.bindings);
     this.battleLife = -1;
     this.battleDeadLife = -1;
     this.battleReadyAt = 0;
@@ -588,9 +589,9 @@ export class Sim {
       this.dfArmed = true;
       const what = strike ? "STRIKE TARGETS ON THE GRID" : "HOSTILE CARRIER INBOUND";
       this.dfArmText = this.state.spec.rotorcraft
-        ? `${what} — COLLECTIVE UP (W) TO LIFT OFF`
+        ? `${what} — COLLECTIVE UP (${keyLabel(this.settings.bindings.throttleUp)}) TO LIFT OFF`
         : mission === "carrier"
-        ? `${what} — HOLD SPACE TO LAUNCH`
+        ? `${what} — FULL THROTTLE (${keyLabel(this.settings.bindings.throttleUp)}) — HOLD ${keyLabel(this.settings.bindings.cat)} — CLIMB (${keyLabel(this.settings.bindings.pitchUp)})`
         : `${what} — TAKE OFF TO ${strike ? "ENGAGE" : "INTERCEPT"}`;
       this.state.banner = { text: this.dfArmText, until: Infinity };
     } else {
@@ -624,6 +625,18 @@ export class Sim {
 
   pause(): void {
     if (this.phase === "flying") this.setPhase("paused");
+  }
+
+  /** Continue the existing mission after a successful solo recovery. */
+  continueRecovery(): void {
+    if (this.battleActive || (this.state.result?.kind !== "wire" && this.state.result?.kind !== "landing")) return;
+    this.completeBattleRecovery();
+    this.setPhase("flying");
+    this.acc = 0;
+    this.last = performance.now() / 1000;
+    this.input.clearEdges();
+    this.audio.resume();
+    this.updateHud();
   }
 
   restart(): void {
@@ -669,7 +682,7 @@ export class Sim {
     this.crashSeq = null;
     this.breakupHide = false;
     this.df.clear();
-    this.state = spawnAircraft(this.mission, this.spawnCarrier, this.settings.aircraft);
+    this.state = spawnAircraft(this.mission, this.spawnCarrier, this.settings.aircraft, this.settings.bindings);
     this.rig.resetFollow();
     this.updateJetPose(1);
     this.audio.update(0.05, 0, 0, false, true);
@@ -917,7 +930,7 @@ export class Sim {
     return { height: terrainHeight };
   }
   private afterWorldChange(): void {
-    this.state = spawnAircraft(this.mission, this.spawnCarrier, this.settings.aircraft);
+    this.state = spawnAircraft(this.mission, this.spawnCarrier, this.settings.aircraft, this.settings.bindings);
     this.prevPos.copy(this.state.pos);
     this.prevQuat.copy(this.state.quat);
     this.updateJetPose(1);
@@ -1029,7 +1042,7 @@ export class Sim {
     const ring = ids.filter((_, i) => i % pair.length === side);
     const ringSlot = Math.max(0, ring.indexOf(this.netState.self));
     const angle = ringSlot * Math.PI * 2 / Math.max(1, ring.length) + (Math.max(0, this.battleLife) % 4) * .3;
-    this.state = spawnAircraft("carrier", carrierIndex, this.settings.aircraft);
+    this.state = spawnAircraft("carrier", carrierIndex, this.settings.aircraft, this.settings.bindings);
     const st = this.state;
     st.pos.set(center.x + Math.cos(angle) * 3000, 1600 + slot * 60, center.z + Math.sin(angle) * 3000);
     // Nose on the contested middle rather than on your own boat: both sides
@@ -1444,9 +1457,12 @@ export class Sim {
       this.df.step(FIXED_DT, this.state, inp.fire === true, false);
       // A wheels-down on a friendly deck or runway is a recovery, not the end:
       // the racks and the hull come back full so the pilot can go again.
-      if (wasAirborne && isRecoverySurface(this.state)) {
+      if (wasAirborne && isRecoverySurface(this.state)) this.recoveryPending = true;
+      if (this.state.airborne || this.state.result) this.recoveryPending = false;
+      if (this.recoveryPending && isRecoverySurface(this.state) && this.state.speed <= 20) {
         if (!this.battleActive) this.refillOnRecovery();
-        else if (this.state.spec.rotorcraft && this.state.speed <= 20) this.rearmBattleAircraft();
+        else if (this.state.spec.rotorcraft) this.rearmBattleAircraft();
+        this.recoveryPending = false;
       }
       wasAirborne = this.state.airborne;
       this.acc -= FIXED_DT;
@@ -1466,24 +1482,25 @@ export class Sim {
     this.updateHud();
   }
 
-  /** A completed PvP recovery continues the current life from a launch position. */
+  /** Return a recovered aircraft to launch while retaining the current mission. */
   private completeBattleRecovery(): void {
     const self = this.battle.pilots.find(p => p.id === this.netState.self);
-    if (!self?.ready || self.hp <= 0) return;
+    if (this.battleActive && (!self?.ready || self.hp <= 0)) return;
     this.endPod();
     const landed = this.state;
     const mission = landed.groundKind === "runway" ? "airfield" : "carrier";
     if (mission === "carrier") this.spawnCarrier = carriers().indexOf(nearestCarrier(landed.pos.x, landed.pos.z));
     this.mission = mission;
-    this.state = spawnAircraft(mission, this.spawnCarrier, this.settings.aircraft);
+    this.state = spawnAircraft(mission, this.spawnCarrier, this.settings.aircraft, this.settings.bindings);
     const launchBriefing = this.state.banner?.text ?? "READY FOR LAUNCH";
     this.state.time = landed.time;
     this.state.flightTime = landed.flightTime;
-    this.rearmBattleAircraft();
+    if (this.battleActive) this.rearmBattleAircraft();
+    else this.refillOnRecovery();
     this.prevPos.copy(this.state.pos);
     this.prevQuat.copy(this.state.quat);
     this.rig.resetFollow();
-    this.pushBanner(`RECOVERED & REARMED — ${launchBriefing}`);
+    this.state.banner = { text: `RECOVERED & REARMED — ${launchBriefing}`, until: this.state.time + 30 };
   }
 
   /** Stores are local; a valid surface pose lets the host confirm hull repair. */
@@ -1496,6 +1513,8 @@ export class Sim {
     this.battleRecoveryAt = 0;
     this.pushBanner("RECOVERED & REARMED — READY TO LIFT");
   }
+
+  private recoveryPending = false;
 
   /** Refuel and re-arm on a landing, and say so. */
   private refillOnRecovery(): void {

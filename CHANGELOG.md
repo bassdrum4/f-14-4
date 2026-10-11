@@ -6,6 +6,39 @@ arrived in large exports with stale 1.0.0 metadata; see
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md) for the surviving
 timeline, recovered intermediate build, and remaining history gaps.
 
+## 1.6.6 — 2026-10-11
+
+Five player-flow fixes:
+- Require full throttle and engine spool before a carrier catapult shot; explain
+  power, catapult and climb in order.
+- Leave the connected room when choosing Fly Solo.
+- Let room guests choose their own aircraft; shared sortie settings remain with the host.
+- Offer Rearm & Continue after a solo landing, preserving enemies, score and
+  flight time, with Restart Mission as a separate choice.
+- Explain that the room and combat continue while the local flight menu is open.
+
+Ten code fixes:
+- Reject mouse releases without a canvas press, including releases on menu controls.
+- Clear smoothed flight axes immediately on focus loss.
+- Consume binding-capture keys before flight controls, so Escape cancels capture.
+- Swap occupied bindings so rebinding one action cannot strand another.
+- Keep callsign accounts usable when browser storage reads or writes are blocked.
+- Keep the fallback guest callsign stable for the session.
+- Include adaptive resolution in cloud profile save and restore.
+- Preserve reports submitted while feedback retries are in progress.
+- Share in-flight feedback delivery and retries to avoid duplicate submissions.
+- Service a sliding helicopter once it slows after touchdown, instead of missing
+  recovery when its touchdown tick is above the servicing speed.
+
+Three other fixes:
+- UI: display assigned keys in menu, controls and launch instructions.
+- Performance: adapt resolution under sustained frame rates below four FPS.
+- Resource lifecycle: release world geometry, owned materials, textures and
+  shadow resources on renderer teardown; avoid constructing orphaned night lights.
+
+Add local regressions for the above event sequences and extend recovery tests.
+Update catapult checks to wait for engine spool. No GitHub Actions test changes.
+
 ## 1.6.5 — 2026-10-10
 
 - Share shooter-owned PvP missile flight and targeting state so remote visuals

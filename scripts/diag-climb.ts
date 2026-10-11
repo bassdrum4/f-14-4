@@ -105,7 +105,7 @@ function fly(
 {
   const st = spawnAircraft("carrier", 0);
   const hold = { ...idle(), catHold: true, throttleUp: true };
-  for (let i = 0; i < Math.round(2.2 / DT); i++) stepAircraft(st, hold, DT);
+  for (let i = 0; i < Math.round(8 / DT) && st.catPhase !== "firing"; i++) stepAircraft(st, hold, DT);
   st.time = 0;
   fly(st, 30, () => idle());
   console.log(`      30 s after a cat shot: alt ${st.pos.y.toFixed(0)} m, ${(st.speed * 1.94384).toFixed(0)} kt`);

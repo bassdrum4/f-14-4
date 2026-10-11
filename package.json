@@ -1,7 +1,7 @@
 {
   "name": "f14-tomcat-simulator",
   "private": true,
-  "version": "1.6.5",
+  "version": "1.6.6",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port ${PORT:-5173}",
@@ -40,7 +40,8 @@
     "test:net-authority": "bun scripts/diag-net-authority.ts",
     "test:bomb-envelope": "bun scripts/diag-bomb-envelope.ts",
     "test:performance": "bun scripts/diag-performance.ts",
-    "test:countermeasures:pvp": "bun scripts/diag-countermeasures-pvp.ts"
+    "test:countermeasures:pvp": "bun scripts/diag-countermeasures-pvp.ts",
+    "test:gameplay-edges": "bun scripts/diag-gameplay-edges.ts"
   },
   "dependencies": {
     "peerjs": "^1.5.5",

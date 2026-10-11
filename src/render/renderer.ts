@@ -39,7 +39,7 @@ export class WorldRenderer {
   private terrainPaint!: TerrainPaint;
   private worldRoot = new THREE.Group();
   private nightRoot = new THREE.Group();
-  private nightLights: THREE.MeshStandardMaterial;
+  private nightLights!: THREE.MeshStandardMaterial;
   private sky: ReturnType<typeof buildSky>;
   private hemi: THREE.HemisphereLight;
   private ambient: THREE.AmbientLight;
@@ -106,10 +106,7 @@ export class WorldRenderer {
     this.scene.add(this.sky.mesh);
     // Approach lighting: dark by day, glowing after dusk. Rebuilt with the
     // world, since its positions come from the active layout. applyWorld()
-    // re-binds this material to the group it actually puts in the scene —
-    // keeping the constructor's instance would leave the daylight cycle
-    // driving an orphaned material while the lights stayed dark forever.
-    this.nightLights = buildNightLights().material;
+    // assigns the material belonging to the group it actually puts in the scene.
     this.scene.add(this.nightRoot);
     const ocean = buildOcean();
     this.oceanMat = ocean.material as THREE.MeshStandardMaterial;
@@ -258,6 +255,8 @@ export class WorldRenderer {
   /** Release GPU resources (world, cues, airframe, renderer). */
   dispose(): void {
     this.scaleCues.dispose();
+    disposeTree(this.scene);
+    this.sun.shadow.dispose();
     this.renderer.dispose();
   }
 
@@ -313,15 +312,19 @@ function disposeGeometryTree(root: THREE.Object3D): void {
 }
 
 function disposeTree(root: THREE.Object3D): void {
+  const geometries = new Set<THREE.BufferGeometry>();
+  const materials = new Set<THREE.Material>();
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
     if ((mesh as THREE.InstancedMesh).isInstancedMesh) (mesh as THREE.InstancedMesh).dispose();
-    if (mesh.geometry) mesh.geometry.dispose();
+    if (mesh.geometry) geometries.add(mesh.geometry);
     const mat = mesh.material as THREE.Material | THREE.Material[] | undefined;
     if (Array.isArray(mat)) {
-      for (const mm of mat) disposeMaterial(mm);
+      for (const mm of mat) materials.add(mm);
     } else if (mat) {
-      disposeMaterial(mat);
+      materials.add(mat);
     }
   });
+  for (const geometry of geometries) geometry.dispose();
+  for (const material of materials) disposeMaterial(material);
 }

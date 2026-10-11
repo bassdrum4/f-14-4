@@ -69,6 +69,7 @@ for (const result of [
   assert.equal(sim.df.hud(sim.state).missiles, 2); assert.equal(sim.df.hud(sim.state).bombs, 6);
   if (result.title !== 'RUNWAY LANDING') {
     assert.equal(sim.state.catPhase, 'ready'); assert.equal(sim.state.catCarrier, 2);
+    sim.state.throttle = sim.state.rpm = 1;
     stepAircraft(sim.state, { pitch: 0, roll: 0, yaw: 0, throttleUp: false, throttleDown: false, trimUp: false, trimDown: false, brake: false, catHold: true }, 1 / 120);
     assert.equal(sim.state.catPhase, 'charging', 'a recovered carrier pilot can relaunch');
   } else assert.equal(sim.state.groundKind, 'runway');
@@ -150,4 +151,35 @@ for (const respawn of [false, true]) {
   assert(sim.state.pos.distanceTo(start) < 1, 'neutral controls hold the PvP hover for ten seconds');
   assert.equal(sim.state.result, null);
   sim.df.dispose(); console.log(`PASS Seahawk ${respawn ? 'respawn' : 'initial spawn'}: stable airborne hover`);
+}
+
+// Sliding touchdown may initially be too fast to service, then slow safely.
+{
+  const { sim } = setup(null, true, 'seahawk');
+  sim.state = spawnAircraft('airfield', 0, 'seahawk');
+  sim.state.airborne = true; sim.state.vel.set(0, 0, -24); sim.state.speed = 24;
+  sim.input = { sample: () => ({ pitch: 0, roll: 0, yaw: 0, throttleUp: false, throttleDown: false, trimUp: false, trimDown: false, brake: true, catHold: false }) };
+  sim.stepSim(1 / 120);
+  assert(sim.state.onGround && !sim.state.airborne && sim.state.result === null);
+  assert(sim.state.speed > 20); assert.equal(sim.df.hud(sim.state).missiles, 0);
+  for (let i = 0; i < 1200 && sim.df.hud(sim.state).missiles === 0; i++) sim.stepSim(1 / 120);
+  assert.equal(sim.df.hud(sim.state).missiles, 2, 'service occurs when a sliding helicopter slows, not only on its touchdown tick');
+  sim.df.dispose(); console.log('PASS delayed helicopter servicing after a sliding touchdown');
+}
+
+// A successful solo landing must preserve the ongoing fight and score.
+{
+  const { sim } = setup(null);
+  sim.settings.missionMode = 'dogfight'; sim.netState.status = 'idle';
+  sim.phaseListeners = new Set(); sim.input = { clearEdges() {} }; sim.audio = { resume() {} };
+  sim.df.begin(sim.state); sim.df.kills = 3;
+  const enemyRoster = sim.df.enemySnapshot().bandits.map((e: any) => e.id);
+  sim.state.result = { kind: 'wire', wire: 3, title: 'CAUGHT WIRE 3', detail: 'Recovered' };
+  sim.state.time = 140; sim.state.flightTime = 130; sim.phase = 'result';
+  sim.continueRecovery();
+  assert.equal(sim.phase, 'flying'); assert.equal(sim.state.result, null);
+  assert.equal(sim.state.catPhase, 'ready'); assert.equal(sim.state.time, 140); assert.equal(sim.state.flightTime, 130);
+  assert.equal(sim.df.hud(sim.state).kills, 3); assert.deepEqual(sim.df.enemySnapshot().bandits.map((e: any) => e.id), enemyRoster);
+  assert.equal(sim.df.hud(sim.state).missiles, 2); assert(sim.state.banner.until > sim.state.time);
+  sim.df.dispose(); console.log('PASS solo recovery retains enemies, score, mission time and relaunch instructions');
 }

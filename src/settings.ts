@@ -179,9 +179,20 @@ export function suggestRoomCode(): string {
   return tail;
 }
 
-/** The callsign to show: the saved one, or a fresh default. */
+let guestCallsign: string | null = null;
+/** The saved callsign, or a guest identity stable for this session. */
 export function callsignOf(s: Settings): string {
-  return s.callsign.trim() || defaultCallsign();
+  return s.callsign.trim() || (guestCallsign ??= defaultCallsign());
+}
+
+/** Assign an occupied key by swapping it with this action's former key. */
+export function rebind(bindings: Record<Action, string>, action: Action, code: string): Record<Action, string> {
+  const next = { ...bindings };
+  for (const other of Object.keys(next) as Action[]) {
+    if (other !== action && next[other] === code) next[other] = bindings[action];
+  }
+  next[action] = code;
+  return next;
 }
 
 /** Uppercase, alphanumeric room code — the same shape the net layer uses. */

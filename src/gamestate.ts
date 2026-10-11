@@ -29,6 +29,7 @@ export interface GamestateProfile {
   volume: number;
   sensitivity: number;
   quality: string;
+  adaptiveResolution?: boolean;
   minimap: boolean;
   /** HUD overlay preferences. Optional: profiles saved before they existed. */
   hudLadder?: boolean;

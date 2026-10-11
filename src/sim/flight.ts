@@ -8,6 +8,7 @@
 // other pseudo-random effects are derived from sim time, so runs are
 // deterministic for identical inputs.
 
+import { DEFAULT_BINDINGS, keyLabel, type Action } from "../settings";
 import { Quaternion, Vector3 } from "three";
 import { atmosphere } from "./atmosphere";
 import { DEFAULT_AIRCRAFT, specFor, type AircraftId, type AircraftSpec } from "./aircraft";
@@ -425,6 +426,7 @@ export function spawnAircraft(
   mission: MissionKind,
   carrierIndex = 0,
   aircraft: AircraftId = DEFAULT_AIRCRAFT,
+  bindings: Record<Action, string> = DEFAULT_BINDINGS,
 ): AircraftState {
   const spec = specFor(aircraft);
   const fleet = carriers();
@@ -499,13 +501,13 @@ export function spawnAircraft(
       ? {
           text:
             mission === "carrier"
-              ? `CARRIER ${fleet[idx].name} — COLLECTIVE UP (W) TO LIFT OFF`
-              : "COLLECTIVE UP (W) TO LIFT — CYCLIC TILTS TO FLY",
+              ? `CARRIER ${fleet[idx].name} — COLLECTIVE UP (${keyLabel(bindings.throttleUp)}) TO LIFT OFF`
+              : `COLLECTIVE UP (${keyLabel(bindings.throttleUp)}) TO LIFT — CYCLIC TILTS TO FLY`,
           until: 30,
         }
       : mission === "carrier"
-        ? { text: `CARRIER ${fleet[idx].name} — HOLD SPACE FOR CATAPULT`, until: 30 }
-        : { text: "THROTTLE UP (W) — ROTATE AT 150 KT", until: 30 },
+        ? { text: `CARRIER ${fleet[idx].name} — THROTTLE (${keyLabel(bindings.throttleUp)}) TO FULL — HOLD ${keyLabel(bindings.cat)} — CLIMB (${keyLabel(bindings.pitchUp)})`, until: 30 }
+        : { text: `THROTTLE UP (${keyLabel(bindings.throttleUp)}) — ROTATE (${keyLabel(bindings.pitchUp)}) AT 150 KT`, until: 30 },
     prevPos: pos.clone(),
     prevQuat: quat.clone(),
   };
@@ -587,14 +589,17 @@ export function stepAircraft(st: AircraftState, inp: FlightInput, dt: number): v
   }
 
   // --- catapult sequence ---
-  if (st.catPhase === "ready" && inp.catHold) {
+  if (st.catPhase === "ready" && inp.catHold && (st.throttle < .9 || st.rpm < .85)) {
+    st.banner = { text: "CATAPULT WAITING — FULL THROTTLE & ENGINE POWER REQUIRED", until: st.time + 2 };
+  }
+  if (st.catPhase === "ready" && inp.catHold && st.throttle >= .9 && st.rpm >= .85) {
     st.catPhase = "charging";
     st.catProgress = 0;
   }
   if (st.catCooldown > 0) st.catCooldown -= dt;
   if (st.catPhase === "charging") {
     st.catProgress = clamp(st.catProgress + dt / 0.9, 0, 1);
-    if (!inp.catHold) {
+    if (!inp.catHold || st.throttle < .9 || st.rpm < .85) {
       st.catPhase = "ready";
       st.catProgress = 0;
     } else if (st.catProgress >= 1) {

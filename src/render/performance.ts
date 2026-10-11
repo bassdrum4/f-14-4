@@ -15,13 +15,13 @@ export class ResolutionBudget {
     const dt = this.last ? nowMs - this.last : 0;
     this.last = nowMs;
     // Tab suspension, resize and world construction are not sustained load.
-    if (!enabled || !visible || dt <= 0 || dt > 250) {
+    if (!enabled || !visible || dt <= 0 || dt > 1000) {
       this.elapsed = this.frames = this.spareWindows = 0;
       return false;
     }
     this.elapsed += dt;
     this.frames++;
-    if (this.elapsed < 1000 || this.frames < 20) return false;
+    if (this.elapsed < 1000 || this.frames < 6) return false;
     const mean = this.elapsed / this.frames;
     this.elapsed = this.frames = 0;
     const previous = this.scale;

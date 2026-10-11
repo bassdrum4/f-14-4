@@ -240,7 +240,16 @@ export function buildEntry(input: FeedbackInput, context: FeedbackContext | null
  * fetch follows it, and the final 200 carries the ContentService output.
  * Throws on network or HTTP failure so the caller can keep the report queued.
  */
-async function postEntry(entry: FeedbackEntry): Promise<void> {
+const deliveries = new Map<string, Promise<void>>();
+function postEntry(entry: FeedbackEntry): Promise<void> {
+  const existing = deliveries.get(entry.id);
+  if (existing) return existing;
+  const pending = sendEntry(entry).finally(() => deliveries.delete(entry.id));
+  deliveries.set(entry.id, pending);
+  return pending;
+}
+
+async function sendEntry(entry: FeedbackEntry): Promise<void> {
   const url = feedbackEndpoint();
   if (!url) throw new Error("no Apps Script endpoint configured");
   const key = feedbackKey();
@@ -326,20 +335,23 @@ export async function submitFeedback(
 }
 
 /** Retry every queued submission (called on load and from the panel). */
-export async function flushFeedback(): Promise<number> {
+let flushing: Promise<number> | null = null;
+export function flushFeedback(): Promise<number> {
+  return flushing ??= flushQueue().finally(() => { flushing = null; });
+}
+async function flushQueue(): Promise<number> {
   if (!feedbackConfigured()) return 0;
   const queue = readQueue();
   if (!queue.length) return 0;
-  const failed: FeedbackEntry[] = [];
   let sent = 0;
   for (const entry of queue) {
     try {
       await postEntry(entry);
+      writeQueue(readQueue().filter(e => e.id !== entry.id));
       sent++;
     } catch {
-      failed.push(entry);
+      // Leave this report, and anything submitted during the retry, queued.
     }
   }
-  writeQueue(failed);
   return sent;
 }

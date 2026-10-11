@@ -63,6 +63,8 @@ export class InputManager {
   private onUpBound = (e: MouseEvent) => this.onMouseUp(e);
   private onMoveBound = (e: MouseEvent) => this.onMouseMove(e);
   private onBlurBound = () => {
+    this.pitch = this.roll = this.yaw = 0;
+    this.pressTravel = 0;
     this.down.clear();
     this.pressedQueue.clear();
     this.consumed.clear();
@@ -101,6 +103,7 @@ export class InputManager {
   }
 
   applySettings(s: Settings): void {
+    if (Object.keys(this.bindings).some(a => this.bindings[a as Action] !== s.bindings[a as Action])) this.onBlurBound();
     this.bindings = { ...s.bindings };
     this.sensitivity = s.sensitivity;
   }
@@ -175,11 +178,13 @@ export class InputManager {
   }
 
   private onMouseUp(e: MouseEvent): void {
+    if (e.button !== 0) return;
+    const hadPress = this.pressStart !== null;
     const wasDrag = this.dragging;
     this.dragging = false;
     this.pressStart = null;
     const slop = this.clicksAfterDrag ? Infinity : 4;
-    if (e.button === 0 && (!wasDrag || this.clicksAfterDrag) && this.pressTravel <= slop) {
+    if (hadPress && (!wasDrag || this.clicksAfterDrag) && this.pressTravel <= slop) {
       this.clicks.push({ x: e.clientX, y: e.clientY });
       if (this.clicks.length > 4) this.clicks.shift();
     }
