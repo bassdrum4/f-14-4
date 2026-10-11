@@ -41,7 +41,7 @@ function setup(result: SimResult | null, host = true, aircraft: AircraftId = 'to
   (sim.df as any).flaresLeft = 0;
   sim.updateJetPose = sim.updateAudio = sim.updateHud = () => {};
   const actions: BattleAction[] = [];
-  sim.net = { callsign: 'ALPHA', publishBattle: () => {}, sendBattleAction: (action: BattleAction) => {
+  sim.net = { callsign: 'ALPHA', publishBattle: () => {}, sendBattleMissiles: () => {}, sendBattleAction: (action: BattleAction) => {
     actions.push(action);
     if (host) sim.receiveBattleAction('a', action);
   } };
@@ -137,4 +137,17 @@ for (const host of [true, false]) for (const mission of ['carrier', 'airfield'] 
   if (host) assert.equal(ref.snapshot(performance.now() / 1000).pilots[0].hp, 100);
   else assert.equal(sim.df.hud(sim.state).hull, 10, 'wingman waits for the host to acknowledge repair');
   sim.df.dispose(); console.log(`PASS actual Seahawk ${mission} touchdown (${host ? 'host' : 'wingman'}): rearm and request repair`);
+}
+
+for (const respawn of [false, true]) {
+  const { sim } = setup(null, true, 'seahawk');
+  sim.spawnBattleAircraft(respawn);
+  assert.equal(sim.state.speed, 0, 'helicopter must not inherit the jet spawn speed');
+  assert(sim.state.gearDown && sim.state.gearT === 1);
+  const start = sim.state.pos.clone();
+  const idle = { pitch: 0, roll: 0, yaw: 0, throttleUp: false, throttleDown: false, trimUp: false, trimDown: false, brake: false, catHold: false };
+  for (let i = 0; i < 1200; i++) stepAircraft(sim.state, idle, 1 / 120);
+  assert(sim.state.pos.distanceTo(start) < 1, 'neutral controls hold the PvP hover for ten seconds');
+  assert.equal(sim.state.result, null);
+  sim.df.dispose(); console.log(`PASS Seahawk ${respawn ? 'respawn' : 'initial spawn'}: stable airborne hover`);
 }

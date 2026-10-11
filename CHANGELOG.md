@@ -6,6 +6,17 @@ arrived in large exports with stale 1.0.0 metadata; see
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md) for the surviving
 timeline, recovered intermediate build, and remaining history gaps.
 
+## 1.6.5 — 2026-10-10
+
+- Share shooter-owned PvP missile flight and targeting state so remote visuals
+  and warnings follow real flare capture, relock and retirement decisions.
+  Coalesce snapshots under congestion instead of queuing stale flight updates.
+- Restore every supported cloud keybinding, including flares, map and settings.
+- Spawn the Seahawk in a stable airborne hover for PvP starts and respawns,
+  rather than inheriting a fixed-wing 408-knot launch.
+- Add regressions for cross-client seeker agreement, delayed updates, network
+  backpressure, cloud controls and helicopter spawn stability. No Actions changes.
+
 ## 1.6.4 — 2026-10-09
 
 - Synchronize PvP flare cartridges, divert damaging player-fired seekers, and

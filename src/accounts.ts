@@ -12,7 +12,7 @@
 // time of day, sensitivity, keybinds and aircraft all come home. It is
 // informal by design — no passwords, no security boundary.
 
-import { saveSettings, type Settings } from "./settings";
+import { DEFAULT_BINDINGS, saveSettings, type Settings } from "./settings";
 import { isAircraftId } from "./sim/aircraft";
 import { fetchGamestate, saveGamestate, type GamestateProfile } from "./gamestate";
 
@@ -195,7 +195,7 @@ export function applyGamestate(current: Settings, profile: GamestateProfile): Se
   if (typeof profile.hudGunCross === "boolean") next.hudGunCross = profile.hudGunCross;
   if (profile.bindings && typeof profile.bindings === "object") {
     const fetched = profile.bindings as Record<string, string>;
-    for (const k of Object.keys(DEFAULT_KEYS) as Array<keyof typeof DEFAULT_KEYS>) {
+    for (const k of Object.keys(DEFAULT_BINDINGS) as Array<keyof typeof DEFAULT_BINDINGS>) {
       const v = fetched[k];
       if (typeof v === "string" && v) (next.bindings as Record<string, string>)[k] = v;
     }
@@ -208,15 +208,6 @@ export function applyGamestate(current: Settings, profile: GamestateProfile): Se
 function clampN(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }
-
-/** Default bindings, used to sanity-check fetched profiles before merging. */
-const DEFAULT_KEYS: Record<string, string> = {
-  pitchUp: "ArrowUp", pitchDown: "ArrowDown", rollLeft: "ArrowLeft", rollRight: "ArrowRight",
-  yawLeft: "KeyA", yawRight: "KeyD", throttleUp: "KeyW", throttleDown: "KeyS", brake: "KeyB",
-  gear: "KeyG", flaps: "KeyF", speedbrake: "KeyX", ab: "ShiftLeft", cat: "Space",
-  camera: "KeyC", pause: "Escape", trimUp: "KeyT", trimDown: "KeyV", fire: "KeyQ",
-  bomb: "KeyR", missile: "KeyE",
-};
 
 /** Push the current profile to the cloud under the given callsign. */
 export async function pushGamestate(callsign: string, s: Settings): Promise<{ ok: boolean; error?: string }> {

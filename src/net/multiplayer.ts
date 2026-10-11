@@ -1,4 +1,4 @@
-import type { BattleAction, BattleSnapshot, BattleShot } from "./versus";
+import type { BattleAction, BattleSnapshot, BattleShot, BattleMissiles } from "./versus";
 // Multiplayer over WebRTC data channels.
 //
 // There is no hosted server. Two browsers meet through the PeerJS signalling
@@ -115,6 +115,7 @@ export interface NetHandlers {
   onBattleAction?: (sender: string, action: BattleAction) => void;
   onBattleState?: (snapshot: BattleSnapshot) => void;
   onBattleShot?: (sender: string, shot: BattleShot) => void;
+  onBattleMissiles?: (sender: string, snapshot: BattleMissiles) => void;
 }
 
 /**
@@ -350,6 +351,7 @@ type Control =
   | { t: "battleAction"; action: BattleAction }
   | { t: "battleState"; snapshot: BattleSnapshot }
   | { t: "battleShot"; shot: BattleShot }
+  | { t: "battleMissiles"; snapshot: BattleMissiles }
   | { t: "launch"; mission: MissionKind; carrier: number }
   | { t: "chat"; from: string; text: string };
 
@@ -527,6 +529,8 @@ export class Multiplayer {
 
   /** Live data links, keyed by the remote peer id. */
   private conns = new Map<string, DataConnection>();
+  private missileWire: string | null = null;
+  private missileSent = new WeakMap<DataConnection, string>();
   /** Outbound dials in flight, so we do not dial the same pilot twice. */
   private dialing = new Set<string>();
   /** The roster: everyone but us. */
@@ -733,6 +737,8 @@ export class Multiplayer {
       }
     }
     this.conns.clear();
+    this.missileWire = null;
+    this.missileSent = new WeakMap();
     this.dialing.clear();
     this.pilots.clear();
     this.lastSeq.clear();
@@ -1090,6 +1096,17 @@ export class Multiplayer {
         ) this.handlers.onBattleShot?.(this.pilots.get(conn.peer)?.owner ?? conn.peer, shot);
         break;
       }
+      case "battleMissiles": {
+        const s = msg.snapshot;
+        if (this.pilots.has(conn.peer) && s && Number.isSafeInteger(s.match) && Number.isSafeInteger(s.life) && Number.isSafeInteger(s.seq) &&
+          Array.isArray(s.missiles) && s.missiles.length <= 32 && s.missiles.every(m => m && Number.isSafeInteger(m.id) &&
+            Number.isFinite(m.age) && m.age >= 0 && m.age <= 26 && (m.target === null || typeof m.target === "string") &&
+            Array.isArray(m.pos) && m.pos.length === 3 && m.pos.every(Number.isFinite) &&
+            Array.isArray(m.vel) && m.vel.length === 3 && m.vel.every(Number.isFinite))) {
+          this.handlers.onBattleMissiles?.(this.pilots.get(conn.peer)?.owner ?? conn.peer, s);
+        }
+        break;
+      }
       case "battleAction":
         if (this.host && this.pilots.has(conn.peer) && msg.action && typeof msg.action === "object") this.handlers.onBattleAction?.(conn.peer, msg.action);
         break;
@@ -1275,6 +1292,20 @@ export class Multiplayer {
   }
 
   sendBattleShot(shot: BattleShot): void { this.sendAll(JSON.stringify({ t: "battleShot", shot } satisfies Control)); }
+  sendBattleMissiles(snapshot: BattleMissiles): void {
+    this.missileWire = JSON.stringify({ t: "battleMissiles", snapshot } satisfies Control);
+    this.flushBattleMissiles();
+  }
+
+  private flushBattleMissiles(): void {
+    const wire = this.missileWire;
+    if (!wire) return;
+    for (const conn of this.conns.values()) {
+      if (!conn.open || this.missileSent.get(conn) === wire) continue;
+      if ((conn.dataChannel?.bufferedAmount ?? 0) > 2048 || ((conn as DataConnection & { bufferSize?: number }).bufferSize ?? 0) > 8) continue;
+      try { conn.send(wire); this.missileSent.set(conn, wire); } catch { /* retry newest state on the next heartbeat */ }
+    }
+  }
 
   sendBattleAction(action: BattleAction): void {
     if (this.host) this.handlers.onBattleAction?.(this.selfId, action);
@@ -1419,6 +1450,7 @@ export class Multiplayer {
    * under it.
    */
   private tick = (): void => {
+    this.flushBattleMissiles();
     if (this.status !== "online" || this.conns.size === 0) return;
     // A hidden tab is throttled to ~1 Hz by the browser; zeroing velocity makes
     // the wingman hold position instead of extrapolating off into the sunset.

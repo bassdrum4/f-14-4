@@ -1,6 +1,7 @@
 import { RemoteWeapons } from "../render/remoteWeapons";
-import { BattleReferee, battleCarrierPair, type BattleAction, type BattleSnapshot, type BattleShot } from "../net/versus";
+import { BattleReferee, battleCarrierPair, type BattleAction, type BattleSnapshot, type BattleShot, type BattleMissiles } from "../net/versus";
 import { specFor } from "./aircraft";
+import { atmosphere } from "./atmosphere";
 // Sim orchestrator: state machine, fixed-timestep sim, render loop, HUD feed.
 
 import * as THREE from "three";
@@ -345,6 +346,9 @@ export class Sim {
   private battle: BattleSnapshot = { match: 0, pilots: [] };
   private battleSeq = 0;
   private battleSeenShots = new Map<string, number>();
+  private battleSeenMissiles = new Map<string, number>();
+  private battleMissilesAt = 0;
+  private battleMissilesKey = "";
   private battleLife = -1;
   private battleDeadLife = -1;
   private battleTickAt = 0;
@@ -415,6 +419,7 @@ export class Sim {
       onBattleAction: (sender, action) => this.receiveBattleAction(sender, action),
       onBattleState: (snapshot) => this.applyBattle(snapshot),
       onBattleShot: (sender, shot) => this.receiveBattleShot(sender, shot),
+      onBattleMissiles: (sender, snapshot) => this.receiveBattleMissiles(sender, snapshot),
     }, peerFactory);
     this.input.attach(canvas);
     window.addEventListener("resize", this.onResize);
@@ -974,7 +979,7 @@ export class Sim {
       const contacts = this.remoteFleet.combatTargets().filter(p => this.battle.pilots.some(row => row.id === p.id && row.hp > 0 && !row.shield));
       const self = this.battle.pilots.find(p => p.id === this.netState.self);
       if (self && self.hp > 0 && !self.shield) contacts.push({ id: this.netState.self, pos: this.state.pos, vel: this.state.vel });
-      this.remoteWeapons.step(frameDt, contacts, this.netState.self, this.df.flareTargets());
+      this.remoteWeapons.step(frameDt, contacts, this.netState.self);
     } else this.remoteWeapons.clear();
     this.updateCamera(frameDt);
     this.updateSun();
@@ -1038,6 +1043,15 @@ export class Sim {
     st.gearDown = false; st.gearT = 0; st.flapsDown = false; st.flapT = 0;
     st.onGround = false; st.airborne = true; st.catPhase = "idle"; st.catCooldown = 5;
     st.throttle = .72; st.rpm = .72; st.banner = { text: "HEAD-TO-HEAD — FIVE-SECOND SPAWN SHIELD", until: 5 };
+    if (st.spec.rotorcraft) {
+      st.vel.set(0, 0, 0); st.speed = 0;
+      st.gearDown = true; st.gearT = 1;
+      const spec = st.spec;
+      st.throttle = st.rpm = THREE.MathUtils.clamp(
+        (spec.mass * 9.81 / atmosphere(st.pos.y).sigma - spec.idleThrust) / (spec.thrustDry - spec.idleThrust), 0, 1,
+      );
+      st.banner.text = "HEAD-TO-HEAD — HOVER READY · FIVE-SECOND SPAWN SHIELD";
+    }
     // A respawn keeps the racks you have left; a fresh launch arms them.
     this.df.beginVersus(st, !respawn);
     this.remoteWeapons.clear();
@@ -1054,6 +1068,16 @@ export class Sim {
     if (this.battleSeenShots.size > 64) this.battleSeenShots.delete(this.battleSeenShots.keys().next().value!);
     if (shot.weapon === "flare") this.df.receiveRemoteFlare(sender, shot.life, shot);
     else this.remoteWeapons.add(sender, shot);
+  }
+
+  private receiveBattleMissiles(sender: string, snapshot: BattleMissiles): void {
+    const pilot = this.battle.pilots.find(p => p.id === sender);
+    if (!this.battleActive || snapshot.match !== this.battle.match || !pilot?.ready || pilot.hp <= 0 || pilot.life !== snapshot.life) return;
+    const key = `${snapshot.match}/${sender}/${snapshot.life}`;
+    if (snapshot.seq <= (this.battleSeenMissiles.get(key) ?? -1)) return;
+    this.battleSeenMissiles.set(key, snapshot.seq);
+    if (this.battleSeenMissiles.size > 64) this.battleSeenMissiles.delete(this.battleSeenMissiles.keys().next().value!);
+    this.remoteWeapons.reconcile(sender, snapshot);
   }
 
   private receiveBattleAction(sender: string, action: BattleAction): void {
@@ -1084,6 +1108,7 @@ export class Sim {
     if (snapshot.pilots.some(p => !p || typeof p.id !== "string" || typeof p.name !== "string" || !Number.isFinite(p.hp) || p.hp < 0 || p.hp > 100 || !Number.isInteger(p.life) || p.life < 0 || !Number.isFinite(p.kills) || !Number.isFinite(p.deaths) || !Number.isFinite(p.respawnIn) || typeof p.ready !== "boolean" || typeof p.shield !== "boolean")) return;
     if (snapshot.match !== this.battle.match) { this.battleLife = -1; this.battleDeadLife = -1; }
     this.battle = snapshot;
+    this.remoteWeapons.prune?.(snapshot.match, snapshot.pilots);
     const self = snapshot.pilots.find(p => p.id === this.netState.self);
     if (this.phase === "menu" || !self?.ready) return;
     if (self.hp > 0 && self.life !== this.battleLife) {
@@ -1118,6 +1143,17 @@ export class Sim {
       return target?.ready && target.hp > 0 && !target.shield ? [{ ...p, life: target.life }] : [];
     }));
     for (const shot of this.df.takeWeaponLaunches()) if (self?.ready && self.hp > 0 && !self.shield) this.net.sendBattleShot({ ...shot, match: this.battle.match, life: self.life, seq: ++this.battleSeq });
+    if (self?.ready && self.hp > 0) {
+      const missiles = this.df.battleMissiles();
+      if (this.phase !== "flying") for (const m of missiles) m.vel = [0, 0, 0];
+      const key = `${this.battle.match}/${self.life}/` + missiles.map(m => `${m.id}:${m.target}`).join(",");
+      // Launches, capture/relock and retirement send immediately. Flight sends
+      // at 20 Hz only while missiles exist; empty rooms add no heartbeat load.
+      if (key !== this.battleMissilesKey || (missiles.length > 0 && now - this.battleMissilesAt >= .05)) {
+        this.net.sendBattleMissiles({ match: this.battle.match, life: self.life, seq: ++this.battleSeq, missiles });
+        this.battleMissilesKey = key; this.battleMissilesAt = now;
+      }
+    }
     for (const hit of this.df.takePlayerHits()) this.net.sendBattleAction({ kind: "hit", match: this.battle.match, seq: ++this.battleSeq, life: self?.life ?? 0, victim: hit.id, victimLife: hit.life, weapon: hit.weapon });
     if (self?.ready && self.hp > 0 && this.battleRecoveryLife === self.life) {
       if (self.hp === 100) this.battleRecoveryLife = -1;

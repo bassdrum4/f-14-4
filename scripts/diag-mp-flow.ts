@@ -36,7 +36,7 @@ import type { RemotePose } from "../src/render/remoteJets";
 import type { AircraftId } from "../src/sim/aircraft";
 import type { EnemySnapshot } from "../src/sim/dogfight";
 import type { MissionKind } from "../src/sim/flight";
-import type { BattleAction, BattleSnapshot, BattleShot } from "../src/net/versus";
+import type { BattleAction, BattleSnapshot, BattleShot, BattleMissiles } from "../src/net/versus";
 import type { MissionMode } from "../src/settings";
 import { DEFAULT_SEED, setWorldSeed, terrainHeight, worldSeedForRoom } from "../src/sim/world";
 
@@ -288,6 +288,7 @@ interface Pilot {
   carrierHits: number[];
   battleActions: Array<{ sender: string; action: BattleAction }>;
   battleStates: BattleSnapshot[];
+  battleMissiles: Array<{ sender: string; snapshot: BattleMissiles }>;
   battleShots: Array<{ sender: string; shot: BattleShot }>;
 }
 
@@ -308,6 +309,7 @@ function makePilot(): Pilot {
     battleActions: [],
     battleStates: [],
     battleShots: [],
+    battleMissiles: [],
   };
   rec.net = new Multiplayer(
     {
@@ -337,6 +339,7 @@ function makePilot(): Pilot {
       onCarrierHit: (dmg) => rec.carrierHits.push(dmg),
       onBattleAction: (sender, action) => rec.battleActions.push({ sender, action }),
       onBattleState: (snapshot) => rec.battleStates.push(snapshot),
+      onBattleMissiles: (sender, snapshot) => rec.battleMissiles.push({ sender, snapshot }),
       onBattleShot: (sender, shot) => rec.battleShots.push({ sender, shot }),
     },
     (id) => {
@@ -772,6 +775,12 @@ check("authoritative hull and scores reach the other pilot", joiner.battleStates
 joiner.net.sendBattleShot({ weapon: "missile", match: 29, life: 2, seq: 9, pos: [100, 1400, 200], vel: [0, 0, -260] });
 await flush();
 check("weapon launch visuals reach the opponent with pilot identity", skipper.battleShots.length === 1 && skipper.battleShots[0].sender === joiner.net.snapshot.self && skipper.battleShots[0].shot.weapon === "missile");
+joiner.net.sendBattleMissiles({ match: 29, life: 2, seq: 10, missiles: [{ id: 1, age: .4, pos: [100, 1400, 200], vel: [0, 0, -260], target: skipper.net.snapshot.self }] });
+await flush();
+check("shooter-owned missile state reaches the opponent", skipper.battleMissiles.length === 1 && skipper.battleMissiles[0].sender === joiner.net.snapshot.self && skipper.battleMissiles[0].snapshot.missiles[0].target === skipper.net.snapshot.self);
+joiner.net.sendBattleMissiles({ match: 29, life: 2, seq: 11, missiles: [] });
+await flush();
+check("empty missile state retires the opponent's visuals", skipper.battleMissiles[skipper.battleMissiles.length - 1]?.snapshot.missiles.length === 0);
 const statesBefore = skipper.battleStates.length;
 joiner.net.publishBattle({ match: 99, pilots: [] });
 await flush();
@@ -815,6 +824,13 @@ const battleBefore = joiner.battleStates.length;
 skipper.net.publishBattle(battleState);
 await flush();
 check("authoritative combat messages remain reliable under motion backpressure", joiner.battleStates.length === battleBefore + 1);
+const missileBefore = joiner.battleMissiles.length;
+for (let seq = 20; seq < 30; seq++) skipper.net.sendBattleMissiles({ match: 29, life: 2, seq, missiles: [] });
+await flush();
+check("congested missile snapshots are coalesced", joiner.battleMissiles.length === missileBefore);
+slow.dataChannel.bufferedAmount = 0;
+(skipper.net as any).tick(); await flush();
+check("drain delivers only the latest missile state", joiner.battleMissiles.length === missileBefore + 1 && joiner.battleMissiles[joiner.battleMissiles.length - 1]?.snapshot.seq === 29);
 slow.dataChannel.bufferedAmount = 0; slow.bufferSize = 9;
 renderNow += 40; skipper.net.publish(flying); await flush();
 check("PeerJS's own queued messages also block stale motion", joiner.poseCount === slowBefore);

@@ -3,6 +3,9 @@
 export type BattleWeapon = 'gun' | 'missile';
 export interface WeaponLaunch { weapon: BattleWeapon | 'flare'; pos: [number,number,number]; vel: [number,number,number] }
 export interface BattleShot extends WeaponLaunch { match: number; life: number; seq: number }
+/** Shooter-owned missile flight and seeker decisions, shared with observers. */
+export interface BattleMissile { id: number; pos: [number,number,number]; vel: [number,number,number]; age: number; target: string | null }
+export interface BattleMissiles { match: number; life: number; seq: number; missiles: BattleMissile[] }
 export interface BattleAction {
   kind: 'hit' | 'ready' | 'death' | 'recover'; match: number; seq: number;
   life: number; victim?: string; victimLife?: number; weapon?: BattleWeapon;

@@ -43,7 +43,7 @@ remoteWeapons.add('b',{weapon:'gun',match:17,life:2,seq:10,pos:[0,1800,0],vel:[0
 remoteWeapons.step(.1,[],'a');
 const visuals=effectsScene.getObjectByName('remote-weapon-effects')!;
 check('remote gunfire appears in the instanced tracer batch',(visuals.children[0] as InstancedMesh).count===1);
-remoteWeapons.add('b',{weapon:'missile',match:17,life:2,seq:11,pos:[0,1800,0],vel:[0,0,-300]});
+remoteWeapons.reconcile('b',{match:17,life:2,seq:11,missiles:[{id:1,age:.4,target:'a',pos:[0,1800,0],vel:[0,0,-300]}]});
 for(let i=0;i<5;i++)remoteWeapons.step(.1,[{id:'a',pos:new Vector3(0,1800,-900)}],'a');
 check('an incoming remote missile raises the warning',remoteWeapons.incoming);
 check('remote missiles have a visible airframe batch',(visuals.children[1] as InstancedMesh).count===1);

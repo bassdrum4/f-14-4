@@ -1,5 +1,5 @@
 import { captureFlare, missileWarning, type FlareTarget } from "./countermeasures";
-import type { BattleWeapon, WeaponLaunch } from "../net/versus";
+import type { BattleMissile, BattleWeapon, WeaponLaunch } from "../net/versus";
 import { advanceBomb, canBombReach, BOMB_ARM_TIME as BOMB_ARM, BOMB_DETONATION_RADIUS as LGB_DET } from "./bombTrajectory";
 // Combat layer for the mission modes. Two scenarios share one machinery:
 //
@@ -248,6 +248,7 @@ const MISSILE_PLAYER_DMG = 34; // warhead damage against the player's hull
 const MISSILE_WARN_R = 9000; // m: the RWR call-out range
 
 interface Missile {
+  id: number;
   pos: THREE.Vector3;
   vel: THREE.Vector3;
   motor: number; // s of burn left
@@ -639,6 +640,7 @@ export class Dogfight {
   private opponents: CombatOpponent[] = [];
   private playerHits: PlayerHit[] = [];
   private weaponLaunches: WeaponLaunch[] = [];
+  private missileSerial = 0;
   /** Host: the fight as it goes on the wire. Reused — never kept. */
   private snapOut: EnemySnapshot = { carrier: null, bandits: [], wave: 1 };
   /** Mirror: the damage our weapons did, waiting on the host to be told. */
@@ -932,6 +934,14 @@ export class Dogfight {
   }
   setOpponents(opponents: CombatOpponent[]): void { this.opponents = opponents; }
   takeWeaponLaunches(): WeaponLaunch[] { const shots = this.weaponLaunches; this.weaponLaunches = []; return shots; }
+  battleMissiles(): BattleMissile[] {
+    if (!this.versus) return [];
+    return this.missiles.filter(m => !m.hostile).map(m => {
+      const target = m.decoy ? null : this.nearestMissileTarget(m.pos);
+      return { id: m.id, pos: m.pos.toArray(), vel: m.vel.toArray(), age: MISSILE_LIFE - m.life,
+        target: this.opponents.find(o => o.pos === target)?.id ?? null };
+    });
+  }
   takePlayerHits(): PlayerHit[] { const hits = this.playerHits; this.playerHits = []; return hits; }
   setBattleHull(hp: number): void {
     if (hp < this.hull) this.damageT = DAMAGE_FLASH;
@@ -2367,6 +2377,7 @@ export class Dogfight {
     this.blasts.trail(pos, 1.3, 1.6);
     this.flash(pos);
     this.missiles.push({
+      id: ++this.missileSerial,
       pos,
       vel,
       motor: MISSILE_MOTOR,
@@ -2502,6 +2513,7 @@ export class Dogfight {
     this.flash(pos);
     this.pushReleaseMarker(pos);
     this.missiles.push({
+      id: ++this.missileSerial,
       pos,
       vel,
       motor: MISSILE_MOTOR,

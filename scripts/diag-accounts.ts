@@ -108,12 +108,14 @@ check("the store holds no password field", !raw.includes("password") && !raw.inc
     sensitivity: 1.8,
     quality: "high",
     minimap: false,
-    bindings: { fire: "KeyZ", missile: "KeyX" },
+    bindings: { fire: "KeyZ", missile: "KeyX", flares: "KeyH", map: "KeyN", settings: "KeyP", unknown: "KeyJ" },
   });
   check("gamemode, daylight and time come home",
     merged.missionMode === "dogfight" && merged.daylight === "fixed" && merged.timeOfDay === 17.5);
   check("sensitivity and quality come home", merged.sensitivity === 1.8 && merged.quality === "high");
   check("keybinds come home", merged.bindings.fire === "KeyZ" && merged.bindings.missile === "KeyX");
+  check("flare, map and settings keybinds come home", merged.bindings.flares === "KeyH" && merged.bindings.map === "KeyN" && merged.bindings.settings === "KeyP");
+  check("unknown action is ignored", !("unknown" in merged.bindings));
   check("unknown keybinds are ignored", merged.bindings.gear === settings.bindings.gear);
   check("the callsign is not clobbered", merged.callsign === settings.callsign);
   check("the room code is not clobbered", merged.room === settings.room);
