@@ -192,6 +192,8 @@ function headOnRound(km: number): void {
   df.clear();
   df.prepare(st);
   df.begin(st);
+  // Missile-equipped Aggressors enter from wave 3; early waves are guns-only.
+  (df as unknown as { wave: number }).wave = 3;
   let launched = false;
   let warnedFrames = 0;
   let firedRounds = 0;

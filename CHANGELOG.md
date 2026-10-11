@@ -6,6 +6,13 @@ arrived in large exports with stale 1.0.0 metadata; see
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md) for the surviving
 timeline, recovered intermediate build, and remaining history gaps.
 
+## 1.7.1 — 2026-10-11
+
+- Keep Aggressor waves 1–2 guns-only. Fighters launched from wave 3 onward
+  carry two missiles, with the existing arming delay and launch restrictions.
+- Keep early-wave survivors guns-only when later waves begin. Add local
+  checks for launch loadouts and actual missile firing across waves 1–4.
+
 ## 1.7.0 — 2026-10-11
 
 - Keep the intentional 9.5° angled landing deck, including matching deck

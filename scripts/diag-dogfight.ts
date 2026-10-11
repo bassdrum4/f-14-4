@@ -567,6 +567,39 @@ df.begin(player);
   gdf.dispose();
 }
 
+// Missile progression uses each aircraft's launch loadout: an early-wave
+// survivor stays guns-only even if the mission advances while it is airborne.
+{
+  const mission = new Dogfight(new Scene(), new ExplosionField(new Scene()));
+  const pilot = airPlayer();
+  mission.begin(pilot);
+  const internals = mission as any;
+  for (const wave of [1, 2, 3, 4]) {
+    internals.wave = wave;
+    internals.launchOne(pilot, internals.cv);
+    const bandit = internals.bandits[internals.bandits.length - 1];
+    check(`wave ${wave} launches with ${wave < 3 ? 'no' : 'two'} missiles`,
+      bandit.missiles === (wave < 3 ? 0 : 2));
+    // Supply a clear launch envelope with the normal arming delay elapsed.
+    bandit.catT = -1;
+    bandit.pos.copy(pilot.pos).add(new Vector3(0, 0, 2000));
+    bandit.quat.identity();
+    bandit.speed = 200;
+    bandit.missileCd = 0;
+    const before = internals.missiles.length;
+    internals.banditMissiles(bandit, DT, pilot);
+    check(`wave ${wave} ${wave < 3 ? 'cannot fire' : 'can fire'} a missile`,
+      internals.missiles.length === before + (wave < 3 ? 0 : 1));
+  }
+  const early = internals.bandits[0];
+  const before = internals.missiles.length;
+  early.missileCd = 0;
+  internals.banditMissiles(early, DT, pilot);
+  check('early-wave survivors remain guns-only in later waves',
+    early.missiles === 0 && internals.missiles.length === before);
+  mission.dispose();
+}
+
 // --- 10. clear + dispose are clean ---
 df.clear();
 check("clear empties the fight", df.hud(player).bandits === 0 && !df.hud(player).active);

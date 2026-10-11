@@ -234,9 +234,10 @@ const LOCAL_FLARE_RESERVE = 32; // remote effects cannot exhaust the pilot's poo
 const FLARE_GRAVITY = 0.55; // flares are light and draggy, not bricks
 
 // --- bandit air-to-air rounds ---
-// Aggressors carry a couple of rounds each, so "missile inbound" is a thing the
-// pilot has to answer — and answering it is what the flares are for.
-const BANDIT_MISSILE_LOAD = 2; // rounds per bandit
+// Waves 1–2 teach finding contacts and gun combat. Missiles join from wave 3,
+// once the pilot has had time to learn the merge and countermeasures.
+const BANDIT_MISSILE_FIRST_WAVE = 3;
+const BANDIT_MISSILE_LOAD = 2; // rounds per bandit from wave 3
 const BANDIT_MISSILE_ARM_DELAY = 16; // s a fresh bandit waits before its first shot
 const BANDIT_MISSILE_CD = 22; // s between one bandit's shots
 const BANDIT_MISSILE_MIN = 700; // m: inside this the shot is a merge, not a launch
@@ -1970,7 +1971,7 @@ export class Dogfight {
       burst: 0,
       evadeT: 0,
       evadeCd: 0,
-      missiles: BANDIT_MISSILE_LOAD,
+      missiles: this.wave >= BANDIT_MISSILE_FIRST_WAVE ? BANDIT_MISSILE_LOAD : 0,
       missileCd: BANDIT_MISSILE_ARM_DELAY + hash(id * 7.3) * 6,
       phase: hash(id * 11.3) * Math.PI * 2,
       mesh,
