@@ -1,9 +1,6 @@
-// The tactical map (M) is north-up, so every marker on it is only honest if
-// its glyph is rotated by the same heading the 3D world uses. These checks
-// pin the two conventions against each other: the quaternion -> heading helper
-// the markers feed on, and the canvas rotation the glyphs are drawn with. A
-// 90-degree mismatch between them would show a ship steaming across the map
-// instead of along its course, and nothing else in the codebase would notice.
+// Map glyphs use the world's true bearings; the heading-up projection subtracts
+// the player's heading from both positions and marker bearings. Cardinal and
+// oblique projection checks also live in diag-carrier-motion.ts.
 //
 // Usage: bun scripts/diag-map.ts
 import { Vector3, Quaternion } from "three";

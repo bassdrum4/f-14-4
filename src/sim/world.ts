@@ -137,7 +137,42 @@ export const ARCHIPELAGO: WorldDef = {
   ],
 };
 
-const activeWorld: WorldDef = ARCHIPELAGO;
+// Anchorages shape terrain permanently; live ship positions must not reshape it.
+const activeWorld: WorldDef = { ...ARCHIPELAGO, carriers: ARCHIPELAGO.carriers.map(c => ({ ...c })) };
+
+/** Gentle oval patrols stay inside each anchorage's guaranteed deep water. */
+export const FLEET_SPEED = 2.57; // m/s, maximum five knots
+export function fleetPoseAt(index: number, seconds: number): { x: number; z: number; headingDeg: number } {
+  const home = ARCHIPELAGO.carriers[index];
+  const { fwd, right } = deckAxes(home.headingDeg);
+  const phase = seconds * FLEET_SPEED / 220;
+  const along = 220 * Math.sin(phase), across = 80 * (1 - Math.cos(phase));
+  const vx = fwd[0] * 220 * Math.cos(phase) + right[0] * 80 * Math.sin(phase);
+  const vz = fwd[1] * 220 * Math.cos(phase) + right[1] * 80 * Math.sin(phase);
+  return {
+    x: home.x + fwd[0] * along + right[0] * across,
+    z: home.z + fwd[1] * along + right[1] * across,
+    headingDeg: (Math.atan2(vx, -vz) * 180 / Math.PI + 360) % 360,
+  };
+}
+
+/** Translation plus yaw velocity at a point on a patrol deck, in world axes. */
+export function fleetVelocityAt(index: number, seconds: number, x: number, z: number): { x: number; z: number } {
+  const home = ARCHIPELAGO.carriers[index], omega = FLEET_SPEED / 220;
+  const phase = seconds * omega, { fwd, right } = deckAxes(home.headingDeg);
+  const a = 220 * Math.cos(phase), b = 80 * Math.sin(phase);
+  const da = -220 * Math.sin(phase) * omega, db = 80 * Math.cos(phase) * omega;
+  const headingRate = (a * db - b * da) / (a * a + b * b);
+  const pose = fleetPoseAt(index, seconds);
+  return {
+    x: (fwd[0] * a + right[0] * b) * omega - headingRate * (z - pose.z),
+    z: (fwd[1] * a + right[1] * b) * omega + headingRate * (x - pose.x),
+  };
+}
+
+export function setFleetTime(seconds: number): void {
+  activeWorld.carriers.forEach((c, i) => Object.assign(c, fleetPoseAt(i, seconds)));
+}
 
 // ---------------------------------------------------------------------------
 // Seed -> island chain
@@ -332,6 +367,7 @@ let activeSampler: (x: number, z: number) => number = makeProceduralSampler(DEFA
  * the instant the seed arrives.
  */
 export function setWorldSeed(seed: number): void {
+  setFleetTime(0);
   activeSeed = sanitizeSeed(seed);
   activeSampler = makeProceduralSampler(activeSeed);
 }

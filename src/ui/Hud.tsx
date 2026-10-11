@@ -4,6 +4,7 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import * as THREE from "three";
+import { headingUpPoint } from "./mapProjection";
 import type { Sim, HudSnapshot } from "../sim/engine";
 import type { ChatMsg } from "../net/multiplayer";
 import { DEFAULT_SEED } from "../sim/world";
@@ -289,9 +290,12 @@ function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
     const range = maxR * 1.15;
     const scale = (n / 2 - 10) / range;
 
-    // world XZ -> canvas. North (-Z) is up, east (+X) is right.
-    const px = (x: number) => n / 2 + (x - hud.playerX) * scale;
-    const py = (z: number) => n / 2 + (z - hud.playerZ) * scale;
+    // Rotate world positions into the pilot's heading frame; labels stay upright.
+    const point = (x: number, z: number) => {
+      const p = headingUpPoint(x - hud.playerX, z - hud.playerZ, hud.playerHeadingDeg);
+      return { x: n / 2 + p.x * scale, y: n / 2 + p.y * scale };
+    };
+    const relativeHeading = (heading: number) => heading - hud.playerHeadingDeg;
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, n, n);
@@ -323,20 +327,23 @@ function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
     const e = hud.worldExtent;
     ctx.strokeStyle = "rgba(160, 200, 230, 0.22)";
     ctx.setLineDash([4, 4]);
-    ctx.strokeRect(px(-e), py(-e), e * 2 * scale, e * 2 * scale);
+    ctx.beginPath();
+    [[-e, -e], [e, -e], [e, e], [-e, e]].forEach(([x, z], i) => {
+      const p = point(x, z);
+      if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+    });
+    ctx.closePath(); ctx.stroke();
     ctx.setLineDash([]);
 
     // --- airfield: a bar laid along the runway's real heading ---
     // It used to be a fixed east/west line regardless of where the runway
     // actually pointed, which is the one thing a navigation aid must not get
-    // wrong. Everything on this map is drawn north-up, so a marker is only
-    // honest if it is rotated by the same heading the world uses.
+    // wrong. Its relative bearing must follow the heading-up map.
     ctx.strokeStyle = "rgba(255, 210, 80, 0.95)";
     ctx.lineWidth = 2;
-    const fx = px(hud.fieldX);
-    const fy = py(hud.fieldZ);
+    const { x: fx, y: fy } = point(hud.fieldX, hud.fieldZ);
     const rw = Math.max(8, Math.max(1100, hud.fieldLengthM) * scale);
-    const fh = (hud.fieldHeadingDeg * Math.PI) / 180;
+    const fh = (relativeHeading(hud.fieldHeadingDeg) * Math.PI) / 180;
     ctx.save();
     ctx.translate(fx, fy);
     ctx.rotate(fh);
@@ -353,10 +360,9 @@ function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
     // --- carriers ---
     ctx.font = "9px ui-monospace, monospace";
     for (const m of hud.carrierMarkers) {
-      const x = px(m.x);
-      const y = py(m.z);
+      const { x, y } = point(m.x, m.z);
       if (x < -40 || x > n + 40 || y < -40 || y > n + 40) continue;
-      drawHull(ctx, x, y, m.headingDeg, Math.max(7, m.lengthM * scale), m.near ? 4.5 : 3.5,
+      drawHull(ctx, x, y, relativeHeading(m.headingDeg), Math.max(7, m.lengthM * scale), m.near ? 4.5 : 3.5,
         m.near ? "rgba(120, 255, 140, 1)" : "rgba(150, 200, 230, 0.85)");
       ctx.fillStyle = m.near ? "rgba(120, 255, 140, 1)" : "rgba(150, 200, 230, 0.8)";
       ctx.fillText(m.name, x + Math.max(7, m.lengthM * scale) + 5, y + 3);
@@ -364,12 +370,11 @@ function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
 
     // --- wingmen (multiplayer): cyan chevrons with callsigns ---
     for (const m of hud.remotes) {
-      const x = px(m.x);
-      const y = py(m.z);
+      const { x, y } = point(m.x, m.z);
       if (x < -20 || x > n + 20 || y < -20 || y > n + 20) continue;
       ctx.save();
       ctx.translate(x, y);
-      ctx.rotate((m.headingDeg * Math.PI) / 180);
+      ctx.rotate((relativeHeading(m.headingDeg) * Math.PI) / 180);
       ctx.fillStyle = hud.battle ? "rgba(255, 130, 100, 0.95)" : "rgba(79, 210, 255, 0.95)";
       ctx.beginPath();
       ctx.moveTo(0, -5);
@@ -387,12 +392,11 @@ function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
     // --- bandits (dogfight mode): red dots ---
     ctx.fillStyle = "rgba(255, 91, 77, 0.95)";
     for (const m of hud.enemyMarkers) {
-      const x = px(m.x);
-      const y = py(m.z);
+      const { x, y } = point(m.x, m.z);
       if (x < -10 || x > n + 10 || y < -10 || y > n + 10) continue;
       ctx.save();
       ctx.translate(x, y);
-      ctx.rotate((m.headingDeg * Math.PI) / 180);
+      ctx.rotate((relativeHeading(m.headingDeg) * Math.PI) / 180);
       ctx.beginPath();
       ctx.moveTo(0, -4.5);
       ctx.lineTo(3, 3);
@@ -404,15 +408,14 @@ function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
 
     // --- hostile carrier: a red hull bar, grey once it is going down ---
     if (hud.dfCarrier) {
-      const hx = px(hud.dfCarrier.x);
-      const hy = py(hud.dfCarrier.z);
+      const { x: hx, y: hy } = point(hud.dfCarrier.x, hud.dfCarrier.z);
       const dead = hud.dfCarrier.status === "sunk" || hud.dfCarrier.status === "sinking";
       ctx.strokeStyle = dead ? "rgba(150, 165, 175, 0.6)" : "rgba(255, 91, 77, 0.95)";
       ctx.lineWidth = 3;
       const cvHalf = Math.max(7, 140 * scale);
       ctx.save();
       ctx.translate(hx, hy);
-      ctx.rotate((hud.dfCarrier.headingDeg * Math.PI) / 180);
+      ctx.rotate((relativeHeading(hud.dfCarrier.headingDeg) * Math.PI) / 180);
       ctx.beginPath();
       ctx.moveTo(0, -cvHalf);
       ctx.lineTo(0, cvHalf);
@@ -423,11 +426,9 @@ function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
     }
 
     // --- player: heading-up triangle at the centre ---
-    const hdg = (hud.playerHeadingDeg * Math.PI) / 180;
     ctx.save();
     ctx.translate(n / 2, n / 2);
-    // heading 0 = north = up, so rotate by the heading
-    ctx.rotate(hdg);
+    // The player stays facing up; all world markers rotate around it.
     ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
     ctx.beginPath();
     ctx.moveTo(0, -7);
@@ -444,7 +445,9 @@ function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
     ctx.strokeRect(0.5, 0.5, n - 1, n - 1);
     ctx.fillStyle = "rgba(120, 255, 140, 0.8)";
     ctx.font = "9px ui-monospace, monospace";
-    ctx.fillText("N", n / 2 - 3, 11);
+    const north = headingUpPoint(0, -1, hud.playerHeadingDeg);
+    ctx.fillText("N", n / 2 + north.x * (n / 2 - 9) - 3, n / 2 + north.y * (n / 2 - 9) + 3);
+    ctx.fillText(`${Math.round(hud.playerHeadingDeg).toString().padStart(3, "0")}°`, n / 2 - 12, 23);
     ctx.fillText(`${(range / 1000).toFixed(0)}km`, 6, n - 6);
   }, [hud]);
 

@@ -6,6 +6,24 @@ arrived in large exports with stale 1.0.0 metadata; see
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md) for the surviving
 timeline, recovered intermediate build, and remaining history gaps.
 
+## 1.7.0 — 2026-10-11
+
+- Keep the intentional 9.5° angled landing deck, including matching deck
+  paint, wires and landing geometry.
+- Give the friendly fleet gentle oval patrols at up to five knots within its
+  deep-water anchorages. Keep terrain fixed, move hulls and attached lights,
+  and carry parked or rolling aircraft with the translating and turning deck.
+- Synchronize fleet time from the room host, including late joins, host
+  migration and movement while a local flight menu is open. Coalesce clock
+  updates under congestion instead of queuing old positions.
+- Slow the hostile carrier to about twelve knots. Preserve its wave launches
+  and attach each catapult stroke to the ship's current position and heading.
+- Make both map sizes heading-up: the player stays facing the top, all world
+  positions and marker bearings rotate, labels stay upright, and north moves
+  around the compass edge.
+- Add local regressions for patrol safety, stable parked aircraft, moving-deck
+  launches, shared fleet time and map projection. No Actions test changes.
+
 ## 1.6.6 — 2026-10-11
 
 Five player-flow fixes:

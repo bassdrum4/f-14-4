@@ -138,11 +138,10 @@ const CV_HP = 100;
 const CV_START_DIST = 7200; // m — where the boat shows up on the horizon
 const CV_LAUNCH_RANGE = 7800; // m — inside this, it can launch (it starts in range)
 const CV_LAUNCH_HOLD = 40; // s — but never sit on a wave longer than this
-// A carrier at flank speed (~39 kt): fast enough to visibly close the range and
-// slow enough that a level bombing run from altitude can still lead and hit it.
-const CV_CLOSE_SPEED = 20; // m/s
+// A slow approach (~12 kt), with enough motion to lead a bombing run.
+const CV_CLOSE_SPEED = 6; // m/s
 const CV_STANDOFF = 2800; // m — hold this far off the player
-const CV_TURN_DEG = 1.6; // deg/s rudder (a 300 m hull does not pivot)
+const CV_TURN_DEG = 0.45; // deg/s rudder (a 300 m hull does not pivot)
 const CV_FRIENDLY_CLEAR = 2200; // m — never steam into a friendly anchorage
 const CV_FIRST_LAUNCH = 2.2; // s after a wave is called that the first jet rolls
 const CV_LAUNCH_GAP = 3.4; // s between aircraft off the two cats
@@ -295,6 +294,7 @@ interface Bandit {
   catT: number;
   catStart: THREE.Vector3;
   catDir: THREE.Vector3;
+  catAcross?: number;
   /** seconds of nose-up climb left after a cat shot */
   climbT: number;
   /** wing sweep, 0 = spread for the deck, 1 = swept for the merge */
@@ -1891,7 +1891,9 @@ export class Dogfight {
     const dist = Math.hypot(toX, toZ);
 
     // --- rudder: bring the bow onto the player, slowly ---
-    const wantHdg = ((Math.atan2(toX, -toZ) * 180) / Math.PI + 360) % 360;
+    const { fwd: currentBow } = deckAxes(def.headingDeg);
+    const shoalAhead = groundAt(def.x + currentBow[0] * 900, def.z + currentBow[1] * 900).kind !== "water";
+    const wantHdg = shoalAhead ? (def.headingDeg + 90) % 360 : ((Math.atan2(toX, -toZ) * 180) / Math.PI + 360) % 360;
     const delta = ((((wantHdg - def.headingDeg) % 360) + 540) % 360) - 180;
     const maxTurn = CV_TURN_DEG * dt;
     def.headingDeg =
@@ -1905,6 +1907,7 @@ export class Dogfight {
     for (const c of carriers()) {
       if (Math.hypot(c.x - def.x, c.z - def.z) < CV_FRIENDLY_CLEAR) target = 0;
     }
+    if (shoalAhead) target = 0;
     cv.speed += (target - cv.speed) * (1 - Math.exp(-dt / 4));
 
     // --- advance, but only over open water ---
@@ -1914,11 +1917,9 @@ export class Dogfight {
       if (groundAt(def.x + fwd[0] * ahead, def.z + fwd[1] * ahead).kind === "water") {
         def.x += fwd[0] * cv.speed * dt;
         def.z += fwd[1] * cv.speed * dt;
-      } else {
-        def.headingDeg = (def.headingDeg + 30) % 360; // shoal ahead: sheer off
       }
     }
-    cv.status = cv.speed > 12 ? "closing" : "on station";
+    cv.status = cv.speed > 0.5 ? "closing" : "on station";
     cv.mesh.position.set(def.x, 0, def.z);
     cv.mesh.rotation.y = ((90 - def.headingDeg) * Math.PI) / 180;
   }
@@ -1975,6 +1976,7 @@ export class Dogfight {
       mesh,
       catT: 0,
       catStart: start,
+      catAcross: across,
       catDir: new THREE.Vector3(fwd[0], 0, fwd[1]),
       climbT: 0,
       sweepT: 0,
@@ -1996,6 +1998,11 @@ export class Dogfight {
   private setCatPose(b: Bandit, deckY: number): void {
     const t = b.catT;
     const dist = Math.min(0.5 * CAT_ACCEL * t * t, 0.5 * CAT_ACCEL * CAT_TIME * CAT_TIME);
+    if (this.cv && b.catAcross !== undefined) {
+      const def = this.cv.def, { fwd, right } = deckAxes(def.headingDeg);
+      b.catStart.set(def.x + fwd[0] * CAT_START_ALONG + right[0] * b.catAcross, deckY + 2.4, def.z + fwd[1] * CAT_START_ALONG + right[1] * b.catAcross);
+      b.catDir.set(fwd[0], 0, fwd[1]);
+    }
     b.pos.copy(b.catStart).addScaledVector(b.catDir, dist);
     b.pos.y = deckY + 2.4;
     const headingDeg = this.cv ? this.cv.def.headingDeg : 0;
@@ -2018,7 +2025,7 @@ export class Dogfight {
     b.catT = CAT_TIME;
     this.setCatPose(b, deckY);
     b.catT = -1;
-    b.speed = CAT_V_END;
+    b.speed = CAT_V_END + (this.cv?.speed ?? 0);
     b.climbT = CV_CLIMB_TIME;
     b.mesh.gear.visible = false;
     b.mesh.afterburner.visible = false;

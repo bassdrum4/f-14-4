@@ -112,6 +112,7 @@ export interface NetHandlers {
   onChat?: (msg: ChatMsg) => void;
   /** One-way delay measured on one pilot's link, in ms. */
   onLinkDelay?: (id: string, ms: number) => void;
+  onFleetClock?: (seconds: number) => void;
   onBattleAction?: (sender: string, action: BattleAction) => void;
   onBattleState?: (snapshot: BattleSnapshot) => void;
   onBattleShot?: (sender: string, shot: BattleShot) => void;
@@ -345,6 +346,7 @@ type Control =
   | { t: "bye"; id: string }
   | { t: "name"; name: string; aircraft: AircraftId }
   | { t: "mode"; mode: MissionMode }
+  | { t: "fleet"; seconds: number }
   | { t: "host" }
   | { t: "hit"; id: number; dmg: number }
   | { t: "cvhit"; dmg: number }
@@ -525,6 +527,8 @@ export class Multiplayer {
   /** Host: the newest fight state, picked up by every other sender tick. */
   private enemy: EnemySnapshot | null = null;
   private enemySeq = 0;
+  private fleetClock: { seconds: number; at: number } | null = null;
+  private fleetSentAt = -Infinity;
   private enemyFlip = false;
 
   /** Live data links, keyed by the remote peer id. */
@@ -654,6 +658,8 @@ export class Multiplayer {
     this.error = undefined;
     this.enemy = null;
     this.enemySeq = 0;
+    this.fleetClock = null;
+    this.fleetSentAt = -Infinity;
     this.status = "connecting";
     this.emit();
 
@@ -772,6 +778,8 @@ export class Multiplayer {
     this.hostRetries = 0;
     this.enemy = null;
     this.enemySeq = 0;
+    this.fleetClock = null;
+    this.fleetSentAt = -Infinity;
     this.enemyFlip = false;
   }
 
@@ -1078,6 +1086,9 @@ export class Multiplayer {
         if (!Number.isFinite(msg.carrier)) break;
         this.handlers.onLaunch?.(msg.mission, Math.trunc(msg.carrier));
         break;
+      case "fleet":
+        if (this.isHostConn(conn) && Number.isFinite(msg.seconds) && msg.seconds >= 0) this.handlers.onFleetClock?.(msg.seconds);
+        break;
       case "mode":
         if (this.isHostConn(conn)) this.adoptMode(msg.mode);
         break;
@@ -1286,6 +1297,24 @@ export class Multiplayer {
    * the newest state up on its own schedule (see tick) and the frame flush
    * carries it sooner when the fight has moved (see flushPose).
    */
+  /** Host time drives the fleet even for late joiners and during local pause. */
+  publishFleetClock(seconds: number): void {
+    if (!this.host || this.status !== "online") return;
+    this.fleetClock = { seconds, at: performance.now() };
+    this.flushFleetClock();
+  }
+
+  private flushFleetClock(): void {
+    const clock = this.fleetClock, now = performance.now();
+    if (!clock || !this.host || this.status !== "online" || now - this.fleetSentAt < 200) return;
+    this.fleetSentAt = now;
+    const wire = JSON.stringify({ t: "fleet", seconds: clock.seconds + Math.max(0, now - clock.at) / 1000 } satisfies Control);
+    for (const conn of this.conns.values()) {
+      if (!conn.open || (conn.dataChannel?.bufferedAmount ?? 0) > 2048 || ((conn as DataConnection & { bufferSize?: number }).bufferSize ?? 0) > 8) continue;
+      try { conn.send(wire); } catch { /* next heartbeat sends current time */ }
+    }
+  }
+
   publishEnemies(snap: EnemySnapshot | null): void {
     this.enemy = snap;
     if (snap) this.enemyDirty = true;
@@ -1451,6 +1480,7 @@ export class Multiplayer {
    */
   private tick = (): void => {
     this.flushBattleMissiles();
+    this.flushFleetClock();
     if (this.status !== "online" || this.conns.size === 0) return;
     // A hidden tab is throttled to ~1 Hz by the browser; zeroing velocity makes
     // the wingman hold position instead of extrapolating off into the sunset.

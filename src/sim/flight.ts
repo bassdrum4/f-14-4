@@ -513,6 +513,17 @@ export function spawnAircraft(
   };
 }
 
+/** Carry a deck-relative pose through ship translation and yaw. */
+export function carryDeckPose(pos: Vector3, quat: Quaternion, before: CarrierDef, after: CarrierDef, vel?: Vector3): void {
+  const [along, across] = worldToDeck(before, pos.x, pos.z);
+  const { fwd, right } = deckAxes(after.headingDeg);
+  pos.x = after.x + fwd[0] * along + right[0] * across;
+  pos.z = after.z + fwd[1] * along + right[1] * across;
+  const yaw = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), -(after.headingDeg - before.headingDeg) * Math.PI / 180);
+  quat.premultiply(yaw);
+  vel?.applyQuaternion(yaw);
+}
+
 /** Catapult track in world coordinates for a given carrier. */
 export function catTrack(c: CarrierDef): { start: Vector3; dir: Vector3 } {
   const { fwd, right } = deckAxes(c.headingDeg);

@@ -39,6 +39,7 @@ export class WorldRenderer {
   private terrainPaint!: TerrainPaint;
   private worldRoot = new THREE.Group();
   private nightRoot = new THREE.Group();
+  private fleetMeshes: THREE.Group[] = [];
   private nightLights!: THREE.MeshStandardMaterial;
   private sky: ReturnType<typeof buildSky>;
   private hemi: THREE.HemisphereLight;
@@ -190,7 +191,8 @@ export class WorldRenderer {
     this.worldRoot.add(buildAirbaseDetails());
     this.scenery = buildScenery(this.quality);
     this.worldRoot.add(this.scenery);
-    for (const c of carriers()) this.worldRoot.add(buildCarrier(c));
+    this.fleetMeshes = carriers().map(c => buildCarrier(c));
+    for (const ship of this.fleetMeshes) this.worldRoot.add(ship);
 
     // Deck and runway lights follow the active layout too, or they would stay
     // where the previous world's carriers were.
@@ -199,13 +201,25 @@ export class WorldRenderer {
     const night = buildNightLights();
     this.nightLights = night.material;
     this.nightRoot.add(night.group);
-    // These transforms never move. Avoid recalculating hundreds of matrices
+    // Terrain and airfield transforms never move. Avoid recalculating hundreds of matrices
     // every frame; the moving aircraft and hostile carrier remain dynamic.
     for (const root of [this.worldRoot, this.nightRoot]) {
       root.traverse(o => { o.updateMatrix(); o.matrixAutoUpdate = false; });
       root.updateMatrixWorld(true);
       root.traverse(o => { o.matrixWorldAutoUpdate = false; });
     }
+    for (const ship of this.fleetMeshes) ship.traverse(o => { o.matrixWorldAutoUpdate = true; });
+  }
+
+  /** Only ships and their attached deck lights need dynamic world matrices. */
+  updateFleet(): void {
+    this.fleetMeshes.forEach((ship, i) => {
+      const c = carriers()[i];
+      ship.position.set(c.x, 0, c.z);
+      ship.rotation.y = (90 - c.headingDeg) * Math.PI / 180;
+      ship.updateMatrix();
+      ship.updateMatrixWorld(true);
+    });
   }
 
   applyQuality(q: Quality): void {

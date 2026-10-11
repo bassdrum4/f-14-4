@@ -12,6 +12,7 @@ import { AudioEngine } from "../audio/engineSound";
 import { InputManager } from "../input/input";
 import {
   isRecoverySurface,
+  carryDeckPose,
   glideStateFor,
   spawnAircraft,
   stepAircraft,
@@ -25,6 +26,10 @@ import {
   activeWorldDef,
   airfield,
   carriers,
+  carrierAt,
+  setFleetTime,
+  fleetVelocityAt,
+  headingOfQuat,
   groundAt,
   nearestCarrier,
   setWorldSeed as regenerateTerrain,
@@ -299,6 +304,7 @@ export class Sim {
   private hudListeners = new Set<(h: HudSnapshot) => void>();
   private phaseListeners = new Set<(p: Phase) => void>();
   private lastHudNotify = 0;
+  private fleetClock = 0;
   /** The terrain seed in play. Regenerating from it rebuilds the whole world. */
   private worldSeed = DEFAULT_SEED;
   private spawnCarrier = 0;
@@ -401,9 +407,11 @@ export class Sim {
     this.net = new Multiplayer({
       onState: (s) => {
         this.netState = s;
+        if (s.status === "idle" && this.state) this.moveFleet(0);
         this.syncWorldToRoom(s);
         for (const fn of this.netListeners) fn(s);
       },
+      onFleetClock: seconds => this.moveFleet(seconds),
       onPilot: (id, name, aircraft) => this.remoteFleet.spawn(id, aircraft, name),
       onPilotLeave: (id) => this.remoteFleet.remove(id),
       onPose: (id, pose) => this.remoteFleet.push(id, pose, performance.now()),
@@ -930,6 +938,7 @@ export class Sim {
     return { height: terrainHeight };
   }
   private afterWorldChange(): void {
+    this.fleetClock = 0;
     this.state = spawnAircraft(this.mission, this.spawnCarrier, this.settings.aircraft, this.settings.bindings);
     this.prevPos.copy(this.state.pos);
     this.prevQuat.copy(this.state.quat);
@@ -956,11 +965,15 @@ export class Sim {
     this.raf = requestAnimationFrame(this.loop);
     this.renderer.updateFrameBudget(nowMs);
     const now = nowMs / 1000;
-    const frameDt = Math.min(0.05, Math.max(0.0001, now - this.last));
+    const elapsed = Math.max(0, now - this.last);
+    const frameDt = Math.min(0.05, Math.max(0.0001, elapsed));
     // Advance the clock every frame (including the menu), otherwise the
     // clamp below pins dt at 0.05 forever and the menu's orbit camera and
     // fast daylight cycle run ~3x fast at 60 fps.
     this.last = now;
+    const online = this.netState.status === "online";
+    if (online || this.phase === "flying") this.moveFleet(this.fleetClock + (online ? elapsed : frameDt));
+    if (online && this.netState.host) this.net.publishFleetClock(this.fleetClock);
 
     if (this.phase === "flying") {
       if (!this.crashSeq) this.handleEdges(); // a dead stick answers nothing
@@ -998,6 +1011,23 @@ export class Sim {
     this.updateSun();
     this.renderer.render();
   };
+
+  /** Keep parked/rolling aircraft fixed in their ship frame as the deck moves. */
+  private moveFleet(seconds: number): void {
+    const st = this.state;
+    const onCat = st.catPhase === "ready" || st.catPhase === "charging" || st.catPhase === "firing";
+    const ship = onCat ? carriers()[st.catCarrier] : st.onGround && st.groundKind === "deck" ? carrierAt(st.pos.x, st.pos.z) : null;
+    const before = ship ? { ...ship } : null;
+    this.fleetClock = seconds;
+    setFleetTime(seconds);
+    if (ship && before) {
+      carryDeckPose(st.pos, st.quat, before, ship, st.vel);
+      carryDeckPose(this.prevPos, this.prevQuat, before, ship);
+      st.headingDeg = headingOfQuat(st.quat);
+    }
+    this.renderer.updateFleet();
+    if (this.phase !== "flying") { this.updateJetPose(1); this.updateHud(); }
+  }
 
   /**
    * Keep this sim and the room in step about the enemies. One pilot (the room
@@ -1196,6 +1226,11 @@ export class Sim {
     p.x = st.pos.x; p.y = st.pos.y; p.z = st.pos.z;
     p.qx = st.quat.x; p.qy = st.quat.y; p.qz = st.quat.z; p.qw = st.quat.w;
     p.vx = st.vel.x; p.vy = st.vel.y; p.vz = st.vel.z;
+    const deck = st.catPhase === "firing" ? carriers()[st.catCarrier] : st.onGround && st.groundKind === "deck" ? carrierAt(st.pos.x, st.pos.z) : null;
+    if (deck) {
+      const v = fleetVelocityAt(carriers().indexOf(deck), this.fleetClock ?? 0, st.pos.x, st.pos.z);
+      p.vx += v.x; p.vz += v.z;
+    }
     p.speed = st.speed;
     p.sweepT = st.sweepT;
     let flags = 0;
@@ -1440,7 +1475,21 @@ export class Sim {
       this.inputYaw = inp.yaw;
       this.prevPos.copy(this.state.pos);
       this.prevQuat.copy(this.state.quat);
+      const onCat = this.state.catPhase === "firing";
+      const deck = onCat ? carriers()[this.state.catCarrier] : this.state.onGround && this.state.groundKind === "deck" ? carrierAt(this.state.pos.x, this.state.pos.z) : null;
       if (!this.battleActive || !this.state.result) stepAircraft(this.state, inp, FIXED_DT);
+      // Ground integration uses the moving ship's frame. Cross that boundary
+      // once on departure/arrival, preserving the ship's launch momentum.
+      if (deck && !this.state.onGround && this.state.catPhase !== "firing") {
+        const v = fleetVelocityAt(carriers().indexOf(deck), this.fleetClock ?? 0, this.state.pos.x, this.state.pos.z);
+        this.state.vel.x += v.x; this.state.vel.z += v.z;
+      } else if (!deck && this.state.onGround && this.state.groundKind === "deck") {
+        const landed = carrierAt(this.state.pos.x, this.state.pos.z);
+        if (landed) {
+          const v = fleetVelocityAt(carriers().indexOf(landed), this.fleetClock ?? 0, this.state.pos.x, this.state.pos.z);
+          this.state.vel.x -= v.x; this.state.vel.z -= v.z;
+        }
+      }
       if (this.dfArmed) {
         if (!this.state.onGround) {
           // wheels off the deck/runway: the fight begins

@@ -280,6 +280,7 @@ interface Pilot {
   launches: Array<{ mission: MissionKind; carrier: number }>;
   /** Mission profiles the room pushed at us. */
   modes: MissionMode[];
+  fleetClocks: number[];
   /** Fight snapshots, as they arrived. */
   enemies: EnemySnapshot[];
   /** Hits another pilot reported landing on an enemy we run. */
@@ -303,6 +304,7 @@ function makePilot(): Pilot {
     left: [],
     launches: [],
     modes: [],
+    fleetClocks: [],
     enemies: [],
     hits: [],
     carrierHits: [],
@@ -334,6 +336,7 @@ function makePilot(): Pilot {
         rec.launches.push({ mission, carrier });
       },
       onMode: (mode) => rec.modes.push(mode),
+      onFleetClock: seconds => rec.fleetClocks.push(seconds),
       onEnemies: (snap) => rec.enemies.push(snap),
       onHit: (id, dmg) => rec.hits.push({ id, dmg }),
       onCarrierHit: (dmg) => rec.carrierHits.push(dmg),
@@ -398,6 +401,11 @@ check("the joiner's airframe rides the hello",
 check("the link is live at both ends",
   byName(host, "GOOSE")?.linked === true && byName(wing, "MAVERICK")?.linked === true);
 
+// The host's fleet clock reaches an existing guest and a late joiner.
+host.net.publishFleetClock(120);
+await flush();
+check("the wingman receives the host's moving-fleet clock", wing.fleetClocks.some(t => t >= 120 && t < 121), JSON.stringify(wing.fleetClocks));
+
 // ---------------------------------------------------------------------------
 // 3. a third pilot forms the mesh
 // ---------------------------------------------------------------------------
@@ -405,6 +413,11 @@ console.log("\n[mesh]");
 const third = makePilot();
 third.net.join("ALPHA", "ICEMAN", "intruder");
 await flush();
+(host.net as any).fleetSentAt = -Infinity;
+host.net.publishFleetClock(125);
+await flush();
+check("late joiners catch up with the moving fleet", third.fleetClocks.some(t => t >= 125 && t < 126), JSON.stringify(third.fleetClocks));
+check("fleet movement stays in sync across guests", wing.fleetClocks[wing.fleetClocks.length - 1] === third.fleetClocks[third.fleetClocks.length - 1]);
 check("every pilot sees the other two",
   rosterOf(host).length === 2 && rosterOf(wing).length === 2 && rosterOf(third).length === 2,
   `${rosterOf(host).length}/${rosterOf(wing).length}/${rosterOf(third).length}`);
@@ -499,6 +512,10 @@ check("a newcomer can still join after the host left",
 check("a promoted host keeps its pilot identity for new arrivals", rosterOf(late)[0]?.id === wing.net.snapshot.self, JSON.stringify(rosterOf(late)));
 check("the newcomer is linked to the survivor",
   rosterOf(late)[0]?.linked === true, JSON.stringify(rosterOf(late)));
+(wing.net as any).fleetSentAt = -Infinity;
+wing.net.publishFleetClock(130);
+await flush();
+check("a promoted host continues fleet synchronization", late.fleetClocks.some(t => t >= 130 && t < 131), JSON.stringify(late.fleetClocks));
 check("the survivor sees the newcomer", byName(wing, "SLIDER") !== undefined,
   JSON.stringify(rosterOf(wing).map((e) => e.name)));
 
