@@ -10,8 +10,17 @@
 // Usage: bun scripts/diag-turnrate.ts  (or: bun run test:turnrate)
 
 import { Vector3 } from "three";
-import type { AircraftId } from "../src/sim/aircraft";
-import { spawnAircraft, stepAircraft, type AircraftState, type FlightInput } from "../src/sim/flight";
+import { AIRCRAFT, type AircraftId } from "../src/sim/aircraft";
+import {
+  maxLoadFactor,
+  maxTurnRate,
+  spawnAircraft,
+  stepAircraft,
+  sustainedLoadFactor,
+  sustainedTurnRate,
+  type AircraftState,
+  type FlightInput,
+} from "../src/sim/flight";
 
 const DT = 1 / 120;
 const RAD = 57.2958;
@@ -74,6 +83,7 @@ function levelTurn(st: AircraftState, bankTarget: number, speed: number, seconds
   const rate: number[] = [];
   let prev = velHeading(st);
   let gPeak = 0;
+  let alphaPeak = 0;
   let altMin = Infinity, altMax = -Infinity;
   let vStart = 0, vEnd = 0;
   const settle = 10; // s: let the bank and the turn stabilise
@@ -86,6 +96,7 @@ function levelTurn(st: AircraftState, bankTarget: number, speed: number, seconds
     if (st.time > settle) {
       rate.push(dh / DT);
       gPeak = Math.max(gPeak, st.gLoad);
+      alphaPeak = Math.max(alphaPeak, Math.abs(st.alpha));
       altMin = Math.min(altMin, st.pos.y);
       altMax = Math.max(altMax, st.pos.y);
       if (vStart === 0) vStart = st.speed;
@@ -93,7 +104,7 @@ function levelTurn(st: AircraftState, bankTarget: number, speed: number, seconds
     }
   }
   const mean = rate.reduce((a, b) => a + b, 0) / rate.length;
-  return { rate: Math.abs(mean), gPeak, altMin, altMax, vStart, vEnd };
+  return { rate: Math.abs(mean), gPeak, alphaPeak, altMin, altMax, vStart, vEnd };
 }
 
 // --- 1. roll: full aileron should reach 80 deg bank in about a second ---
@@ -115,18 +126,24 @@ function levelTurn(st: AircraftState, bankTarget: number, speed: number, seconds
   check("no roll snap while banking", peak < 200, `peak ${peak.toFixed(0)} deg/s`);
 }
 
-// --- 2. pitch authority: full aft stick must reach high alpha and g ---
+// --- 2. pitch authority: the pull must reach the wing's alpha and the
+//        airframe's limit load factor, the way a real hard pull does ---
+// The manoeuvre is the dogfight one — a hard banked turn — not a wings-level
+// pull-up: a level pull-up unloads as the flight path curves up, so it never
+// shows what the wing can actually hold. The F-14's structural limit is 7.5 g
+// (NATOPS), so that is what a full pull at combat speed must sit on.
 {
-  const st = airborne(250, 3000);
-  let peakAlpha = 0, peakG = 0;
-  for (let i = 0; i < 3 / DT; i++) {
-    stepAircraft(st, { ...idle(), pitch: 1 }, DT);
-    peakAlpha = Math.max(peakAlpha, st.alpha);
-    peakG = Math.max(peakG, st.gLoad);
-  }
-  console.log(`      full stick @250: alpha ${(peakAlpha * RAD).toFixed(1)} deg, g ${peakG.toFixed(1)}`);
-  check("full pull reaches usable alpha (> 11 deg)", peakAlpha > 0.19, `${(peakAlpha * RAD).toFixed(1)} deg`);
-  check("full pull carries fighter load factor (> 5 g)", peakG > 5, `${peakG.toFixed(1)} g`);
+  const hard = levelTurn(airborne(250, 3000), 80, 250, 40);
+  console.log(
+    `      hard turn @250 (bank 80): alpha ${(hard.alphaPeak * RAD).toFixed(1)} deg, ` +
+    `g ${hard.gPeak.toFixed(1)}`,
+  );
+  check("a hard pull reaches the wing's stall alpha (> 15 deg)",
+    hard.alphaPeak > 0.26, `${(hard.alphaPeak * RAD).toFixed(1)} deg`);
+  check("a hard pull carries the airframe's limit load factor (> 6.5 g)",
+    hard.gPeak > 6.5, `${hard.gPeak.toFixed(1)} g`);
+  check("the limit load factor is not exceeded (< 7.6 g)",
+    hard.gPeak < 7.6, `${hard.gPeak.toFixed(1)} g`);
 }
 
 // --- 3. sustained level turn at high bank ---
@@ -138,9 +155,12 @@ function levelTurn(st: AircraftState, bankTarget: number, speed: number, seconds
     `bank 80 -> ${t80.rate.toFixed(1)} deg/s (${t80.gPeak.toFixed(1)} g, ` +
     `180 in ${(180 / t80.rate).toFixed(1)} s)`,
   );
-  check("bank 80 sustains a 5-8 g load factor", t80.gPeak > 4.6 && t80.gPeak < 8.5,
-    `${t80.gPeak.toFixed(1)} g`);
-  check("bank 80 turn rate > 10 deg/s (180 deg under 18 s)", t80.rate > 10,
+  // A real F-14 sustains about 16 deg/s at 45,000 lb. Scaling by sqrt(weight)
+  // to this airframe's 30,000 kg combat weight gives about 13 deg/s, which is
+  // the bar the sim's own wing has to clear.
+  check("bank 80 sustains the F-14's limit load factor (6.8-7.6 g)",
+    t80.gPeak > 6.8 && t80.gPeak < 7.6, `${t80.gPeak.toFixed(1)} g`);
+  check("bank 80 turn rate matches a combat-loaded F-14 (> 13 deg/s)", t80.rate > 13,
     `${t80.rate.toFixed(1)} deg/s`);
   check("turn rate grows with bank", t80.rate > t60.rate * 1.8,
     `${t60.rate.toFixed(1)} -> ${t80.rate.toFixed(1)}`);
@@ -210,6 +230,120 @@ function levelTurn(st: AircraftState, bankTarget: number, speed: number, seconds
     console.log(`      ${label}: full pull ${(peakAlpha * RAD).toFixed(1)} deg alpha, ${peakG.toFixed(1)} g`);
     check(`${label} can pull at least 4 g`, peakG > 4, `${peakG.toFixed(1)} g`);
   }
+}
+
+// --- 5. the shared turn spec: the one number the player's wing and the
+//        Aggressor AI both answer to ---
+// maxLoadFactor() is the lift ceiling and structural limit the flight model
+// enforces (the stick can command no more), and maxTurnRate() turns it into a
+// rate. scripts/diag-dogfight.ts reads the same function for the bandits, so
+// this section is what keeps the pilot and the AI on one spec. The real F-14's
+// published figures are ~23 deg/s instantaneous at 45,000 lb; scaled by
+// sqrt(weight) to 30,000 kg that is ~19 deg/s, which is the bar here.
+{
+  let peakRate = 0, peakV = 0;
+  for (let v = 120; v <= 360; v += 5) {
+    const r = maxTurnRate(AIRCRAFT.tomcat, v, 3000) * RAD;
+    if (r > peakRate) { peakRate = r; peakV = v; }
+  }
+  const nAt240 = maxLoadFactor(AIRCRAFT.tomcat, 240, 3000);
+  console.log(
+    `      spec: peak instant ${peakRate.toFixed(1)} deg/s at ${peakV} m/s ` +
+    `(n_max ${nAt240.toFixed(2)} g at 240 m/s)`,
+  );
+  check("the spec peaks near the real jet's instantaneous rate (>= 18 deg/s)",
+    peakRate >= 18, `${peakRate.toFixed(1)} deg/s`);
+  check("the spec's ceiling is the F-14's 7.5 g limit at combat speed",
+    Math.abs(nAt240 - AIRCRAFT.tomcat.gLimit) < 0.01, `${nAt240.toFixed(2)} g`);
+  const reach = levelTurn(airborne(240, 3000), 80, 240, 40);
+  check("the wing actually reaches the ceiling the spec publishes",
+    reach.gPeak > AIRCRAFT.tomcat.gLimit - 0.4,
+    `${reach.gPeak.toFixed(2)} vs ${AIRCRAFT.tomcat.gLimit}`);
+}
+
+// --- 5b. a plain full-stick pull reaches the limit load factor ---
+// The harness above is a level turn with a pitch autopilot, so it only proves
+// the wing CAN get there. This is the pilot's own manoeuvre: from cruise, hold
+// full aft stick and read the g. It is the number the loop has to deliver, and
+// the reason the pitch loop carries an integrator — with a proportional-only
+// attitude loop the steady elevator deflection was paid for with 5-8 deg of
+// attitude error, and since the reference is clamped to the alpha the wing can
+// hold, that error came off the pull: full stick topped out at 5.2 g at every
+// speed here, short of the airframe by a third.
+{
+  function fullPull(speed: number) {
+    const st = airborne(speed, 3000);
+    let gPeak = 0, aPeak = 0;
+    for (let i = 0; i < 4 / DT; i++) {
+      stepAircraft(st, { ...idle(), pitch: 1, throttleUp: true }, DT);
+      gPeak = Math.max(gPeak, st.gLoad);
+      aPeak = Math.max(aPeak, st.alpha);
+    }
+    return { gPeak, aPeak, alphaLimit: maxLoadFactorInfo(speed) };
+  }
+  // The alpha a full pull should end up on: the one that pulls gLimit (or the
+  // stall buffer, whichever the wing runs into first) at that speed.
+  function maxLoadFactorInfo(speed: number): number {
+    const n = maxLoadFactor(AIRCRAFT.tomcat, speed, 3000);
+    const cl = (n * AIRCRAFT.tomcat.mass * 9.81) /
+      (0.5 * 0.909 * speed * speed * AIRCRAFT.tomcat.sWing);
+    return Math.min(0.36 * 1.25, Math.max(0, (cl - 0.1) / 5));
+  }
+  const fast = fullPull(300);
+  const combat = fullPull(230);
+  console.log(
+    `      full stick: 300 m/s -> ${fast.gPeak.toFixed(2)} g (alpha ${(fast.aPeak * RAD).toFixed(1)} deg), ` +
+    `230 m/s -> ${combat.gPeak.toFixed(2)} g (alpha ${(combat.aPeak * RAD).toFixed(1)} deg)`,
+  );
+  check("a full pull at high speed carries over 6.5 g", fast.gPeak > 6.5,
+    `${fast.gPeak.toFixed(2)} g`);
+  check("a full pull at combat speed carries over 6 g", combat.gPeak > 6,
+    `${combat.gPeak.toFixed(2)} g`);
+  check("the pull reaches the alpha the limit load factor asks for",
+    combat.aPeak > combat.alphaLimit - 0.02,
+    `${(combat.aPeak * RAD).toFixed(1)} vs ${(combat.alphaLimit * RAD).toFixed(1)} deg`);
+}
+
+// --- 5c. the sustained spec: what the jet can HOLD, not just pull ---
+// sustainedTurnRate() is the energy limit — the rate whose drag the thrust on
+// tap pays for — and it is the number the Aggressor AI answers to, so a bandit
+// cannot sit on a rate the player's jet would have to bleed speed to match. It
+// can never be looser than the instantaneous ceiling, and where the wing (not
+// the engine) is the binding limit the two must coincide.
+{
+  let best = 1; // the loosest the sustained limit ever gets, as a fraction
+  let tightest = 1; // and the tightest, where the energy limit really bites
+  for (const alt of [1000, 3000, 6000]) {
+    for (let v = 130; v <= 320; v += 5) {
+      const inst = maxTurnRate(AIRCRAFT.tomcat, v, alt);
+      const sust = sustainedTurnRate(AIRCRAFT.tomcat, v, alt);
+      const ratio = sust / Math.max(inst, 1e-6);
+      best = Math.max(best, ratio);
+      tightest = Math.min(tightest, ratio);
+    }
+  }
+  const lowAltHigh = sustainedTurnRate(AIRCRAFT.tomcat, 260, 1000) * RAD;
+  const lowAltInst = maxTurnRate(AIRCRAFT.tomcat, 260, 1000) * RAD;
+  const high = sustainedTurnRate(AIRCRAFT.tomcat, 260, 6000) * RAD;
+  console.log(
+    `      sustained: 260 m/s @1 km ${lowAltHigh.toFixed(1)} of ${lowAltInst.toFixed(1)} deg/s, ` +
+    `@6 km ${high.toFixed(1)} deg/s; energy binds between ` +
+    `${(tightest * 100).toFixed(0)}% and ${(best * 100).toFixed(0)}% of instant`,
+  );
+  check("the sustained limit is never looser than the instantaneous one",
+    best < 1.0001, `loosest ratio ${best.toFixed(3)}`);
+  check("the sustained limit is not just a copy of the instantaneous one",
+    tightest < 0.95, `tightest ratio ${tightest.toFixed(3)}`);
+  check("where the wing binds, the sustained limit is the same number",
+    Math.abs(lowAltHigh - lowAltInst) < 0.05,
+    `${lowAltHigh.toFixed(2)} vs ${lowAltInst.toFixed(2)} deg/s`);
+  check("thin air costs the sustained rate (energy, not airframe)",
+    high < lowAltHigh * 0.95, `${high.toFixed(1)} deg/s`);
+  check("the sustained load factor is a real number everywhere",
+    [130, 200, 260, 320].every((v) =>
+      sustainedLoadFactor(AIRCRAFT.tomcat, v, 3000) >= 1 &&
+      sustainedLoadFactor(AIRCRAFT.tomcat, v, 3000) <= AIRCRAFT.tomcat.gLimit),
+    "1 .. gLimit");
 }
 
 console.log(failures === 0 ? "\nALL TURN-RATE CHECKS PASSED" : `\n${failures} FAILURES`);

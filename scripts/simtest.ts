@@ -205,6 +205,11 @@ function idle() {
     s.vel.set(0, 0, -220);
     s.gearDown = false; s.gearT = 0;
     s.flapsDown = false; s.flapT = 0;
+    // Fly the speed vector this test just set. spawnAircraft() points the jet
+    // along the CARRIER's heading, and a jet launched sideways into its own
+    // airflow does not trim: it tumbles, and whether it happens to be level
+    // 55 s later is a coin flip. Aligned, this measures trim.
+    s.quat.identity();
     s.throttle = 0.78; s.rpm = 0.78;
     s.trim = trim;
     s.banner = null;

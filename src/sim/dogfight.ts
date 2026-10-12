@@ -44,9 +44,15 @@ import {
 } from "../render/targets";
 import type { BlastKind, ExplosionField } from "../render/effects";
 import { isSharedMaterial } from "../render/lights";
-import { MAX_BOMBS, MAX_MISSILES } from "./aircraft";
+import { AIRCRAFT, MAX_BOMBS, MAX_MISSILES } from "./aircraft";
 import { atmosphere } from "./atmosphere";
-import { CAT_ACCEL, CAT_TIME, CAT_V_END, type AircraftState } from "./flight";
+import {
+  CAT_ACCEL,
+  CAT_TIME,
+  CAT_V_END,
+  sustainedTurnRate,
+  type AircraftState,
+} from "./flight";
 import {
   CAT_START_ALONG,
   carriers,
@@ -81,16 +87,20 @@ const TRACER_LIFE = 2.0; // s
 const HIT_RADIUS = 9; // m, airframe sphere
 const PLAYER_SPREAD = 0.005; // rad
 const BANDIT_SPREAD = 0.021; // rad — was 0.016: a wider cone means more misses
-// Maneuverability: the bandits fly the SAME F-14 the player flies. The
-// player's full-elevator pull measures a ~410 m turn radius at any speed
-// (headless probe at 200/240/270/315 m/s — turn rate grows in step with speed),
-// so the AI's kinematic turn cap uses the same radius: identical cornering at
-// equal speed. The floor keeps the steering controller usable right off the
-// cat (a real Tomcat's radius shrinks well below 410 m below corner speed),
-// and at combat speeds the radius rule dominates. The lower top speed above
-// is the ONLY handicap.
-const BANDIT_TURN_RADIUS = 410; // m — the player F-14's full-pull radius
-const BANDIT_TURN_FLOOR = 0.42; // rad/s — low-speed controller floor
+// Maneuverability: the bandits fly the SAME F-14 the player flies, and they
+// read their turn ceiling straight off that airframe's spec. sustainedTurnRate()
+// takes the F-14's lift curve, weight, 7.5 g limit, drag and thrust and returns
+// the most rate the jet can HOLD at the bandit's current speed and altitude —
+// the rate the player's own Tomcat could sit on without bleeding speed. The
+// pilot's wing is capped by the same aero, and by the energy that runs out when
+// they spend it; a bandit, which carries no energy state, is held to the
+// steady-state number instead, so sitting at max pull no longer lets one gain.
+// The old flat 410 m radius (nearly 35 deg/s at combat speed) was a number the
+// player's F-14 could never match at all. The floor only keeps the steering
+// controller alive in the first seconds off the catapult, below the speed band
+// the turn spec is meaningful in. The lower top speed above is the ONLY
+// remaining handicap.
+const BANDIT_TURN_FLOOR = 0.12; // rad/s (~7 deg/s) — low-speed controller floor
 // Target speeds inside the envelope — lower than the original tune (215-235
 // cruise, 270 break) in every state, but fast enough that a merge still happens
 // and a hovering or slow player is still closed on.
@@ -3208,7 +3218,7 @@ export class Dogfight {
       else AXIS.normalize();
       turnSign = Math.sign(AXIS.y);
       const turnCap = Math.max(
-        Math.max(b.speed, BANDIT_SPEED.min) / BANDIT_TURN_RADIUS,
+        sustainedTurnRate(AIRCRAFT.tomcat, Math.max(b.speed, BANDIT_SPEED.min), b.pos.y),
         BANDIT_TURN_FLOOR,
       );
       const evadeScale = b.evadeT > 0 && dist > MERGE_DIST && needClimb <= 0 ? skill.turn : 1;

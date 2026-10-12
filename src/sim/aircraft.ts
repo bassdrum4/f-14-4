@@ -47,6 +47,10 @@ export interface AircraftSpec {
   clP: number; // roll damping
   cnRud: number; // rudder power
   flapLift: number; // extra CL from full flaps
+  /** Structural load-factor limit (g). The wing cannot pull past this however
+   *  fast it is flying, and the Aggressor AI answers to the same number, so a
+   *  bandit turns exactly as hard as the jet the pilot is flying. */
+  gLimit: number;
   sweepMin: number; // wing sweep, degrees (spread)
   sweepMax: number; // wing sweep, degrees (full back) — equal to min = fixed wing
 
@@ -80,15 +84,16 @@ export const AIRCRAFT: Record<AircraftId, AircraftSpec> = {
     iYaw: 5.0e5,
     iRoll: 6.0e4,
     clAlpha: 5.0,
-    alphaStall: 0.26,
+    alphaStall: 0.36,
     cd0: 0.026,
     kInduced: 0.05,
-    cmElev: 0.19,
+    cmElev: 0.26,
     cmQ: 14,
     clAil: 0.055,
-    clP: 0.5,
+    clP: 0.55,
     cnRud: 0.03,
     flapLift: 0.8,
+    gLimit: 7.5, // NATOPS manoeuvre limit (F-14A)
     sweepMin: 20,
     sweepMax: 68,
     idleThrust: 3_500,
@@ -123,6 +128,7 @@ export const AIRCRAFT: Record<AircraftId, AircraftSpec> = {
     clP: 0.55,
     cnRud: 0.035,
     flapLift: 0.7,
+    gLimit: 7.5, // F/A-18 manoeuvre limit
     sweepMin: 0,
     sweepMax: 0,
     idleThrust: 3_000,
@@ -160,6 +166,7 @@ export const AIRCRAFT: Record<AircraftId, AircraftSpec> = {
     clP: 0.52,
     cnRud: 0.032,
     flapLift: 0.9, // the variable-incidence wing drops the nose for the boat
+    gLimit: 6.5, // F-8E manoeuvre limit
     sweepMin: 0,
     sweepMax: 0,
     idleThrust: 2_800,
@@ -194,6 +201,7 @@ export const AIRCRAFT: Record<AircraftId, AircraftSpec> = {
     clP: 0.45,
     cnRud: 0.028,
     flapLift: 1.0,
+    gLimit: 6.5, // A-6E limit load
     sweepMin: 0,
     sweepMax: 0,
     idleThrust: 2_500,
@@ -232,6 +240,7 @@ export const AIRCRAFT: Record<AircraftId, AircraftSpec> = {
     clP: 0.5,
     cnRud: 0.05,
     flapLift: 0.5,
+    gLimit: 2.5, // rotary wing: not a load-factor machine
     sweepMin: 0,
     sweepMax: 0,
     idleThrust: 20_000,

@@ -58,6 +58,16 @@ const CM_ALPHA = -0.45; // static stability, per rad
 // it does not fight the pilot — but static stability still drops the nose when
 // the wing gives up at the stall.
 const PITCH_RATE_MAX = 0.8; // rad/s: as fast as a full stick walks the nose
+/**
+ * Cap on the body pitch rate the elevator is asked for. It used to be the same
+ * constant as the stick's attitude walk rate (0.8 rad/s), which quietly capped
+ * how hard the wing could ever pull: the elevator could not command more rate
+ * than the stick could walk, so alpha topped out around 11 deg and the Tomcat's
+ * lift ceiling was never reached. The two are separate numbers now — the stick
+ * still walks the reference at 0.8 rad/s, but the elevator answers with fighter
+ * authority. /docs: scripts/diag-turnrate.ts pins the resulting turn rates.
+ */
+const PITCH_CMD_MAX = 1.5; // rad/s
 const PITCH_ATT_GAIN = 7; // commanded rate per rad of attitude error, 1/s
 const PITCH_RATE_GAIN = 1.1; // full elevator at this rate error, 1/(rad/s)
 const PITCH_REF_LIMIT = 1.1; // rad (~63 deg): the reference cannot wind up
@@ -247,6 +257,109 @@ export function approachSpeed(
   const rho = atmosphere(altM).rho;
   const v = Math.sqrt((spec.mass * GRAVITY) / (0.5 * rho * spec.sWing * cl));
   return { onSpeedKt: v * 1.94384, onSpeedAoaDeg: (aoa * 180) / Math.PI };
+}
+
+/**
+ * Wing lift coefficient at an angle of attack (rad), with the stall falloff.
+ * Shared by the flight model and by the turn spec below, so the ceiling the AI
+ * flies to is literally the same curve the player's wing is on.
+ */
+export function liftCoeff(spec: AircraftSpec, alpha: number, flapLift = 0): number {
+  const aAbs = Math.abs(alpha);
+  if (aAbs <= spec.alphaStall) return CL0 + flapLift + spec.clAlpha * alpha;
+  const peak = CL0 + flapLift + spec.clAlpha * spec.alphaStall;
+  const fall = Math.max(0.35, 1 - 2.2 * (aAbs - spec.alphaStall));
+  return Math.sign(alpha) * peak * fall;
+}
+
+/**
+ * The most load factor the wing can pull at this speed and altitude: the lift
+ * ceiling below corner speed, the airframe's structural limit above it. This is
+ * the F-14's turn spec in one function. The player's wing and the Aggressor AI
+ * both answer to it, so a bandit turns exactly as hard as the jet the pilot is
+ * flying — the bandits' only remaining handicap is top speed.
+ */
+export function maxLoadFactor(spec: AircraftSpec, speed: number, altM: number): number {
+  const q = 0.5 * atmosphere(altM).rho * speed * speed;
+  const clMax = liftCoeff(spec, spec.alphaStall);
+  const nLift = (q * spec.sWing * clMax) / (spec.mass * GRAVITY);
+  return Math.max(1, Math.min(nLift, spec.gLimit));
+}
+
+/**
+ * Max instantaneous turn rate (rad/s) at this speed and altitude for the
+ * airframe. Zero below the speed where a level turn cannot yet pull 1 g over.
+ */
+export function maxTurnRate(spec: AircraftSpec, speed: number, altM: number): number {
+  const v = Math.max(speed, 1);
+  const n = maxLoadFactor(spec, v, altM);
+  return (GRAVITY * Math.sqrt(Math.max(0, n * n - 1))) / v;
+}
+
+/**
+ * Drag coefficient at a lift coefficient. Shared by the flight model and by the
+ * energy limit below, so there is one drag curve in the project: induced drag
+ * grows with CL^2, the speed brake and the gear add flat parasite drag, and a
+ * stalled wing pays for its separation. The speed brake geometry is the pilot's
+ * throttle for the glideslope — it has to hold a 700 kt dive at approach power —
+ * which is why it more than doubles parasite drag when open.
+ */
+export function dragCoeff(
+  spec: AircraftSpec,
+  cl: number,
+  mach: number,
+  sweepN: number,
+  gearT = 0,
+  flapT = 0,
+  sbT = 0,
+  separation = 0,
+): number {
+  let cd = spec.cd0 - 0.004 * sweepN + spec.kInduced * (1 - 0.12 * sweepN) * cl * cl;
+  cd += 0.018 * gearT + 0.045 * flapT + 0.24 * sbT + 0.5 * separation;
+  if (mach > 0.88) {
+    const t = clamp((mach - 0.88) / 0.17, 0, 1);
+    cd += 0.045 * t * t * (3 - 2 * t);
+  }
+  return cd;
+}
+
+/**
+ * The most load factor the airframe can hold in a level turn WITHOUT spending
+ * energy: the point where the turn's drag is exactly covered by the thrust on
+ * tap at this altitude (military power plus burner, which is what a fighter
+ * fight is flown on). Below corner speed the wing's lift ceiling is the binding
+ * number — there is nothing left to spend — and above it this one is, because
+ * induced drag grows with the square of the load factor while thrust does not
+ * grow at all.
+ *
+ * maxLoadFactor() is what the airframe can pull for a moment; this is what it
+ * can hold. The Aggressor AI answers to this one, so a bandit cannot sit on a
+ * rate the player's own jet would have to bleed speed to match.
+ */
+export function sustainedLoadFactor(spec: AircraftSpec, speed: number, altM: number): number {
+  const atm = atmosphere(altM);
+  const v = Math.max(speed, 1);
+  const qS = 0.5 * atm.rho * v * v * spec.sWing;
+  if (qS < 1) return 1;
+  const mach = v / atm.soundSpeed;
+  const sweepN = spec.sweepMax > spec.sweepMin ? clamp((mach - 0.3) / 0.7, 0, 1) : 0;
+  const sigma = atm.rho / 1.225;
+  const thrust =
+    spec.thrustDry * Math.pow(sigma, 0.75) + spec.abThrust * Math.pow(sigma, 0.6);
+  // Drag is cd0 + k * CL^2, so the load factor the thrust pays for comes
+  // straight out of the square root of the leftover after parasite drag.
+  const cl2 = (thrust / qS - dragCoeff(spec, 0, mach, sweepN)) /
+    (spec.kInduced * (1 - 0.12 * sweepN));
+  const nEnergy =
+    cl2 <= 0 ? 1 : (Math.sqrt(cl2) * qS) / (spec.mass * GRAVITY);
+  return Math.max(1, Math.min(nEnergy, maxLoadFactor(spec, v, altM)));
+}
+
+/** Turn rate (rad/s) the airframe can hold without bleeding speed. */
+export function sustainedTurnRate(spec: AircraftSpec, speed: number, altM: number): number {
+  const v = Math.max(speed, 1);
+  const n = sustainedLoadFactor(spec, v, altM);
+  return (GRAVITY * Math.sqrt(Math.max(0, n * n - 1))) / v;
 }
 
 // ---------------------------------------------------------------------------
@@ -707,30 +820,19 @@ export function stepAircraft(st: AircraftState, inp: FlightInput, dt: number): v
     const aAbs = Math.abs(alpha);
     const flapLift = spec.flapLift * st.flapT;
     const sweepN = st.sweepT;
+    const qS = qbar * spec.sWing;
 
-    // lift with stall falloff
-    let CL: number;
-    if (aAbs <= spec.alphaStall) {
-      CL = CL0 + flapLift + spec.clAlpha * alpha;
-    } else {
-      const peak = CL0 + flapLift + spec.clAlpha * spec.alphaStall;
-      const fall = Math.max(0.35, 1 - 2.2 * (aAbs - spec.alphaStall));
-      CL = Math.sign(alpha) * peak * fall;
-    }
+    // Lift with the stall falloff, then the structural ceiling: the wing can
+    // never deliver more than the airframe's limit load factor, however hard the
+    // stick is pulled. This is the same ceiling maxLoadFactor() publishes, so
+    // the pilot's wing and the Aggressor AI stop pulling at exactly the same g.
+    const clLimit = (spec.gLimit * spec.mass * GRAVITY) / Math.max(qS, 1e-3);
+    const CL = clamp(liftCoeff(spec, alpha, flapLift), -clLimit, clLimit);
     const sep = Math.max(0, aAbs - spec.alphaStall);
 
-    // drag
-    let CD = spec.cd0 - 0.004 * sweepN + spec.kInduced * (1 - 0.12 * sweepN) * CL * CL;
-    // The speed brake is the pilot's throttle for the glideslope: it has to be
-    // able to hold a 700 kt dive at approach power and drag the jet below
-    // on-speed without touching the stick, so it more than doubles parasite
-    // drag when open.
-    CD += 0.018 * st.gearT + 0.045 * st.flapT + 0.24 * st.sbT + 0.5 * sep;
-    if (st.mach > 0.88) {
-      const t = clamp((st.mach - 0.88) / 0.17, 0, 1);
-      CD += 0.045 * t * t * (3 - 2 * t);
-    }
-    const qS = qbar * spec.sWing;
+    // drag — dragCoeff() is shared with the turn spec below, so the ceiling the
+    // AI flies to comes off the same curve the pilot's wing is on.
+    const CD = dragCoeff(spec, CL, st.mach, sweepN, st.gearT, st.flapT, st.sbT, sep);
     const L = qS * CL;
     const D = qS * CD;
 
@@ -764,17 +866,49 @@ export function stepAircraft(st: AircraftState, inp: FlightInput, dt: number): v
     // The reference may never sit past the stall, or chasing it would hold the
     // nose up in a deep stall. The limit rides the flight path, so a stall that
     // drops the nose drags the reference down with it.
+    // ...and never past the airframe's structural limit. The alpha that would
+    // pull gLimit shrinks as dynamic pressure rises, so this is what keeps a
+    // fast Tomcat from commanding a 12 g attitude it was never built to hold —
+    // exactly the ceiling maxLoadFactor() reports, so the AI cannot out-pull
+    // the player by construction.
+    const alphaGLimit = (clLimit - CL0 - flapLift) / spec.clAlpha;
+    // The clamp names an angle of attack, but the reference is an ATTITUDE, and
+    // the elevator cannot hold an attitude for free: the standing deflection a
+    // pull needs is asked for as a little more pitch rate than the nose is
+    // carrying, and the attitude error is what asks for it. So the wing flies a
+    // few degrees UNDER the ceiling this clamp names — at 230 m/s a full pull
+    // settled at 12 deg alpha and 5.2 g against the 18 deg / 7.5 g this line
+    // publishes. The structural branch therefore carries that standing error, so
+    // the alpha the wing actually reaches is the one whose lift is gLimit:
+    //   qCmd = omega + elevatorHold / PITCH_RATE_GAIN,  so  attErr = qCmd / PITCH_ATT_GAIN
+    // with elevatorHold the deflection that balances the wing's own nose-down
+    // moment and its rate damping at the target alpha.
+    // Overshooting is harmless: the wing's own CL clamp caps the lift at gLimit
+    // whatever the pilot asks for, and the alpha limiter below still bites.
+    // The stall branch is deliberately left alone — alphaStall * 1.25 is a
+    // buffer for the nose drop, not a g ceiling, and asking the wing for alpha
+    // past the lift peak buys less lift, not more.
+    const qHatHold = Math.abs(qHat);
+    const elevHold =
+      (Math.abs(CM_ALPHA) * Math.min(alpha, spec.alphaStall) +
+        (spec.cmQ + SAS_Q) * qHatHold) / spec.cmElev;
+    const droop = clamp(
+      (Math.abs(st.omega.x) + Math.max(0, elevHold) / PITCH_RATE_GAIN) / PITCH_ATT_GAIN,
+      0,
+      spec.alphaStall,
+    );
+    const alphaUp = Math.min(spec.alphaStall * 1.25, alphaGLimit + droop);
     st.pitchRef = clamp(
       st.pitchRef,
       Math.max(-PITCH_REF_LIMIT, path - spec.alphaStall * 1.4),
-      Math.min(PITCH_REF_LIMIT, path + spec.alphaStall * 1.25),
+      Math.min(PITCH_REF_LIMIT, path + alphaUp),
     );
     // 2. the elevator drives the nose to it: attitude error asks for a rate,
     //    the airframe's own rate damping (below) holds the short period.
     let qCmd = clamp(
       PITCH_ATT_GAIN * (st.pitchRef - pitchAtt),
-      -PITCH_RATE_MAX,
-      PITCH_RATE_MAX,
+      -PITCH_CMD_MAX,
+      PITCH_CMD_MAX,
     );
     // AoA limiter: past the buffer the tail can no longer keep pulling, which is
     // what still lets a stall drop the nose even with the stick held back.

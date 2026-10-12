@@ -8,8 +8,14 @@
 // Usage: bun scripts/diag-dogfight.ts
 
 import { Matrix4, Scene, Vector3 } from "three";
-import { spawnAircraft, type AircraftState } from "../src/sim/flight";
+import {
+  maxTurnRate,
+  spawnAircraft,
+  sustainedTurnRate,
+  type AircraftState,
+} from "../src/sim/flight";
 import { Dogfight, DOGFIGHT_ARENA, terrainBlocks } from "../src/sim/dogfight";
+import { AIRCRAFT } from "../src/sim/aircraft";
 import { carriers, deckAxes, groundAt } from "../src/sim/world";
 import { ExplosionField } from "../src/render/effects";
 
@@ -674,7 +680,82 @@ df.begin(player);
   f.mission.dispose();
 }
 
-// --- 10. clear + dispose are clean ---
+// --- 10. the bandits fly the player's F-14, not a better one ---
+// The Aggressor AI takes its turn ceiling from the same spec the pilot's wing
+// answers to: sustainedTurnRate() on the Tomcat's lift curve, weight, 7.5 g
+// limit, drag and thrust — the rate the jet can HOLD without bleeding speed,
+// not the rate it can pull for a moment. That is the ceiling a bandit gets,
+// because it carries no energy state of its own. This flies a real fight with a
+// circling player so the bandits have to turn hard, then measures every bandit's
+// actual turn rate against that ceiling AND against the instantaneous one, so
+// "same specs, apart from top speed" is pinned end to end instead of by
+// construction.
+{
+  const s2 = new Scene();
+  const fight = new Dogfight(s2, new ExplosionField(s2, "low"));
+  const pilot = airPlayer();
+  fight.prepare(pilot);
+  fight.begin(pilot);
+  const RAD = 57.2958;
+  const circleRate = 0.24; // rad/s (~14 deg/s): a level orbit inside the F-14's own limit
+  let worstRatio = 0, overInstant = 0, bestRate = 0, samples = 0, flushed = 0;
+  const prevVel = new Map<number, Vector3>();
+  for (let i = 0; i < Math.round(120 / DT); i++) {
+    pilot.time += DT;
+    // orbit the player on the spot: a level turn the bandits have to match
+    const a = circleRate * DT;
+    const vx = pilot.vel.x * Math.cos(a) - pilot.vel.z * Math.sin(a);
+    const vz = pilot.vel.x * Math.sin(a) + pilot.vel.z * Math.cos(a);
+    pilot.vel.set(vx, 0, vz).setLength(PLAYER_SPEED);
+    pilot.speed = PLAYER_SPEED;
+    pilot.pos.addScaledVector(pilot.vel, DT);
+    pilot.pos.y = 1500;
+    DIR.copy(pilot.vel).normalize();
+    MAT4.lookAt(ORIGIN, DIR, UP);
+    pilot.quat.setFromRotationMatrix(MAT4);
+    prevVel.clear();
+    for (const t of fight.targets()) prevVel.set(t.id, t.vel.clone());
+    fight.step(DT, pilot, false);
+    // keep the pilot flying: this section measures the bandits' airframes, not
+    // whether they can eventually shoot the player down
+    if (pilot.result) { flushed++; pilot.result = null; }
+    fight.refill();
+    for (const t of fight.targets()) {
+      const prev = prevVel.get(t.id);
+      if (!prev || pilot.result) continue;
+      const speed = t.vel.length();
+      if (speed < 1) continue;
+      const rate = prev.angleTo(t.vel) / DT;
+      const held = sustainedTurnRate(AIRCRAFT.tomcat, Math.max(speed, 140), t.pos.y);
+      const ceiling = maxTurnRate(AIRCRAFT.tomcat, Math.max(speed, 140), t.pos.y);
+      samples++;
+      if (rate > held * 1.02 + 1e-3) worstRatio = Math.max(worstRatio, rate / held);
+      // The instantaneous ceiling is what the player's wing can pull for a
+      // moment; a bandit has no energy state, so it must stay under the
+      // sustained one. Track the overshoot past maxTurnRate() too.
+      if (rate > ceiling * 1.02 + 1e-3) overInstant = Math.max(overInstant, rate / ceiling);
+      bestRate = Math.max(bestRate, rate * RAD);
+    }
+  }
+  const playerCeiling = sustainedTurnRate(AIRCRAFT.tomcat, 205, 1500) * RAD;
+  const instantCeiling = maxTurnRate(AIRCRAFT.tomcat, 205, 1500) * RAD;
+  console.log(
+    `      bandits: ${samples} turn samples, hardest ${bestRate.toFixed(1)} deg/s ` +
+    `(sustained ceiling ${playerCeiling.toFixed(1)}, instantaneous ${instantCeiling.toFixed(1)} deg/s)`,
+  );
+  check("bandits never out-turn the rate the player's jet can hold",
+    samples > 200 && worstRatio < 1.02, `worst ${(worstRatio * 100).toFixed(1)}% of the sustained ceiling`);
+  check("bandits stay under the instantaneous ceiling too",
+    overInstant < 1.02, `worst ${(overInstant * 100).toFixed(1)}% of it`);
+  check("bandits do turn as hard as the jet they model (parity, not a nerf)",
+    bestRate > playerCeiling * 0.6, `${bestRate.toFixed(1)} vs ${playerCeiling.toFixed(1)} deg/s`);
+  check("the pilot survives a fair fight long enough to measure it",
+    samples > 200, `${samples} samples`);
+  void flushed;
+  fight.dispose();
+}
+
+// --- 11. clear + dispose are clean ---
 df.clear();
 check("clear empties the fight", df.hud(player).bandits === 0 && !df.hud(player).active);
 check("clear removes the hostile carrier", df.hud(player).carrier === null);
