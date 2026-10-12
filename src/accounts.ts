@@ -176,6 +176,8 @@ export function profileOf(s: Settings): GamestateProfile {
     hudLadder: s.hudLadder,
     hudGunCross: s.hudGunCross,
     bindings: { ...s.bindings },
+    launchKind: s.launchKind,
+    launchCarrier: s.launchCarrier,
   };
 }
 
@@ -205,6 +207,14 @@ export function applyGamestate(current: Settings, profile: GamestateProfile): Se
   if (typeof profile.minimap === "boolean") next.minimap = profile.minimap;
   if (typeof profile.hudLadder === "boolean") next.hudLadder = profile.hudLadder;
   if (typeof profile.hudGunCross === "boolean") next.hudGunCross = profile.hudGunCross;
+  // The launch point comes home too: land on a boat, sign in elsewhere, lift off
+  // from that deck. Older profiles have neither field and keep the local value.
+  if (profile.launchKind === "carrier" || profile.launchKind === "airfield") {
+    next.launchKind = profile.launchKind;
+  }
+  if (typeof profile.launchCarrier === "number" && Number.isFinite(profile.launchCarrier)) {
+    next.launchCarrier = Math.max(0, Math.floor(profile.launchCarrier));
+  }
   if (profile.bindings && typeof profile.bindings === "object") {
     const fetched = profile.bindings as Record<string, string>;
     for (const k of Object.keys(DEFAULT_BINDINGS) as Array<keyof typeof DEFAULT_BINDINGS>) {

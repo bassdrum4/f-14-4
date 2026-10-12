@@ -29,6 +29,9 @@ function setup(result: SimResult | null, host = true, aircraft: AircraftId = 'to
   sim.state.time = 42; sim.state.flightTime = 38;
   sim.spawnCarrier = 0;
   sim.prevPos = new Vector3(); sim.prevQuat = new Quaternion();
+  // The launch point is written into the gamestate on a recovery, so the
+  // harness models the listener set the UI would be registered on.
+  sim.settingsListeners = new Set();
   sim.remoteFleet = { combatTargets: () => [] };
   sim.remoteWeapons = { clear: () => {} };
   sim.rig = { resetFollow: () => {} };
@@ -67,6 +70,14 @@ for (const result of [
   assert.equal(sim.phase, 'flying');
   assert.equal(sim.state.time, 42); assert.equal(sim.state.flightTime, 38);
   assert.equal(sim.df.hud(sim.state).missiles, 2); assert.equal(sim.df.hud(sim.state).bombs, 6);
+  // Recovering writes the launch point into the gamestate: a wire/landing on
+  // boat 3 leaves the pilot launching from boat 3, the runway from the runway.
+  if (result.title === 'RUNWAY LANDING') {
+    assert.equal(sim.settings.launchKind, 'airfield', 'a runway recovery moves home to the runway');
+  } else {
+    assert.equal(sim.settings.launchKind, 'carrier');
+    assert.equal(sim.settings.launchCarrier, 2, 'a deck recovery moves home to that deck');
+  }
   if (result.title !== 'RUNWAY LANDING') {
     assert.equal(sim.state.catPhase, 'ready'); assert.equal(sim.state.catCarrier, 2);
     sim.state.throttle = sim.state.rpm = 1;

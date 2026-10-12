@@ -88,6 +88,10 @@ export type DaylightMode = "live" | "fixed" | "cycle";
 
 export type MissionMode = "cruise" | "dogfight" | "strike" | "versus";
 
+/** Where a sortie begins: the boat, or the shore runway. Persisted with the
+ *  rest of the gamestate so "continue flying" comes back to the same place. */
+export type LaunchKind = "carrier" | "airfield";
+
 export const DAYLIGHT_LABELS: Record<DaylightMode, string> = {
   live: "Real time (Hawaii)",
   fixed: "Fixed time of day",
@@ -133,6 +137,11 @@ export interface Settings {
   /** Last room code used, so rejoining does not mean retyping it. Blank until
    *  a pilot types one — the field is never pre-filled with a guess. */
   room: string;
+  /** Where the last sortie started. A landing remembers the deck (or runway)
+   *  it ended on, so the next launch — FLY AGAIN, a fresh CAT SHOT, or the same
+   *  pilot on another machine — comes back to the same boat. */
+  launchKind: LaunchKind;
+  launchCarrier: number;
 }
 
 // Terrain grid resolution. The world is a long chain (60 km square), so these
@@ -162,6 +171,8 @@ export function defaultSettings(): Settings {
     bindings: { ...DEFAULT_BINDINGS },
     callsign: "",
     room: "",
+    launchKind: "carrier",
+    launchCarrier: 0,
   };
 }
 
@@ -239,6 +250,12 @@ export function loadSettings(): Settings {
       bindings: { ...base.bindings, ...(parsed.bindings ?? {}) },
       callsign: typeof parsed.callsign === "string" ? parsed.callsign.slice(0, 12) : base.callsign,
       room: typeof parsed.room === "string" ? roomCode(parsed.room) : base.room,
+      launchKind: parsed.launchKind === "airfield" || parsed.launchKind === "carrier"
+        ? parsed.launchKind
+        : base.launchKind,
+      launchCarrier: typeof parsed.launchCarrier === "number" && Number.isFinite(parsed.launchCarrier)
+        ? Math.max(0, Math.floor(parsed.launchCarrier))
+        : base.launchCarrier,
     };
     // Settings saved by an older build have no callsign; mint one and write it
     // back once, so a guest identity is stable from then on. The room code is
@@ -251,6 +268,17 @@ export function loadSettings(): Settings {
   } catch {
     return defaultSettings();
   }
+}
+
+/**
+ * The settings with a new launch point, or null when that would change nothing.
+ * The sim asks for this on every launch and after every landing, so the null
+ * answer is what keeps a settled pilot from rewriting the same gamestate.
+ */
+export function withLaunchPoint(s: Settings, kind: LaunchKind, carrier: number): Settings | null {
+  const idx = Math.max(0, Math.floor(carrier) || 0);
+  if (s.launchKind === kind && s.launchCarrier === idx) return null;
+  return { ...s, launchKind: kind, launchCarrier: idx };
 }
 
 export function saveSettings(s: Settings): void {

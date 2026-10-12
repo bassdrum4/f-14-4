@@ -370,6 +370,25 @@ export function isRecoverySurface(st: AircraftState): boolean {
   );
 }
 
+/**
+ * Where a finished sortie ended, as the launch point for the next one. Read off
+ * the surface under the jet, not off the mission it started with: land on
+ * another boat and that deck becomes home. Returns null when the sortie did not
+ * end on a deck or the runway (a mid-air death, say), which leaves the caller's
+ * launch point alone.
+ */
+export function recoveryLaunchPoint(
+  st: AircraftState,
+  currentCarrier: number,
+): { kind: MissionKind; carrier: number } | null {
+  if (st.result?.kind === "crash") return null;
+  if (st.groundKind === "runway") return { kind: "airfield", carrier: currentCarrier };
+  if (st.groundKind !== "deck") return null;
+  const boat = carrierAt(st.pos.x, st.pos.z) ?? nearestCarrier(st.pos.x, st.pos.z);
+  const idx = carriers().indexOf(boat);
+  return { kind: "carrier", carrier: idx >= 0 ? idx : currentCarrier };
+}
+
 function headingQuat(headingDeg: number): Quaternion {
   const th = (headingDeg * Math.PI) / 180;
   return new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), -th);
@@ -502,7 +521,7 @@ export function spawnAircraft(
           text:
             mission === "carrier"
               ? `CARRIER ${fleet[idx].name} — COLLECTIVE UP (${keyLabel(bindings.throttleUp)}) TO LIFT OFF`
-              : `COLLECTIVE UP (${keyLabel(bindings.throttleUp)}) TO LIFT — CYCLIC TILTS TO FLY`,
+              : `COLLECTIVE UP (${keyLabel(bindings.throttleUp)}) TO LIFT — ${keyLabel(bindings.pitchUp)} FLIES FORWARD`,
           until: 30,
         }
       : mission === "carrier"
@@ -910,10 +929,12 @@ export function stepAircraft(st: AircraftState, inp: FlightInput, dt: number): v
 // cruise" is the whole flight technique.
 // ---------------------------------------------------------------------------
 
-/** Maximum commanded nose-up/nose-down attitude, rad (about 29 deg). */
-const HELI_MAX_TILT = 0.5;
-/** Maximum commanded bank, rad (about 40 deg). */
-const HELI_MAX_BANK = 0.7;
+/** Maximum commanded nose-up/nose-down attitude, rad (about 23 deg). */
+const HELI_MAX_TILT = 0.4;
+/** Maximum commanded bank, rad (about 50 deg) — a steep, and still usable,
+ *  helicopter turn. The old 40 deg stop was reached in under two seconds, after
+ *  which the roll input read as dead. */
+const HELI_MAX_BANK = 0.87;
 /** How fast the cyclic walks the commanded attitude, rad/s. */
 const HELI_CYCLIC_RATE = 0.9;
 /** Attitude error to commanded body rate, 1/s. */
@@ -922,8 +943,29 @@ const HELI_PITCH_RATE_MAX = 0.95; // rad/s
 const HELI_ROLL_RATE_MAX = 1.6; // rad/s
 const HELI_YAW_RATE = 0.95; // rad/s from full pedal
 const HELI_RATE_TAU = 0.26; // s: rate-loop time constant
-/** Parasite drag area, m^2 (fuselage, rotor head, skids). Bounds top speed. */
-const HELI_DRAG_AREA = 3.1;
+/**
+ * Parasite drag area, m^2. On a real helicopter it is the disc, not the
+ * airframe, that ends the speed run — retreating-blade stall and power limits —
+ * so this stands in for both: it sizes full forward cyclic to settle near the
+ * type's never-exceed speed. At the old 3.1 m^2 the machine wound up past
+ * 190 m/s, and since a fixed bank turns at g·tan(bank)/V, that runaway speed is
+ * what made a held turn fade away to nothing.
+ */
+const HELI_DRAG_AREA = 12;
+/** Speed above which the fin and tail rotor do anything, m/s. */
+const HELI_TRACK_VMIN = 8;
+/** Airspeed floor for the coordinated-turn rate, m/s (a hover has no turn). */
+const HELI_COORD_VFLOOR = 16;
+/** Slip angle to yaw rate, 1/s: how hard the nose chases the flight path. A
+ *  first-order loop, so it settles with a residual slip of about turn/gain. */
+const HELI_TRACK_GAIN = 3.0;
+/** Cap on the turn coordination the model flies for the pilot at full speed,
+ *  rad/s. A fin's authority scales with dynamic pressure, so the cap is scaled
+ *  down with speed below HELI_TRACK_VREF — that is what stops a slow sideways
+ *  slide from being snapped straight the moment it is noticed. */
+const HELI_TRACK_YAW_MAX = 0.8;
+/** Speed at which the fin has full authority for the coordination, m/s. */
+const HELI_TRACK_VREF = 30;
 
 /** Dedicated scratch: applyGroundContact() owns UPF, so the rotor's up axis
  *  needs its own vectors. */
@@ -940,11 +982,17 @@ function stepRotorcraft(st: AircraftState, inp: FlightInput, dt: number): void {
   HRT.set(1, 0, 0).applyQuaternion(st.quat);
   const pitchAtt = Math.asin(clamp(BFWD.y, -1, 1));
   const rollAtt = Math.asin(clamp(HRT.y, -1, 1));
+  // The fore/aft cyclic reads REVERSED from the fixed-wing stick: up arrow
+  // tilts the disc forward (accelerate), down arrow tilts it back (slow, then
+  // reverse). A helicopter pilot asking for "up" wants to go that way, and the
+  // winged convention — up arrow drops the tail, so the nose rises — would fly
+  // the machine backwards instead.
+  const fore = -inp.pitch;
   // On the ground the cyclic is lazy and self-centres, so the machine does not
   // lean on its stops while parked; in the air it holds whatever is commanded.
   const auth = st.onGround ? 0.35 : 1;
   st.pitchRef = clamp(
-    st.pitchRef + inp.pitch * HELI_CYCLIC_RATE * auth * dt,
+    st.pitchRef + fore * HELI_CYCLIC_RATE * auth * dt,
     -HELI_MAX_TILT,
     HELI_MAX_TILT,
   );
@@ -959,7 +1007,34 @@ function stepRotorcraft(st: AircraftState, inp: FlightInput, dt: number): void {
   }
   const qCmd = clamp(HELI_ATT_GAIN * (st.pitchRef - pitchAtt), -HELI_PITCH_RATE_MAX, HELI_PITCH_RATE_MAX);
   const pCmd = clamp(HELI_ATT_GAIN * (st.rollRef - rollAtt), -HELI_ROLL_RATE_MAX, HELI_ROLL_RATE_MAX);
-  const yCmd = -inp.yaw * HELI_YAW_RATE; // omega.y + = nose left
+  let yCmd = -inp.yaw * HELI_YAW_RATE; // omega.y + = nose left
+
+  // --- turn coordination: the nose goes where the bank takes it ---
+  // Banking tilts the disc and the flight path curves with it; the fin and the
+  // tail rotor are what bring the NOSE round to follow. Without that the machine
+  // slides down its own fuselage — the path turns while the heading never does,
+  // so a held bank stopped looking like a turn a couple of seconds in and the
+  // compass froze wherever it was. A real pilot trims this out with the pedals,
+  // and the pedals stay theirs: this only flies the part they would have had to
+  // hold, and only once there is airflow over the fin to make it mean anything.
+  // The test is on the TOTAL horizontal speed, not on the speed along the nose:
+  // a machine held in a bank early on is sliding almost entirely sideways, so
+  // gating on the forward component sat this out through exactly the first
+  // seconds of the turn. Backing up (velocity behind the nose) is left to the
+  // pedals — there is no fin-driven answer to that one either.
+  const vHoriz = Math.hypot(st.vel.x, st.vel.z);
+  const vFwd = st.vel.x * BFWD.x + st.vel.z * BFWD.z;
+  if (vHoriz > HELI_TRACK_VMIN && vFwd > 0) {
+    const vRight = st.vel.x * HRT.x + st.vel.z * HRT.z;
+    // + = drifting right of the nose; the nose-to-path angle is the whole
+    // story sideways, and floors at 1 m/s so a pure slide reads as 90 deg.
+    const slip = Math.atan2(vRight, Math.max(vFwd, 1));
+    // A fixed bank turns the path at g·tan(bank)/V; ask the nose for the same
+    // rate up front, then take out whatever slip is left over.
+    const turn = (GRAVITY * Math.tan(rollAtt)) / Math.max(vHoriz, HELI_COORD_VFLOOR);
+    const cap = HELI_TRACK_YAW_MAX * clamp(vHoriz / HELI_TRACK_VREF, 0.15, 1);
+    yCmd += clamp(turn - slip * HELI_TRACK_GAIN, -cap, cap);
+  }
   const k = 1 - Math.exp(-dt / HELI_RATE_TAU);
   st.omega.x += (qCmd - st.omega.x) * k;
   st.omega.z += (pCmd - st.omega.z) * k;

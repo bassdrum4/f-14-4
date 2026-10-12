@@ -94,8 +94,26 @@ The home screen starts with Fly Solo, Fly Together and Head-to-head. Solo
 sortie setup contains aircraft, mission and launch choices; settings use Flight,
 Controls, Graphics, Audio and Interface tabs.
 
+- A pilot who has not picked a callsign yet still gets the whole home board: the
+  callsign card is asked for when a launch button is pressed — enter a name or
+  take off as a guest — instead of sitting over the menu on the first launch.
+- The board is laid out to fit short viewports: below 860, 700 and 560 px of
+  height the mark, heading, action rows and nav tighten up step by step, so a
+  Chromebook-sized window shows every row without scrolling.
+- The Seahawk's controls are its own. **W/S** is the collective lever, the arrow
+  pair tilts the disc — up flies the machine forward, down slows it and then
+  reverses it — left/right banks, and A/D swing the tail. A held bank carries the
+  nose round with the flight path (the fin and tail rotor's job, once there is
+  airflow over it), so a banked turn keeps turning instead of sliding sideways.
+
 - Guns assist up to **5° within 1.5 km**, lead relative motion, and use the same
   hit radius as the illuminated gun cue. Aggressors make shorter evasive breaks.
+- Where a sortie starts is remembered. Land on a deck (or the shore runway) and
+  that becomes the home strip: **REARM & CONTINUE**, `RESTART MISSION`, the pause
+  menu's `RESTART FLIGHT` and the next session all launch from the boat you
+  actually recovered on, instead of hopping round the fleet. The launch point
+  rides in the gamestate, so it survives a reload and a callsign pull on
+  another machine.
 - Gear/flaps-down approach pitch inputs are gentler. Recoveries tolerate up to
   11 m/s sink, modest lineup errors and early touchdowns that roll into the
   wire area. A missed wire leaves the aircraft controllable for a go-around.
@@ -141,5 +159,7 @@ npm run test:battle-recovery
 npm run test:settings
 npm run test:net-authority
 npm run test:mp
+npm run test:menu
+npm run test:launch
 npm run check:standalone
 ```

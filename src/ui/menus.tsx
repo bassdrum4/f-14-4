@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Sim, Phase } from "../sim/engine";
 import { AIRCRAFT_LIST } from "../sim/aircraft";
-import { worldSeedForRoom } from "../sim/world";
+import { carriers, worldSeedForRoom } from "../sim/world";
 import {
   USERNAME_MAX,
   currentAccount,
@@ -31,6 +31,19 @@ import {
   feedbackEndpointProblem, flushFeedback, listPending,
   submitFeedback, type FeedbackKind,
 } from "../feedback/feedback";
+
+/** The boat a sortie launches from — the one on file in the gamestate. */
+function homeCarrier(settings: Settings): string {
+  const fleet = carriers();
+  if (fleet.length === 0) return "the fleet";
+  const idx = Math.min(Math.max(Math.floor(settings.launchCarrier) || 0, 0), fleet.length - 1);
+  return fleet[idx].name;
+}
+
+/** Where the next launch begins, in words: the boat, or the shore runway. */
+function launchPointLabel(settings: Settings): string {
+  return settings.launchKind === "airfield" ? "the shore runway" : `carrier ${homeCarrier(settings)}`;
+}
 
 function usePhase(sim: Sim | null): Phase {
   const subscribe = (cb: () => void) =>
@@ -90,12 +103,8 @@ export function UiRoot({ sim, settings, onSettings }: {
   onSettings: (s: Settings) => void;
 }) {
   const phase = usePhase(sim);
-  const account = useAccount();
-  // First run: offer a callsign before the menu, but never block the sim on it.
-  const [introDone, setIntroDone] = useState(() => onboardingSeen());
   return (
     <>
-      {!introDone && !account && <FirstRun onDone={() => setIntroDone(true)} />}
       {phase === "menu" && (
         <MainMenu sim={sim} settings={settings} onSettings={onSettings} openMultiplayer={sim?.pendingRoomReentry === true} onOpenedMultiplayer={() => sim?.consumeRoomReentry()} />
       )}
@@ -105,7 +114,7 @@ export function UiRoot({ sim, settings, onSettings }: {
       {phase === "paused" && sim && (
         <PauseMenu sim={sim} settings={settings} onSettings={onSettings} />
       )}
-      {phase === "result" && sim && <ResultOverlay sim={sim} />}
+      {phase === "result" && sim && <ResultOverlay sim={sim} settings={settings} />}
     </>
   );
 }
@@ -236,24 +245,31 @@ function AccountPanel({
   );
 }
 
-/** First launch: pick a callsign and fly. No accounts, no passwords. */
-function FirstRun({ onDone }: { onDone: () => void }) {
+/**
+ * The callsign card — asked for at the moment a pilot leaves the menu to fly,
+ * and only then. It used to render alongside the home board on first launch,
+ * where the dispatch panel's semi-transparent gradient let it ghost through
+ * behind the buttons; a pilot who has not filled a name in now sees it once
+ * they press a launch button, and can still take off as a guest.
+ */
+function CallsignGate({ onGo, onCancel }: { onGo: () => void; onCancel: () => void }) {
   const [name, setName] = useState("");
-  const go = () => {
-    if (name.trim().length >= 2) setCallsign(name);
+  const ok = name.trim().length >= 2;
+  const go = (save: boolean) => {
+    if (save && ok) setCallsign(name);
     dismissOnboarding();
-    onDone();
+    onGo();
   };
   return (
     <div className="ui-root intro-bg">
-      <div className="menu-panel">
+      <div className="menu-panel small">
         <div className="menu-title">
-          <span className="menu-kicker">CARRIER AIR WING</span>
-          <h1>F-14 TOMCAT</h1>
-          <span className="menu-sub">CARRIER FLIGHT SIMULATOR</span>
+          <span className="menu-kicker">BEFORE YOU LAUNCH</span>
+          <h1>YOUR CALLSIGN</h1>
+          <span className="menu-sub">THE FLIGHT SEES IT ON THE ROSTER</span>
         </div>
         <p className="menu-note">
-          Pick a callsign to fly under — the flight will see it on the roster.
+          Optional. Fly under it and the rest of the flight sees it — or launch as a guest.
         </p>
         <label className="menu-row">
           <span>Callsign</span>
@@ -266,14 +282,16 @@ function FirstRun({ onDone }: { onDone: () => void }) {
             autoFocus
             onChange={(e) => setName(normalizeUsername(e.target.value))}
             onKeyDown={(e) => {
-              if (e.key === "Enter") go();
+              if (e.key === "Enter") go(true);
             }}
           />
         </label>
         <div className="menu-row-btns">
-          <Btn primary onClick={go}>
+          <Btn primary disabled={!ok} onClick={() => go(true)}>
             FLY
           </Btn>
+          <Btn onClick={() => go(false)}>FLY AS GUEST</Btn>
+          <Btn onClick={onCancel}>BACK</Btn>
         </div>
       </div>
     </div>
@@ -302,6 +320,14 @@ function MainMenu({ sim, settings, onSettings, openMultiplayer, onOpenedMultipla
       onSettings({ ...settings, missionMode: versus ? "versus" : "dogfight" });
     }
     setScreen("multiplayer");
+  };
+  // The callsign card is held back from the home board: a launch button that
+  // still has no name parks its action here and asks first. Answering it — by
+  // entering a name or flying as a guest — marks it answered for good.
+  const [pending, setPending] = useState<{ run: () => void } | null>(null);
+  const gate = (run: () => void) => {
+    if (onboardingSeen()) run();
+    else setPending({ run });
   };
   return (
     <div className="ui-root menu-bg dispatch-bg">
@@ -335,7 +361,7 @@ function MainMenu({ sim, settings, onSettings, openMultiplayer, onOpenedMultipla
           </nav>
           <div className="dispatch-stamp">CLEAR FOR LAUNCH <span>///</span></div>
         </>}
-        {screen === "solo" && <FlightSetup sim={sim} settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />}
+        {screen === "solo" && <FlightSetup sim={sim} settings={settings} onSettings={onSettings} gate={gate} onBack={() => setScreen("main")} />}
         {screen === "settings" && <SettingsPanel settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />}
         {screen === "controls" && <ControlsPanel settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />}
         {screen === "multiplayer" && <MultiplayerPanel sim={sim} settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />}
@@ -344,12 +370,23 @@ function MainMenu({ sim, settings, onSettings, openMultiplayer, onOpenedMultipla
       </div>
       <div className="dispatch-side" aria-hidden="true"><span>LAUNCH / RECOVER / REPEAT</span><strong>KEEP<br />THE SKY<br />YOURS.</strong><span>BROWSER FLIGHT SIMULATOR</span></div>
       <div className="menu-footer">{keyLabel(settings.bindings.camera)} — camera · {keyLabel(settings.bindings.throttleUp)} — throttle · {keyLabel(settings.bindings.cat)} — catapult · {keyLabel(settings.bindings.bomb)} — target pod · {keyLabel(settings.bindings.missile)} — missile · {keyLabel(settings.bindings.fire)} — guns · {keyLabel(settings.bindings.map)} — map · {keyLabel(settings.bindings.settings)} — settings · Enter — radio · {keyLabel(settings.bindings.pause)} — pause</div>
+      {pending && (
+        <CallsignGate
+          onGo={() => {
+            const run = pending.run;
+            setPending(null);
+            run();
+          }}
+          onCancel={() => setPending(null)}
+        />
+      )}
     </div>
   );
 }
 
-function FlightSetup({ sim, settings, onSettings, onBack }: {
+function FlightSetup({ sim, settings, onSettings, onBack, gate }: {
   sim: Sim | null; settings: Settings; onSettings: (s: Settings) => void; onBack: () => void;
+  gate: (run: () => void) => void;
 }) {
   const mode = settings.missionMode === "versus" ? "cruise" : settings.missionMode;
   const craft = AIRCRAFT_LIST.find(a => a.id === settings.aircraft) ?? AIRCRAFT_LIST[0];
@@ -365,7 +402,8 @@ function FlightSetup({ sim, settings, onSettings, onBack }: {
     <span className="menu-world-label">MISSION</span>
     <div className="menu-world-chips">{(["cruise", "dogfight", "strike"] as MissionMode[]).map(m => <button key={m} className={"world-chip" + (mode === m ? " on" : "")} onClick={() => onSettings({ ...settings, missionMode: m })}>{MISSION_MODE_CHIPS[m]}</button>)}</div>
     <p className="menu-note">{MISSION_MODE_LABELS[mode]}</p>
-    <div className="menu-buttons"><Btn primary onClick={() => launch("carrier")}>{craft.rotorcraft ? "LIFT OFF — CARRIER" : "CAT SHOT — CARRIER"}</Btn><Btn onClick={() => launch("airfield")}>TAKEOFF — RUNWAY</Btn><Btn onClick={onBack}>BACK</Btn></div>
+    <p className="menu-note">Home deck · {homeCarrier(settings)}. Land on another boat and that becomes home.</p>
+    <div className="menu-buttons"><Btn primary onClick={() => gate(() => launch("carrier"))}>{craft.rotorcraft ? "LIFT OFF — CARRIER" : "CAT SHOT — CARRIER"}</Btn><Btn onClick={() => gate(() => launch("airfield"))}>TAKEOFF — RUNWAY</Btn><Btn onClick={onBack}>BACK</Btn></div>
   </div>;
 }
 
@@ -431,7 +469,7 @@ function PauseMenu({ sim, settings, onSettings }: {
   );
 }
 
-function ResultOverlay({ sim }: { sim: Sim }) {
+function ResultOverlay({ sim, settings }: { sim: Sim; settings: Settings }) {
   const hud = useHud(sim);
   const live = hud.netStatus === "online" || hud.netStatus === "connecting";
   if (!hud.resultTitle) return null;
@@ -452,6 +490,11 @@ function ResultOverlay({ sim }: { sim: Sim }) {
         {hud.resultKind === "wire" && (
           <p className="result-sub">
             Flight time {hud.flightTime.toFixed(0)} s · Wire {hud.wire}
+          </p>
+        )}
+        {!died && !live && (
+          <p className="result-sub">
+            Recovered on {launchPointLabel(settings)} · rearm &amp; continue launches from there
           </p>
         )}
         <div className="menu-buttons">
@@ -498,10 +541,11 @@ function SettingsPanel({ settings, onSettings, onBack }: {
   </div>;
 }
 
-function ControlsPanel({ settings, onSettings, onBack }: {
+export function ControlsPanel({ settings, onSettings, onBack }: {
   settings: Settings; onSettings: (s: Settings) => void; onBack: () => void;
 }) {
   const [capturing, setCapturing] = useState<Action | null>(null);
+  const rotor = AIRCRAFT_LIST.find((a) => a.id === settings.aircraft)?.rotorcraft === true;
 
   useEffect(() => {
     if (!capturing) return;
@@ -518,7 +562,21 @@ function ControlsPanel({ settings, onSettings, onBack }: {
     return () => window.removeEventListener("keydown", onKey, { capture: true });
   }, [capturing, settings, onSettings]);
 
-  const actions = Object.keys(ACTION_LABELS) as Action[];
+  // The same key is a different control on a helicopter: the throttle axis is
+  // the collective lever, and the fore/aft pair tilts the disc the other way.
+  // Bindings are shared across the fleet, so only the wording changes — and the
+  // rows a helicopter has no use for (gear, flaps, speed brake, burner,
+  // catapult) are left out of the list rather than advertised and ignored.
+  const rotorLabels: Partial<Record<Action, string>> = {
+    pitchUp: "Disc forward (fly forward)",
+    pitchDown: "Disc back (slow, then reverse)",
+    throttleUp: "Collective up (climb)",
+    throttleDown: "Collective down (descend)",
+  };
+  const rotorUnused = new Set<Action>(["gear", "flaps", "speedbrake", "ab", "cat"]);
+  const actions = (Object.keys(ACTION_LABELS) as Action[]).filter(
+    (a) => !(rotor && rotorUnused.has(a)),
+  );
   return (
     <div className="menu-screen">
       <h3 className="menu-h3">CONTROLS</h3>
@@ -529,13 +587,20 @@ function ControlsPanel({ settings, onSettings, onBack }: {
             className={"binding" + (capturing === a ? " capturing" : "")}
             onClick={() => setCapturing(a)}
           >
-            <span>{ACTION_LABELS[a]}</span>
+            <span>{rotor ? (rotorLabels[a] ?? ACTION_LABELS[a]) : ACTION_LABELS[a]}</span>
             <kbd>
               {capturing === a ? "press a key…" : keyLabel(settings.bindings[a])}
             </kbd>
           </button>
         ))}
       </div>
+      {rotor && (
+        <p className="menu-note">
+          Helicopter: the collective is the height lever, the cyclic tilts the
+          disc, and the pedals swing the tail. The fore/aft pair reads the
+          reverse of the winged stick — up flies the machine forward.
+        </p>
+      )}
       <p className="menu-note">
         Drag the mouse to look around · {keyLabel(settings.bindings.camera)} cycles chase / cockpit / action. {keyLabel(settings.bindings.bomb)} opens
         the target pod: drag to slew the sensor, release over a target to send a

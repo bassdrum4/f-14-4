@@ -49,7 +49,7 @@ html, body, #root {
 .pause-bg { background: rgba(3, 7, 10, 0.55); backdrop-filter: blur(3px); }
 .result-bg { background: rgba(3, 7, 10, 0.62); backdrop-filter: blur(3px); }
 /* the key-line footer lives under the main menu: reserve room for it */
-.menu-bg { padding-bottom: 52px; }
+.menu-bg { padding-bottom: 46px; }
 
 .menu-panel {
   width: min(520px, 100%);
@@ -167,7 +167,7 @@ html, body, #root {
 }
 
 .menu-footer {
-  position: absolute; bottom: 16px; left: 0; right: 0;
+  position: absolute; bottom: 12px; left: 0; right: 0;
   padding: 0 16px; text-align: center;
   font-size: 12px; line-height: 1.5; letter-spacing: 0.12em;
   color: #6d8496;
@@ -622,30 +622,30 @@ html, body, #root {
 .hud-net { color: #8fdcff; letter-spacing: 0.05em; }
 
 /* Flight operations board: compact type, deck markings, square hardware. */
-.dispatch-bg { --accent: #f6cb51; --panel-line: #3c4548; align-items: flex-start; padding: 28px 5vw 52px; background: linear-gradient(90deg, rgba(6,12,16,.94), rgba(6,12,16,.78) 44%, rgba(6,12,16,.18)); backdrop-filter: none; }
-.dispatch-panel { width: min(550px, 58vw); padding: 24px 30px; background: rgba(14,23,27,.96); border-radius: 0; clip-path: none; border-top: 5px solid var(--accent); box-shadow: 16px 16px 0 rgba(0,0,0,.23); }
+.dispatch-bg { --accent: #f6cb51; --panel-line: #3c4548; align-items: flex-start; padding: 22px 5vw 46px; background: linear-gradient(90deg, rgba(6,12,16,.94), rgba(6,12,16,.78) 44%, rgba(6,12,16,.18)); backdrop-filter: none; }
+.dispatch-panel { width: min(520px, 58vw); padding: 20px 26px; background: rgba(14,23,27,.96); border-radius: 0; clip-path: none; border-top: 5px solid var(--accent); box-shadow: 14px 14px 0 rgba(0,0,0,.23); }
 .dispatch-top { display: flex; justify-content: space-between; font: 10px ui-monospace,monospace; letter-spacing: .13em; color: #95a3a5; }
-.dispatch-brand { display: flex; align-items: center; gap: 16px; padding: 24px 0 16px; color: #eeeade; background: none; border: 0; cursor: pointer; text-align: left; }
-.dispatch-mark { font: 900 clamp(48px,6vw,76px)/1 Impact,'Arial Narrow',sans-serif; letter-spacing: -.04em; }
+.dispatch-brand { display: flex; align-items: center; gap: 14px; padding: 18px 0 12px; color: #eeeade; background: none; border: 0; cursor: pointer; text-align: left; }
+.dispatch-mark { font: 900 clamp(42px,5.4vw,64px)/1 Impact,'Arial Narrow',sans-serif; letter-spacing: -.04em; }
 .dispatch-name { font: 700 12px/1.5 ui-monospace,monospace; letter-spacing: .15em; border-left: 1px solid #556065; padding-left: 16px; }
-.dispatch-heading { margin: 28px 0 22px; }
+.dispatch-heading { margin: 22px 0 18px; }
 .dispatch-heading > span { font: 10px ui-monospace,monospace; color: var(--accent); letter-spacing: .16em; }
-.dispatch-heading h1 { font: 800 clamp(28px,3.3vw,42px)/1.04 'Arial Narrow','Segoe UI',sans-serif; margin: 8px 0; letter-spacing: -.025em; color: #f1efe5; }
+.dispatch-heading h1 { font: 800 clamp(26px,3vw,36px)/1.04 'Arial Narrow','Segoe UI',sans-serif; margin: 8px 0; letter-spacing: -.025em; color: #f1efe5; }
 .dispatch-actions { border-top: 1px solid #485156; }
-.dispatch-action { width: 100%; display: flex; align-items: center; gap: 18px; padding: 18px 14px; text-align: left; background: transparent; border: 0; border-bottom: 1px solid #485156; color: #e8ece8; cursor: pointer; }
+.dispatch-action { width: 100%; display: flex; align-items: center; gap: 16px; padding: 15px 12px; text-align: left; background: transparent; border: 0; border-bottom: 1px solid #485156; color: #e8ece8; cursor: pointer; }
 .dispatch-action.lead { background: var(--accent); color: #172127; }
 .dispatch-action:hover { background: #354247; }
 .dispatch-action.lead:hover { background: #ffe18a; }
 .dispatch-number { font: 12px ui-monospace,monospace; opacity: .65; }
-.dispatch-action strong { font: 800 20px 'Arial Narrow','Segoe UI',sans-serif; letter-spacing: .04em; display: block; }
+.dispatch-action strong { font: 800 18px 'Arial Narrow','Segoe UI',sans-serif; letter-spacing: .04em; display: block; }
 .dispatch-action small { display: block; margin-top: 4px; font-size: 11px; opacity: .75; line-height: 1.4; }
-.dispatch-action b { margin-left: auto; font-size: 25px; }
-.dispatch-nav { display: flex; flex-wrap: wrap; gap: 18px; padding: 22px 0; }
+.dispatch-action b { margin-left: auto; font-size: 22px; }
+.dispatch-nav { display: flex; flex-wrap: wrap; gap: 16px; padding: 18px 0; }
 .dispatch-nav button { border: 0; border-bottom: 1px solid #657276; padding: 0 0 5px; background: none; color: #bdc7c8; cursor: pointer; font: 10px ui-monospace,monospace; letter-spacing: .1em; }
 .dispatch-nav button:hover { color: var(--accent); }
 .dispatch-stamp { display: flex; justify-content: space-between; font: 10px ui-monospace,monospace; color: #798a8f; letter-spacing: .15em; padding-top: 10px; border-top: 1px solid #354247; }
 .dispatch-stamp span { color: var(--accent); }
-.dispatch-side { position: absolute; right: 6vw; bottom: 16vh; width: 30vw; pointer-events: none; color: #edeadf; text-shadow: 0 2px 18px #000; }
+.dispatch-side { position: absolute; right: 6vw; bottom: 14vh; width: 30vw; pointer-events: none; color: #edeadf; text-shadow: 0 2px 18px #000; }
 .dispatch-side span { font: 10px ui-monospace,monospace; letter-spacing: .18em; }
 .dispatch-side strong { display: block; font: 900 clamp(40px,7vw,100px)/.94 Impact,'Arial Narrow',sans-serif; margin: 20px 0; }
 .dispatch-panel .menu-h3 { text-align: left; margin-top: 20px; letter-spacing: .15em; }
@@ -674,3 +674,57 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .battle-row.self { color: #f6cb51; }
 .battle-board small { display: block; padding-top: 8px; line-height: 1.4; color: #f6cb51; }
 .result-title.landing { color: var(--hud-green); }
+
+/* ------------------------------------------------------------------ */
+/* Short viewports (Chromebooks, laptops in a small window)            */
+/* ------------------------------------------------------------------ */
+/*
+ * The home board was laid out for a tall desktop window: on a 1366x768
+ * Chromebook the panel overflowed and the bottom rows fell off screen. Each
+ * step below trims the same rhythm — mark, heading, action rows, nav — so the
+ * whole board fits without scrolling, and max-height keeps the panel itself
+ * scrollable as a last resort rather than clipped.
+ */
+@media (max-height: 860px) {
+  .dispatch-bg { padding: 16px 5vw 42px; }
+  .dispatch-panel { padding: 18px 24px; max-height: calc(100vh - 74px); }
+  .dispatch-brand { padding: 12px 0 10px; gap: 12px; }
+  .dispatch-mark { font-size: clamp(34px, 4.4vw, 54px); }
+  .dispatch-heading { margin: 16px 0 14px; }
+  .dispatch-heading h1 { font-size: clamp(24px, 2.6vw, 32px); margin: 6px 0 2px; }
+  .dispatch-action { padding: 11px 12px; gap: 14px; }
+  .dispatch-action strong { font-size: 17px; }
+  .dispatch-action b { font-size: 20px; }
+  .dispatch-nav { padding: 14px 0; gap: 14px; }
+  .dispatch-panel .menu-h3 { margin-top: 14px; }
+  .menu-footer { bottom: 8px; font-size: 10px; }
+}
+
+@media (max-height: 700px) {
+  .dispatch-bg { padding: 10px 5vw 34px; }
+  .dispatch-panel { padding: 14px 20px; max-height: calc(100vh - 56px); }
+  .dispatch-brand { padding: 8px 0; }
+  .dispatch-mark { font-size: clamp(28px, 3.6vw, 42px); }
+  .acct-strip { margin-top: 8px; padding-top: 8px; }
+  .dispatch-heading { margin: 10px 0; }
+  .dispatch-heading h1 { font-size: clamp(20px, 2.2vw, 27px); }
+  .dispatch-action { padding: 9px 10px; gap: 12px; }
+  .dispatch-action strong { font-size: 15.5px; }
+  .dispatch-action small { font-size: 10px; margin-top: 2px; }
+  .dispatch-action b { font-size: 17px; }
+  .dispatch-nav { padding: 10px 0; gap: 12px; }
+  .dispatch-nav button { font-size: 9.5px; }
+}
+
+@media (max-height: 560px) {
+  .dispatch-bg { padding: 8px 4vw 26px; }
+  .dispatch-side, .dispatch-stamp { display: none; }
+  .dispatch-panel { border-top-width: 3px; }
+  .dispatch-mark { font-size: clamp(24px, 3vw, 34px); }
+  .dispatch-heading h1 { font-size: clamp(18px, 2vw, 23px); }
+  .dispatch-action { padding: 7px 8px; }
+  .dispatch-action strong { font-size: 14px; }
+  .dispatch-action small { display: none; }
+  .dispatch-nav { padding: 8px 0; }
+  .menu-footer { font-size: 9px; letter-spacing: 0.04em; bottom: 5px; padding: 0 8px; }
+}

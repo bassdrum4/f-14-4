@@ -3,6 +3,11 @@
 //  * collective lifts it straight off the deck,
 //  * the collective lever answers fast (a governor, not a jet spool),
 //  * it hovers (thrust balances weight at that altitude's density) and climbs,
+//  * up arrow tilts the disc FORWARD and down arrow back: the arrow pair reads
+//    the other way round from the fixed-wing stick, because asking a helicopter
+//    for "up" is asking it to go that way,
+//  * a held bank keeps turning — the nose is pulled round with the bank instead
+//    of the machine sliding sideways down its own fuselage,
 //  * cyclic tilts to translate, pedal yaws,
 //  * landing on the deck does not end the sortie (no tailhook),
 //  * the mesh has a spinning rotor and never sweeps a wing.
@@ -13,6 +18,8 @@ import { AIRCRAFT } from "../src/sim/aircraft";
 import { atmosphere } from "../src/sim/atmosphere";
 import { buildAircraft } from "../src/render/geometry";
 import { spawnAircraft, stepAircraft } from "../src/sim/flight";
+import { InputManager } from "../src/input/input";
+import { defaultSettings } from "../src/settings";
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
@@ -34,6 +41,35 @@ function check(name: string, cond: boolean, extra = ""): void {
     failures++;
     console.error(`FAIL  ${name} ${extra}`);
   }
+}
+
+// --- a browser to type into -------------------------------------------------
+// WHICH arrow does it is a promise made by the Controls screen, so the sections
+// below drive the real InputManager with synthetic KeyboardEvents and push the
+// frames it produces through the real flight model.
+type Handler = (e: unknown) => void;
+const winListeners = new Map<string, Set<Handler>>();
+(globalThis as Record<string, unknown>).window = {
+  addEventListener(type: string, h: Handler) {
+    if (!winListeners.has(type)) winListeners.set(type, new Set());
+    winListeners.get(type)!.add(h);
+  },
+  removeEventListener(type: string, h: Handler) {
+    winListeners.get(type)?.delete(h);
+  },
+};
+const keyboardEl = { addEventListener() {}, removeEventListener() {} };
+function keyEvent(type: string, code: string): void {
+  for (const h of [...(winListeners.get(type) ?? [])]) {
+    h({ code, repeat: false, target: null, preventDefault() {} });
+  }
+}
+const keys = new InputManager(defaultSettings());
+keys.attach(keyboardEl as unknown as HTMLElement);
+
+/** One input frame per sim tick, exactly as the engine takes them. */
+function sample(dt: number) {
+  return keys.sample(dt);
 }
 
 const DT = 1 / 120;
@@ -103,7 +139,9 @@ const idle = () => ({
   st.rpm = hold;
   // Hold full forward cyclic (nose down) for 10 s: the machine tilts over and
   // translates, without sinking away or stalling (a rotor does not stall).
-  for (let i = 0; i < Math.round(10 / DT); i++) stepAircraft(st, { ...idle(), pitch: -1 }, DT);
+  // +pitch is nose DOWN here: the fore/aft cyclic reads reversed from the
+  // winged stick, so the key that asks for it forward is ArrowUp (section 4b).
+  for (let i = 0; i < Math.round(10 / DT); i++) stepAircraft(st, { ...idle(), pitch: 1 }, DT);
   const nose = new Vector3(0, 0, -1).applyQuaternion(st.quat);
   const horiz = new Vector3(st.vel.x, 0, st.vel.z);
   const noseH = new Vector3(nose.x, 0, nose.z).normalize();
@@ -121,6 +159,106 @@ const idle = () => ({
   for (let i = 0; i < Math.round(3 / DT); i++) stepAircraft(st2, { ...idle(), roll: 1 }, DT);
   const right = new Vector3(1, 0, 0).applyQuaternion(st2.quat);
   check("right cyclic rolls into a right bank", right.y < -0.1, `right.y ${right.y.toFixed(2)}`);
+}
+
+// --- 4b. the arrow pair, through the real keyboard ---
+{
+  const st = spawnAircraft("airfield", 0, "seahawk");
+  st.pos.set(0, 1500, 0);
+  st.vel.set(0, 0, 0);
+  st.onGround = false;
+  st.airborne = true;
+  st.banner = null;
+  const hold = hoverCollective(st.spec.mass, st.spec.idleThrust, st.spec.thrustDry, 1500);
+  st.rpm = hold;
+  st.throttle = hold;
+  for (let i = 0; i < Math.round(2 / DT); i++) stepAircraft(st, idle(), DT);
+
+  /** Hold these arrow codes for a while, stepping the real input manager. */
+  const holdKeys = (codes: string[], seconds: number): void => {
+    for (const c of codes) keyEvent("keydown", c);
+    for (let i = 0; i < Math.round(seconds / DT); i++) stepAircraft(st, sample(DT), DT);
+    for (const c of codes) keyEvent("keyup", c);
+    sample(DT);
+  };
+  const noseY = () => new Vector3(0, 0, -1).applyQuaternion(st.quat).y;
+  const groundSpeed = () => Math.hypot(st.vel.x, st.vel.z);
+
+  holdKeys(["ArrowUp"], 8);
+  check("up arrow leans the disc forward", noseY() < -0.15, `nose.y ${noseY().toFixed(2)}`);
+  const speeding = groundSpeed();
+  check("and up arrow accelerates the machine forward", speeding > 12, `${speeding.toFixed(1)} m/s`);
+  check("up arrow is not a height control on its own", Math.abs(st.pos.y - 1500) < 300, `y ${st.pos.y.toFixed(0)}`);
+
+  holdKeys(["ArrowDown"], 10);
+  check("down arrow lifts the nose the other way", noseY() > 0.15, `nose.y ${noseY().toFixed(2)}`);
+  check("and down arrow takes the speed back off", groundSpeed() < speeding - 5,
+    `${groundSpeed().toFixed(1)} vs ${speeding.toFixed(1)} m/s`);
+}
+
+// --- 4c. a held bank keeps turning ------------------------------------------
+// The reported bug: hold a bank and the turn looked right for a second or two,
+// then the heading froze and the machine slid sideways down its own fuselage.
+// A banked helicopter has its nose pulled round by the fin and tail rotor, so
+// the model turns the nose with the bank — continuously, for as long as the
+// pilot holds it, at the rate the bank is actually making.
+{
+  const hold = hoverCollective(AIRCRAFT.seahawk.mass, AIRCRAFT.seahawk.idleThrust, AIRCRAFT.seahawk.thrustDry, 1500);
+  const st = spawnAircraft("airfield", 0, "seahawk");
+  st.pos.set(0, 1500, 0);
+  st.vel.set(0, 0, 0);
+  st.onGround = false;
+  st.airborne = true;
+  st.banner = null;
+  st.rpm = hold;
+  st.throttle = hold;
+  for (let i = 0; i < Math.round(2 / DT); i++) stepAircraft(st, idle(), DT);
+
+  const wrap = (d: number) => ((d + 540) % 360) - 180;
+  const bankDeg = () =>
+    (Math.asin(Math.max(-1, Math.min(1, new Vector3(1, 0, 0).applyQuaternion(st.quat).y))) * 180) / Math.PI;
+  const slipDeg = () => {
+    const f = new Vector3(0, 0, -1).applyQuaternion(st.quat);
+    const r = new Vector3(1, 0, 0).applyQuaternion(st.quat);
+    const vf = st.vel.x * f.x + st.vel.z * f.z;
+    const vr = st.vel.x * r.x + st.vel.z * r.z;
+    return (Math.atan2(vr, Math.max(vf, 1)) * 180) / Math.PI;
+  };
+
+  const h0 = st.headingDeg;
+  const turns: number[] = [];
+  const banks: number[] = [];
+  const slips: number[] = [];
+  const speeds: number[] = [];
+  let prevH = st.headingDeg;
+  keyEvent("keydown", "ArrowUp");
+  keyEvent("keydown", "ArrowLeft");
+  for (let sec = 0; sec < 12; sec++) {
+    for (let i = 0; i < Math.round(1 / DT); i++) stepAircraft(st, sample(DT), DT);
+    turns.push(wrap(st.headingDeg - prevH));
+    prevH = st.headingDeg;
+    banks.push(Math.abs(bankDeg()));
+    slips.push(Math.abs(slipDeg()));
+    speeds.push(st.speed);
+  }
+  keyEvent("keyup", "ArrowUp");
+  keyEvent("keyup", "ArrowLeft");
+
+  const tail = turns.slice(-4);
+  check("a held bank rolls past the old 40 deg stop", Math.max(...banks) > 44,
+    `max ${Math.max(...banks).toFixed(1)} deg`);
+  check("and the bank holds while the key is held", Math.min(...banks.slice(4)) > 38,
+    `min ${Math.min(...banks.slice(4)).toFixed(1)} deg`);
+  check("the turn never stops: the nose is still coming round in the last second",
+    Math.abs(tail[tail.length - 1]) > 2, `${tail[tail.length - 1].toFixed(1)} deg/s`);
+  check("every one of the last four seconds turns the nose", tail.every((t) => Math.abs(t) > 2),
+    tail.map((t) => t.toFixed(1)).join(", "));
+  check("and the whole hold turns through a real arc", Math.abs(wrap(st.headingDeg - h0)) > 60,
+    `${wrap(st.headingDeg - h0).toFixed(0)} deg`);
+  check("the nose stays with the flight path (no skidding turn)", Math.max(...slips.slice(6)) < 12,
+    `max slip ${Math.max(...slips.slice(6)).toFixed(1)} deg`);
+  check("and the machine does not run away past its never-exceed speed", Math.max(...speeds) < 100,
+    `max ${Math.max(...speeds).toFixed(0)} m/s`);
 }
 
 // --- 5. pedal yaws the nose ---

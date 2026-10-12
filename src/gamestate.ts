@@ -35,6 +35,10 @@ export interface GamestateProfile {
   hudLadder?: boolean;
   hudGunCross?: boolean;
   bindings: Record<string, string>;
+  /** Where the last sortie began (the boat you landed on, or the runway).
+   *  Optional: profiles saved before it existed simply have no opinion. */
+  launchKind?: "carrier" | "airfield";
+  launchCarrier?: number;
 }
 
 /** Result of a cloud fetch. `found:false` simply means "no profile yet". */

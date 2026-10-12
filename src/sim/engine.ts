@@ -13,6 +13,7 @@ import { InputManager } from "../input/input";
 import {
   isRecoverySurface,
   carryDeckPose,
+  recoveryLaunchPoint,
   glideStateFor,
   spawnAircraft,
   stepAircraft,
@@ -37,7 +38,7 @@ import {
   worldSeedForRoom,
 } from "../sim/world";
 import type { TerrainPaint } from "../render/scene";
-import { CYCLE_MINUTES_PER_DAY, keyLabel, type MissionMode, type Settings } from "../settings";
+import { CYCLE_MINUTES_PER_DAY, keyLabel, withLaunchPoint, type LaunchKind, type MissionMode, type Settings } from "../settings";
 import { HOME_SITE, dayPhase, sunPosition, sunVector, type DayPhase } from "../sim/sun";
 import { Dogfight, type CarrierStatus, type GunCue } from "../sim/dogfight";
 import { ExplosionField } from "../render/effects";
@@ -63,6 +64,13 @@ import {
 } from "../net/multiplayer";
 
 export type Phase = "menu" | "flying" | "paused" | "result";
+
+/** Clamp a stored boat index into the fleet (a profile can outlive a world). */
+function clampCarrier(idx: number): number {
+  const boats = carriers().length;
+  if (!Number.isFinite(idx) || boats <= 0) return 0;
+  return Math.max(0, Math.min(Math.floor(idx), boats - 1));
+}
 
 export interface HudSnapshot {
   speedKt: number;
@@ -309,7 +317,8 @@ export class Sim {
   /** The terrain seed in play. Regenerating from it rebuilds the whole world. */
   private worldSeed = DEFAULT_SEED;
   private spawnCarrier = 0;
-  private nextCarrier = 0;
+  /** One-shot per sortie: has the landing that ended it been written down? */
+  private launchRemembered = false;
   private onResize = () => this.renderer.resize();
   private inputPitch = 0;
   private inputRoll = 0;
@@ -381,6 +390,10 @@ export class Sim {
 
   constructor(canvas: HTMLCanvasElement, settings: Settings, peerFactory?: PeerFactory) {
     this.settings = settings;
+    // The launch point is part of the gamestate: start parked on the boat (or
+    // runway) the last sortie used, not on whatever the fleet had next.
+    this.mission = settings.launchKind;
+    this.spawnCarrier = clampCarrier(settings.launchCarrier);
     // The world is a pure function of a seed and is generated synchronously, so
     // the first frame already flies real terrain. Solo flight flies the default
     // world; the room code picks a different one once a pilot opens a room.
@@ -435,7 +448,8 @@ export class Sim {
     }, peerFactory);
     this.input.attach(canvas);
     window.addEventListener("resize", this.onResize);
-    this.state = spawnAircraft("carrier", 0, settings.aircraft, settings.bindings);
+    this.state = spawnAircraft(this.mission, this.spawnCarrier, settings.aircraft, settings.bindings);
+    this.launchRemembered = true; // this park is already on file
     this.updateJetPose(1);
     this.updateHud();
     this.raf = requestAnimationFrame(this.loop);
@@ -527,11 +541,9 @@ export class Sim {
   }
 
   startMission(mission: MissionKind): void {
-    if (mission === "carrier") {
-      // rotate through the fleet so every boat gets used
-      this.spawnCarrier = this.nextCarrier;
-      this.nextCarrier = (this.nextCarrier + 1) % carriers().length;
-    }
+    // Always the pilot's own boat: the launch point follows where they last
+    // flew from (see rememberRecovery), so a sortie picks up where it left off
+    // instead of hopping to the next ship in the fleet.
     this.beginMission(mission, this.spawnCarrier);
   }
 
@@ -549,10 +561,6 @@ export class Sim {
       this.battle = { match: this.battleReferee.match, pilots: [] };
       this.battleTickAt = 0;
     }
-    if (mission === "carrier") {
-      this.spawnCarrier = this.nextCarrier;
-      this.nextCarrier = (this.nextCarrier + 1) % carriers().length;
-    }
     this.net.launch(mission, this.spawnCarrier);
     this.beginMission(mission, this.spawnCarrier);
   }
@@ -567,13 +575,15 @@ export class Sim {
     // reading the pause menu) is left to finish the sortie they are on.
     if (this.phase !== "menu") return;
     const boats = carriers().length;
-    this.spawnCarrier = ((carrier % boats) + boats) % boats;
+    this.spawnCarrier = ((Math.floor(carrier) % boats) + boats) % boats;
     this.beginMission(mission, this.spawnCarrier);
   }
 
   private beginMission(mission: MissionKind, carrierIndex: number): void {
     this.mission = mission;
     this.recoveryPending = false;
+    this.spawnCarrier = clampCarrier(carrierIndex);
+    this.launchRemembered = false;
     this.endPod();
     this.crashSeq = null;
     this.pendingRoom = false;
@@ -620,6 +630,10 @@ export class Sim {
     this.input.clearEdges();
     this.audio.start();
     this.audio.resume();
+    // Where this sortie began is now where the next one will begin: park the
+    // choice in the settings the UI owns, so it is saved with the gamestate and
+    // survives a reload (a fresh pilot's first launch writes nothing new).
+    this.rememberLaunch();
     this.updateHud();
   }
 
@@ -1517,6 +1531,14 @@ export class Sim {
         else if (this.state.spec.rotorcraft) this.rearmBattleAircraft();
         this.recoveryPending = false;
       }
+      // A sortie that ends on a deck (or the runway) ends *there*: read the
+      // boat off the ground the jet is sitting on, so RESTART MISSION — and the
+      // next session — launches from the deck it actually landed on, whether
+      // the pilot goes on to press REARM & CONTINUE or not.
+      if (this.state.result && !this.launchRemembered) {
+        this.launchRemembered = true;
+        if (this.state.result.kind !== "crash") this.rememberRecovery();
+      }
       wasAirborne = this.state.airborne;
       this.acc -= FIXED_DT;
       steps++;
@@ -1541,10 +1563,18 @@ export class Sim {
     if (this.battleActive && (!self?.ready || self.hp <= 0)) return;
     this.endPod();
     const landed = this.state;
-    const mission = landed.groundKind === "runway" ? "airfield" : "carrier";
-    if (mission === "carrier") this.spawnCarrier = carriers().indexOf(nearestCarrier(landed.pos.x, landed.pos.z));
-    this.mission = mission;
-    this.state = spawnAircraft(mission, this.spawnCarrier, this.settings.aircraft, this.settings.bindings);
+    // Standing on the deck it just caught a wire on, that deck is now home:
+    // read it off the surface under the jet and write it into the gamestate, so
+    // "rearm & continue" and the pilot's next session both start from here.
+    const point = recoveryLaunchPoint(landed, this.spawnCarrier);
+    if (point) {
+      this.mission = point.kind;
+      this.spawnCarrier = clampCarrier(point.carrier);
+    } else {
+      this.mission = landed.groundKind === "runway" ? "airfield" : "carrier";
+    }
+    this.rememberLaunch();
+    this.state = spawnAircraft(this.mission, this.spawnCarrier, this.settings.aircraft, this.settings.bindings);
     const launchBriefing = this.state.banner?.text ?? "READY FOR LAUNCH";
     this.state.time = landed.time;
     this.state.flightTime = landed.flightTime;
@@ -1568,6 +1598,36 @@ export class Sim {
   }
 
   private recoveryPending = false;
+
+  /**
+   * Remember where a sortie ended, if it ended on a deck or the runway. The
+   * landing is what makes this a "continue": the pilot relaunches from the same
+   * boat, with the same loadout, instead of being thrown back to whichever
+   * carrier the mission started from.
+   */
+  private rememberRecovery(): void {
+    const point = recoveryLaunchPoint(this.state, this.spawnCarrier);
+    if (!point) return; // died in the air: the deck in the file still stands
+    this.mission = point.kind;
+    this.spawnCarrier = clampCarrier(point.carrier);
+    this.rememberLaunch();
+  }
+
+  /**
+   * Hand the launch point to the UI to store (localStorage + the cloud
+   * gamestate). Idempotent: launching from the boat already on file changes
+   * nothing, so the render loop never spams a settings write.
+   */
+  private rememberLaunch(): void {
+    const kind: LaunchKind = this.mission;
+    const next = withLaunchPoint(this.settings, kind, this.spawnCarrier);
+    if (!next) return;
+    // Swap the record and hand it to the UI, which owns where settings live.
+    // Not a job for applySettings(): the boat and the launch kind change no
+    // graphics, audio or handling, and this runs from inside the sim step.
+    this.settings = next;
+    for (const fn of this.settingsListeners) fn(next);
+  }
 
   /** Refuel and re-arm on a landing, and say so. */
   private refillOnRecovery(): void {
