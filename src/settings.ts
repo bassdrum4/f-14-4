@@ -101,8 +101,8 @@ export const DAYLIGHT_LABELS: Record<DaylightMode, string> = {
 export const MISSION_MODE_LABELS: Record<MissionMode, string> = {
   versus: "Head-to-head — fight other pilots in your room",
   cruise: "Cruise — free flight",
-  dogfight: "Air combat — aggressor bandits fly from the opposing carrier",
-  strike: "Strike — practice runs against land and sea targets",
+  dogfight: "Aggressor — fleet defense or endless air combat",
+  strike: "Strike — convoy interdiction or endless target practice",
 };
 
 /** Short chips for the picker: the profile name, without the explanation. */
@@ -122,6 +122,7 @@ export interface Settings {
   quality: Quality;
   adaptiveResolution: boolean;
   aircraft: AircraftId; // the type the player flies
+  missionStyle?: "operation" | "endless";
   missionMode: MissionMode; // free flight or an aggressor profile
   daylight: DaylightMode;
   /** Local clock hour 0..24, used by "fixed" mode. */
@@ -163,6 +164,7 @@ export function defaultSettings(): Settings {
     adaptiveResolution: true,
     aircraft: DEFAULT_AIRCRAFT,
     missionMode: "cruise",
+    missionStyle: "operation",
     daylight: "fixed",
     timeOfDay: 9,
     minimap: true,
@@ -238,6 +240,7 @@ export function loadSettings(): Settings {
         parsed.missionMode === "dogfight" || parsed.missionMode === "cruise" || parsed.missionMode === "strike" || parsed.missionMode === "versus"
           ? parsed.missionMode
           : base.missionMode,
+      missionStyle: parsed.missionStyle === "endless" ? "endless" : "operation",
       daylight:
         parsed.daylight === "live" || parsed.daylight === "fixed" || parsed.daylight === "cycle"
           ? parsed.daylight

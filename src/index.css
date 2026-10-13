@@ -728,3 +728,21 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .dispatch-nav { padding: 8px 0; }
   .menu-footer { font-size: 9px; letter-spacing: 0.04em; bottom: 5px; padding: 0 8px; }
 }
+
+/* Objective and debrief surfaces share the flight board's restrained styling. */
+.mission-brief { margin: 12px 0; padding: 12px 0; border-top: 1px solid rgba(150,200,230,.2); }
+.mission-brief strong { display: block; margin-top: 10px; color: #ffd250; font-size: 12px; letter-spacing: .12em; }
+.operation-panel { z-index: 2; position: absolute; left: 50%; top: 22px; transform: translateX(-50%); width: min(530px, 56vw); padding: 12px 15px; background: rgba(4,14,22,.85); border-left: 3px solid #ffd250; color: #e6eff1; font-size: 11px; line-height: 1.65; pointer-events: auto; }
+.operation-panel strong { display: flex; justify-content: space-between; gap: 12px; color: #ffd250; letter-spacing: .08em; }
+.operation-panel strong span, .operation-panel small { color: #a9c8d6; }
+.operation-panel.success { border-color: #92efad; }
+.operation-panel.failure { border-color: #ff8165; }
+.operation-warning { display: block; color: #ff8165; }
+.operation-bearing { color: #9debdc; display: flex; gap: 9px; }
+.operation-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.operation-actions .world-chip { font-size: 9px; padding: 7px; }
+.operation-stats { margin: 18px 0; color: #a9c8d6; font-size: 12px; line-height: 1.7; }
+.operation-debrief { max-width: 620px; }
+@media (max-width: 850px) { .operation-panel { top: 95px; width: 56vw; font-size: 9px; padding: 8px; } .operation-panel strong { flex-direction: column; gap: 0; } }
+
+.operation-radio-update { display: block; margin-top: 6px; padding-top: 5px; border-top: 1px solid rgba(150,200,230,.15); font-size: 10px; line-height: 1.5; }

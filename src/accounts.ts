@@ -166,6 +166,7 @@ export function profileOf(s: Settings): GamestateProfile {
     version: 1,
     aircraft: s.aircraft,
     missionMode: s.missionMode,
+    missionStyle: s.missionStyle ?? "operation",
     daylight: s.daylight,
     timeOfDay: s.timeOfDay,
     volume: s.volume,
@@ -194,6 +195,7 @@ export function applyGamestate(current: Settings, profile: GamestateProfile): Se
   if (profile.missionMode === "dogfight" || profile.missionMode === "cruise" || profile.missionMode === "strike" || profile.missionMode === "versus") {
     next.missionMode = profile.missionMode;
   }
+  if (profile.missionStyle === "operation" || profile.missionStyle === "endless") next.missionStyle = profile.missionStyle;
   if (profile.daylight === "live" || profile.daylight === "fixed" || profile.daylight === "cycle") {
     next.daylight = profile.daylight;
   }

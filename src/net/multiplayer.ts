@@ -1,4 +1,10 @@
 import type { BattleAction, BattleSnapshot, BattleShot, BattleMissiles } from "./versus";
+import { validSharedCombat, validEnemyFire, type SharedCombat, type EnemyFire } from "../sim/combatSnapshot";
+import type { MissionStyle } from "../sim/operations";
+export interface OperationLaunch { id: number; seed: number; style: MissionStyle; origin?: { x: number; z: number; heading: number; carrier?: number } }
+function validOperationLaunch(p: OperationLaunch): boolean {
+  return Number.isSafeInteger(p.id) && p.id > 0 && Number.isSafeInteger(p.seed) && (p.style === "operation" || p.style === "endless") && (!p.origin || [p.origin.x,p.origin.z,p.origin.heading].every(Number.isFinite) && (p.origin.carrier === undefined || Number.isSafeInteger(p.origin.carrier) && p.origin.carrier >= 0));
+}
 // Multiplayer over WebRTC data channels.
 //
 // There is no hosted server. Two browsers meet through the PeerJS signalling
@@ -102,15 +108,18 @@ export interface NetHandlers {
   onPilotLeave?: (id: string) => void;
   onPose?: (id: string, pose: RemotePose) => void;
   /** A wingman started a sortie; everyone still in the lobby is invited along. */
-  onLaunch?: (mission: MissionKind, carrier: number) => void;
+  onLaunch?: (mission: MissionKind, carrier: number, profile?: OperationLaunch) => void;
+  onMissionStyle?: (style: MissionStyle) => void;
+  onCombat?: (frame: SharedCombat) => void;
+  onEnemyFire?: (shot: EnemyFire) => void;
   /** The room's fight, streamed by the host. */
   onEnemies?: (snap: EnemySnapshot) => void;
   /** The room's mission profile changed — the host is the one who set it. */
   onMode?: (mode: MissionMode) => void;
   /** A wingman's rounds landed on an enemy the host owns. */
-  onHit?: (id: number, dmg: number) => void;
+  onHit?: (id: number, dmg: number, combatId?: number) => void;
   /** A wingman's weapon landed on the hostile boat. */
-  onCarrierHit?: (dmg: number) => void;
+  onCarrierHit?: (dmg: number, combatId?: number) => void;
   /** A pilot spoke on the room's radio. */
   onChat?: (msg: ChatMsg) => void;
   /** One-way delay measured on one pilot's link, in ms. */
@@ -342,26 +351,28 @@ interface RosterEntry {
   host: boolean;
 }
 
-interface RoomLaunch { mission: MissionKind; carrier: number }
+interface RoomLaunch { mission: MissionKind; carrier: number; profile?: OperationLaunch }
 
 type Control =
   | { t: "hello"; name: string; aircraft: AircraftId; mode: MissionMode; owner?: string }
-  | { t: "roster"; peers: RosterEntry[]; mode: MissionMode; allowLateJoin?: boolean; launch?: RoomLaunch | null }
+  | { t: "roster"; peers: RosterEntry[]; mode: MissionMode; style?: MissionStyle; allowLateJoin?: boolean; launch?: RoomLaunch | null }
+  | { t: "combat"; frame: SharedCombat }
+  | { t: "enemyFire"; shots: EnemyFire[] }
   | { t: "roomPolicy"; allowLateJoin: boolean; launch: RoomLaunch | null }
   | { t: "reject"; reason: "started" }
   | { t: "join"; peer: RosterEntry }
   | { t: "bye"; id: string }
   | { t: "name"; name: string; aircraft: AircraftId }
-  | { t: "mode"; mode: MissionMode }
+  | { t: "mode"; mode: MissionMode; style?: MissionStyle }
   | { t: "fleet"; seconds: number }
   | { t: "host" }
-  | { t: "hit"; id: number; dmg: number }
-  | { t: "cvhit"; dmg: number }
+  | { t: "hit"; id: number; dmg: number; combatId?: number }
+  | { t: "cvhit"; dmg: number; combatId?: number }
   | { t: "battleAction"; action: BattleAction }
   | { t: "battleState"; snapshot: BattleSnapshot }
   | { t: "battleShot"; shot: BattleShot }
   | { t: "battleMissiles"; snapshot: BattleMissiles }
-  | { t: "launch"; mission: MissionKind; carrier: number }
+  | { t: "launch"; mission: MissionKind; carrier: number; profile?: OperationLaunch }
   | { t: "chat"; from: string; text: string };
 
 // ---------------------------------------------------------------------------
@@ -521,6 +532,9 @@ export class Multiplayer {
   private aircraft: AircraftId = DEFAULT_AIRCRAFT;
   /** The room's mission profile. The host owns it; everyone else follows. */
   private mode: MissionMode = "cruise";
+  private missionStyle: MissionStyle = "operation";
+  private combatWire: string | null = null;
+  private combatSent = new WeakMap<DataConnection, string>();
   private allowLateJoin = true;
   private roomLaunch: RoomLaunch | null = null;
   private admitted = new Set<string>();
@@ -796,6 +810,7 @@ export class Multiplayer {
     this.allowLateJoin = true;
     this.roomLaunch = null;
     this.admitted.clear();
+    this.combatWire = null; this.combatSent = new WeakMap();
   }
 
   private fail(err: unknown): void {
@@ -1050,7 +1065,8 @@ export class Multiplayer {
             { id: this.rosterId(), owner: this.selfId, name: this.name, aircraft: this.aircraft, host: true },
             ...this.pilots.values(),
           ].filter((p) => p.id !== conn.peer);
-          this.send(conn, { t: "roster", peers: roster, mode: this.mode, allowLateJoin: this.allowLateJoin, launch: this.roomLaunch } satisfies Control);
+          this.send(conn, { t: "roster", peers: roster, mode: this.mode, style: this.missionStyle, allowLateJoin: this.allowLateJoin, launch: this.roomLaunch } satisfies Control);
+          if (this.combatWire) conn.send(this.combatWire);
           for (const other of this.conns.values()) {
             if (other === conn || !other.open) continue;
             this.send(other, { t: "join", peer: entry } satisfies Control);
@@ -1070,6 +1086,7 @@ export class Multiplayer {
         // array used to throw straight out of the data handler.
         if (!this.isHostConn(conn) || !Array.isArray(msg.peers)) break;
         this.adoptMode(msg.mode);
+        this.adoptMissionStyle(msg.style);
         this.adoptRoomPolicy(msg.allowLateJoin, msg.launch);
         for (const entry of msg.peers) {
           if (!entry || typeof entry.id !== "string" || entry.id === this.selfId) continue;
@@ -1084,11 +1101,19 @@ export class Multiplayer {
         }
         this.emit();
         // A late joiner enters the running sortie with the room's launch point.
-        if (this.roomLaunch) this.handlers.onLaunch?.(this.roomLaunch.mission, this.roomLaunch.carrier);
+        if (this.roomLaunch) this.handlers.onLaunch?.(this.roomLaunch.mission, this.roomLaunch.carrier, this.roomLaunch.profile);
         break;
       }
       case "roomPolicy":
         if (this.isHostConn(conn)) { this.adoptRoomPolicy(msg.allowLateJoin, msg.launch); this.emit(); }
+        break;
+      case "combat":
+        if (this.isHostConn(conn) && (this.mode === "strike" || this.mode === "dogfight") && validSharedCombat(msg.frame) && msg.frame.scenario === (this.mode === "strike" ? "strike" : "dogfight") && !!msg.frame.operation === (this.missionStyle === "operation") && (!this.roomLaunch?.profile || this.roomLaunch.profile.id === msg.frame.id)) this.handlers.onCombat?.(msg.frame);
+        break;
+      case "enemyFire":
+        if (this.isHostConn(conn) && Array.isArray(msg.shots) && msg.shots.length <= 32) for (const shot of msg.shots) {
+          if (validEnemyFire(shot) && shot.combatId === this.roomLaunch?.profile?.id) this.handlers.onEnemyFire?.(shot);
+        }
         break;
       case "reject":
         if (this.isHostConn(conn) && msg.reason === "started") {
@@ -1128,15 +1153,16 @@ export class Multiplayer {
         if (!this.isHostConn(conn)) break;
         if (msg.mission !== "carrier" && msg.mission !== "airfield") break;
         if (!Number.isFinite(msg.carrier)) break;
-        this.roomLaunch = { mission: msg.mission, carrier: Math.trunc(msg.carrier) };
+        if (msg.profile && !validOperationLaunch(msg.profile)) break;
+        this.roomLaunch = { mission: msg.mission, carrier: Math.trunc(msg.carrier), profile: msg.profile };
         this.emit();
-        this.handlers.onLaunch?.(msg.mission, Math.trunc(msg.carrier));
+        this.handlers.onLaunch?.(msg.mission, Math.trunc(msg.carrier), msg.profile);
         break;
       case "fleet":
         if (this.isHostConn(conn) && Number.isFinite(msg.seconds) && msg.seconds >= 0) this.handlers.onFleetClock?.(msg.seconds);
         break;
       case "mode":
-        if (this.isHostConn(conn)) this.adoptMode(msg.mode);
+        if (this.isHostConn(conn)) { this.adoptMode(msg.mode); this.adoptMissionStyle(msg.style); }
         break;
       case "battleShot": {
         const shot = msg.shot;
@@ -1189,12 +1215,16 @@ export class Multiplayer {
           Number.isFinite(msg.dmg) &&
           msg.dmg > 0
         ) {
-          this.handlers.onHit?.(msg.id, msg.dmg);
+          if (this.roomLaunch?.profile?.style === "operation" && (this.mode === "strike" || this.mode === "dogfight") && msg.combatId !== this.roomLaunch.profile.id) break;
+          if (msg.combatId !== undefined && msg.combatId !== this.roomLaunch?.profile?.id) break;
+          this.handlers.onHit?.(msg.id, msg.dmg, msg.combatId);
         }
         break;
       case "cvhit":
         if (this.pilots.has(conn.peer) && Number.isFinite(msg.dmg) && msg.dmg > 0) {
-          this.handlers.onCarrierHit?.(msg.dmg);
+          if (this.roomLaunch?.profile?.style === "operation" && (this.mode === "strike" || this.mode === "dogfight") && msg.combatId !== this.roomLaunch.profile.id) break;
+          if (msg.combatId !== undefined && msg.combatId !== this.roomLaunch?.profile?.id) break;
+          this.handlers.onCarrierHit?.(msg.dmg, msg.combatId);
         }
         break;
       case "bye": {
@@ -1250,8 +1280,8 @@ export class Multiplayer {
   private adoptRoomPolicy(allow: boolean | undefined, launch: RoomLaunch | null | undefined): void {
     if (typeof allow === "boolean") this.allowLateJoin = allow;
     if (launch === null) this.roomLaunch = null;
-    else if (launch && (launch.mission === "carrier" || launch.mission === "airfield") && Number.isFinite(launch.carrier)) {
-      this.roomLaunch = { mission: launch.mission, carrier: Math.trunc(launch.carrier) };
+    else if (launch && (launch.mission === "carrier" || launch.mission === "airfield") && Number.isFinite(launch.carrier) && (!launch.profile || validOperationLaunch(launch.profile))) {
+      this.roomLaunch = { mission: launch.mission, carrier: Math.trunc(launch.carrier), profile: launch.profile };
     }
   }
 
@@ -1324,11 +1354,12 @@ export class Multiplayer {
    * whoever takes off is the one who tells the room which mission and which
    * boat to use; wingmen who are still in the lobby lift off with them.
    */
-  launch(mission: MissionKind, carrier: number): void {
+  launch(mission: MissionKind, carrier: number, profile?: OperationLaunch): void {
     if (!this.host || !this.online || !Number.isFinite(carrier) || (mission !== "carrier" && mission !== "airfield")) return;
-    this.roomLaunch = { mission, carrier: Math.trunc(carrier) };
+    this.roomLaunch = { mission, carrier: Math.trunc(carrier), profile };
+    this.combatWire = null;
     this.emit();
-    const msg = JSON.stringify({ t: "launch", mission, carrier } satisfies Control);
+    const msg = JSON.stringify({ t: "launch", mission, carrier, profile } satisfies Control);
     for (const conn of this.conns.values()) {
       if (!conn.open) continue;
       try {
@@ -1352,8 +1383,35 @@ export class Multiplayer {
    */
   setMode(mode: MissionMode): void {
     if (mode === this.mode) return;
-    this.mode = mode;
-    this.sendAll(JSON.stringify({ t: "mode", mode } satisfies Control));
+    this.mode = mode; this.combatWire = null;
+    this.sendAll(JSON.stringify({ t: "mode", mode, style: this.missionStyle } satisfies Control));
+  }
+
+  setMissionStyle(style: MissionStyle): void {
+    if (style === this.missionStyle || !this.host) return;
+    this.missionStyle = style; this.combatWire = null;
+    if (this.roomLaunch?.profile) this.roomLaunch.profile.style = style;
+    this.sendAll(JSON.stringify({ t: "mode", mode: this.mode, style } satisfies Control));
+  }
+  private adoptMissionStyle(style: MissionStyle | undefined): void {
+    if (this.host || (style !== "operation" && style !== "endless") || style === this.missionStyle) return;
+    this.missionStyle = style;
+    if (this.roomLaunch?.profile) this.roomLaunch.profile.style = style;
+    this.handlers.onMissionStyle?.(style);
+  }
+  publishCombat(frame: SharedCombat): void {
+    if (!this.host || !this.online) return;
+    this.combatWire = JSON.stringify({ t: "combat", frame } satisfies Control); this.flushCombat();
+  }
+  sendEnemyFire(shots: EnemyFire[]): void {
+    if (this.host && this.online && shots.length) this.sendAll(JSON.stringify({ t: "enemyFire", shots: shots.slice(0, 32) } satisfies Control));
+  }
+  private flushCombat(): void {
+    if (!this.host || !this.combatWire) return;
+    for (const c of this.conns.values()) {
+      if (!c.open || this.combatSent.get(c) === this.combatWire || (c.dataChannel?.bufferedAmount ?? 0) > 4096 || ((c as DataConnection & { bufferSize?: number }).bufferSize ?? 0) > 8) continue;
+      try { c.send(this.combatWire); this.combatSent.set(c, this.combatWire); } catch { /* send newest after drain */ }
+    }
   }
 
   /**
@@ -1424,13 +1482,13 @@ export class Multiplayer {
   }
 
   /** Mirror: our rounds landed on an aircraft the host owns. */
-  hitBandit(id: number, dmg: number): void {
-    this.sendAll(JSON.stringify({ t: "hit", id, dmg } satisfies Control));
+  hitBandit(id: number, dmg: number, combatId?: number): void {
+    this.sendAll(JSON.stringify({ t: "hit", id, dmg, combatId } satisfies Control));
   }
 
   /** Mirror: our weapon landed on the hostile boat. */
-  hitCarrier(dmg: number): void {
-    this.sendAll(JSON.stringify({ t: "cvhit", dmg } satisfies Control));
+  hitCarrier(dmg: number, combatId?: number): void {
+    this.sendAll(JSON.stringify({ t: "cvhit", dmg, combatId } satisfies Control));
   }
 
   /**
@@ -1545,6 +1603,7 @@ export class Multiplayer {
   private tick = (): void => {
     this.flushBattleMissiles();
     this.flushFleetClock();
+    this.flushCombat();
     if (this.status !== "online" || this.conns.size === 0) return;
     // A hidden tab is throttled to ~1 Hz by the browser; zeroing velocity makes
     // the wingman hold position instead of extrapolating off into the sunset.

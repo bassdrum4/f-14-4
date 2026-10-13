@@ -9,6 +9,7 @@ import type { Sim, HudSnapshot } from "../sim/engine";
 import type { ChatMsg } from "../net/multiplayer";
 import { DEFAULT_SEED } from "../sim/world";
 import type { DaylightMode } from "../settings";
+import { operationTitle, phaseObjective, type OperationHud } from "../sim/operations";
 
 export function useHud(sim: Sim | null): HudSnapshot {
   const subscribe = (cb: () => void) => {
@@ -58,6 +59,7 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
   const hud = useHud(sim);
   return (
     <div className="hud-root">
+      {hud.operation && <OperationPanel key={hud.operation.state.id} sim={sim} hud={hud} operation={hud.operation} />}
       {hud.battle && <div className="battle-board">
         <strong>HEAD-TO-HEAD <span>ROOM {hud.netRoom}</span></strong>
         <div className="battle-columns"><span>PILOT</span><span>K / D</span><span>HULL</span></div>
@@ -126,7 +128,7 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
           <div>FIELD {hud.distFieldKm.toFixed(1)} KM · {Math.round(hud.bearingFieldDeg)}°</div>
           {hud.dfActive && !hud.battle && (
             <div>
-              {hud.dfStrike ? "TARGETS" : "BANDITS"} {hud.dfBandits} · {hud.dfStrike ? "CLEARED" : "TAGGED"} {hud.dfKills} · WAVE {hud.dfWave} · NEAR {hud.dfNearestKm.toFixed(1)} KM {Math.round(hud.dfNearestBrgDeg)}°
+              {hud.dfStrike ? "TARGETS" : "BANDITS"} {hud.dfBandits} · {hud.dfStrike ? "CLEARED" : "TAGGED"} {hud.dfKills} · {hud.operation ? operationTitle(hud.operation.state) : `WAVE ${hud.dfWave}`} · NEAR {hud.dfNearestKm.toFixed(1)} KM {Math.round(hud.dfNearestBrgDeg)}°
             </div>
           )}
           {hud.dfCarrier && (
@@ -178,9 +180,33 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
       {hud.catPhase === "charging" && (
         <div className="hud-cat charging">CAT TENSION {Math.round(hud.catProgress * 100)}%</div>
       )}
-      {hud.banner && <div className="hud-banner">{hud.banner}</div>}
+      {hud.banner && !hud.operation && <div className="hud-banner">{hud.banner}</div>}
     </div>
   );
+}
+
+function OperationPanel({ sim, hud, operation: op }: { sim: Sim | null; hud: HudSnapshot; operation: OperationHud }) {
+  const [recovering, setRecovering] = useState(false);
+  const s = op.state, resolved = s.status === "success" || s.status === "failure";
+  const timer = op.eta === null ? "" : `${Math.floor(op.eta / 60)}:${String(Math.floor(op.eta % 60)).padStart(2, "0")}`;
+  return <div className={"operation-panel " + s.status} aria-live="polite" style={{ pointerEvents: sim?.phase === "flying" ? "auto" : "none" }}>
+    <strong>{operationTitle(s)} <span>{s.kind === "fleet" ? `FRIENDLY ${hud.carrierMarkers[s.fleetCarrier]?.name ?? "CARRIER"} ${Math.round(s.fleetHull)}%` : s.status === "briefing" ? "BRIEFING" : `${s.stopped}/2 STOPPED`}</span></strong>
+    <div>{phaseObjective(s)}</div>
+    {timer && !resolved && <small>{s.kind === "convoy" ? "NEXT ARRIVAL" : s.phase === "forming" || s.phase === "counterattack" ? "NEXT LAUNCH" : "ESTIMATED CONTACT"} {timer}</small>}
+    {op.warning && <b className="operation-warning">ESCORT TRACKING — BREAK OR SUPPRESS THE ESCORT</b>}
+    {op.target && !resolved && <div className="operation-bearing">
+      <span style={{ display: "inline-block", transform: `rotate(${op.target.bearing - hud.playerHeadingDeg}deg)` }}>▲</span>
+      {op.target.label} · {op.target.km.toFixed(1)} KM · {Math.round(op.target.bearing)}°
+      {s.kind === "fleet" && ` · ${Math.round(op.target.altitudeFt).toLocaleString()} FT · CLOSURE ${Math.round(op.target.closureKt)} KT`}
+    </div>}
+    {hud.banner && <small className="operation-radio-update">{hud.banner}</small>}
+    {resolved && !recovering && sim?.phase === "flying" && <div className="operation-actions">
+      <button className="world-chip" onClick={() => sim?.finishOperation()}>FINISH OPERATION</button>
+      {s.status === "success" && <button className="world-chip" onClick={() => setRecovering(true)}>RECOVER FOR BONUS</button>}
+      {(hud.netStatus !== "online" || hud.netHost) && <button className="world-chip" onClick={() => s.status === "failure" ? sim?.restart() : sim?.nextOperation()}>{s.status === "failure" ? "RETRY OPERATION" : "NEXT OPERATION"}</button>}
+    </div>}
+    {resolved && recovering && <small>OBJECTIVE SECURED · OPTIONAL RECOVERY · {sim?.phase === "flying" && <button className="world-chip" onClick={() => sim.finishOperation()}>DEBRIEF</button>}</small>}
+  </div>;
 }
 
 function Gauge({
@@ -500,6 +526,19 @@ function TargetBoxes({ sim, gunCross }: { sim: Sim | null; gunCross: boolean }) 
       if (gunCross) drawGunCrosshair(ctx, w, h, sim, hud);
       drawOrdnance(ctx, w, h, sim, hud);
       drawApproach(ctx, w, h, hud);
+      const objective = hud.operation?.target;
+      if (objective && hud.operation?.state.status !== "success" && hud.operation?.state.status !== "failure") {
+        const view = sim.projectOffscreen(objective.x, objective.y, objective.z, out, 85);
+        ctx.strokeStyle = "#ffd250"; ctx.fillStyle = "#ffd250"; ctx.lineWidth = 2;
+        if (!view.inside) {
+          const angle = Math.atan2(out.y - h / 2, out.x - w / 2);
+          ctx.save(); ctx.translate(out.x, out.y); ctx.rotate(angle); ctx.beginPath();
+          ctx.moveTo(12, 0); ctx.lineTo(-7, -6); ctx.lineTo(-7, 6); ctx.closePath(); ctx.fill(); ctx.restore();
+        } else { ctx.strokeRect(out.x - 17, out.y - 17, 34, 34); }
+        ctx.font = "600 11px ui-monospace, monospace";
+        ctx.textAlign = out.x > w * .75 ? "right" : "left";
+        ctx.fillText(`${objective.label} ${objective.km.toFixed(1)} KM`, out.x, out.y + 30); ctx.textAlign = "left";
+      }
       if (!hud.dfActive) return;
 
       // taking hits: a soft red wash over the view
@@ -575,7 +614,7 @@ function TargetBoxes({ sim, gunCross }: { sim: Sim | null; gunCross: boolean }) 
         ctx.stroke();
         ctx.fillStyle = "rgba(255, 150, 130, 0.9)";
         ctx.font = "10px ui-monospace, monospace";
-        ctx.fillText(`${s.km.toFixed(1)}`, tx + r + 4, ty + 3);
+        ctx.fillText(`${s.label ? s.label + " · " : ""}${s.km.toFixed(1)} KM`, tx + r + 4, ty + 3);
         if (s.health !== undefined && s.health < 1) {
           ctx.fillStyle = "rgba(6,18,26,0.85)";
           ctx.fillRect(tx - 22, ty + r + 5, 44, 5);

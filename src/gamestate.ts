@@ -37,6 +37,7 @@ export interface GamestateProfile {
   bindings: Record<string, string>;
   /** Where the last sortie began (the boat you landed on, or the runway).
    *  Optional: profiles saved before it existed simply have no opinion. */
+  missionStyle?: "operation" | "endless";
   launchKind?: "carrier" | "airfield";
   launchCarrier?: number;
 }

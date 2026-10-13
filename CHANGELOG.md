@@ -6,6 +6,32 @@ arrived in large exports with stale 1.0.0 metadata; see
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md) for the surviving
 timeline, recovered intermediate build, and remaining history gaps.
 
+## 1.8.0 — 2026-10-13
+
+- Make Strike default to Stop the Convoy: three transports follow a validated
+  deep-water route, damage slows/disables propulsion, two stops secure the
+  objective and two arrivals fail it. Radar destruction doubles escort tracking
+  delay; AA gives advance warnings and fires finite bursts with cooldowns.
+- Make Aggressor default to Fleet Defense: a scout, two escorted bomber
+  attacks, a 60-second counterattack/rearm window and a final split approach.
+  Scouts stopped before reporting buy 45 seconds. Bombers drop visible guided
+  bombs on the friendly fleet; friendly-carrier hull determines failure.
+  Flight-deck damage suppresses launches independently of sinking the ship.
+  Escorts have finite gun/missile stores, and damaged/empty aircraft withdraw.
+- Add role labels, objective HUD, ETA, bomber altitude/closure and persistent
+  offscreen arrows. A single laser designation follows a moving ship/carrier
+  and remains latched through a salvo. Keep bombing controls, confirmation and the
+  early guns-only fighter difficulty. Retain original modes as Endless Practice.
+- Add finite outcomes, debriefs, Retry Same Operation, Next Operation and
+  optional recovery bonuses with wire number. Landing/rearming retains combat
+  progress; a later recovery crash cannot erase secured mission success.
+- Synchronize Strike targets and complete operation state in co-op: hull,
+  phases, deadlines, enemy stores, launch queues and inbound bombs. Host-owned
+  gun/missile events reach all pilots. Late joiners catch up and takeover keeps
+  the operation. Scope damage/state by attempt ID and coalesce congested frames.
+- Add operation and network regressions, exercise the actual UI in a browser,
+  and regenerate both standalone builds. Keep all tests local, off Actions.
+
 ## 1.7.3 — 2026-10-13
 
 - Remove waiting-lobby chat. Keep Enter chat during multiplayer flight,

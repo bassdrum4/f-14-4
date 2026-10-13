@@ -61,7 +61,9 @@ import {
   type NetState,
   type NetStatus,
   type PeerFactory,
+  type OperationLaunch,
 } from "../net/multiplayer";
+import type { MissionStyle, OperationHud } from "./operations";
 
 export type Phase = "menu" | "flying" | "paused" | "result";
 
@@ -139,6 +141,7 @@ export interface HudSnapshot {
   dayPhase: DayPhase;
   // dogfight / strike mode
   dfActive: boolean;
+  operation?: OperationHud;
   /** True in strike mode: contacts are targets, not bandits. */
   dfStrike: boolean;
   dfHull: number;
@@ -155,7 +158,7 @@ export interface HudSnapshot {
   dfHitT: number;
   dfConfirmation: { text: string; kind: "hit" | "destroyed"; remaining: number } | null;
   dfDamageT: number;
-  dfSpots: Array<{ x: number; y: number; z: number; lx: number; ly: number; lz: number; km: number; health?: number }>;
+  dfSpots: Array<{ x: number; y: number; z: number; lx: number; ly: number; lz: number; km: number; health?: number; label?: string }>;
   /** The airframe the player is flying, for the HUD label. */
   aircraftName: string;
   dfBombs: number;
@@ -290,6 +293,12 @@ function idleNetState(): NetState {
 }
 
 export class Sim {
+  private operationId = 1;
+  private operationSeed = 1;
+  private operationOrigin: OperationLaunch["origin"];
+  private combatSentAt = -Infinity;
+  private allPilotsDown = 0;
+  operationDebrief = false;
   phase: Phase = "menu";
   private renderer: WorldRenderer;
   private rig = new CameraRig();
@@ -432,13 +441,16 @@ export class Sim {
       onPilot: (id, name, aircraft) => this.remoteFleet.spawn(id, aircraft, name),
       onPilotLeave: (id) => this.remoteFleet.remove(id),
       onPose: (id, pose) => this.remoteFleet.push(id, pose, performance.now()),
-      onLaunch: (mission, carrier) => this.followLaunch(mission, carrier),
+      onLaunch: (mission, carrier, profile) => this.followLaunch(mission, carrier, profile),
+      onMissionStyle: style => this.applyRoomStyle(style),
+      onCombat: frame => { this.df.setMirror(!this.netState.host, this.state); this.df.applySharedSnapshot(frame, performance.now()); },
+      onEnemyFire: shot => this.df.receiveEnemyFire(shot),
       // The room's fight, from whoever is hosting it. Our guns are still ours;
       // only the aircraft are theirs.
       onEnemies: (snap) => { if (this.settings.missionMode !== "versus") this.df.applyRemoteSnapshot(snap, performance.now()); },
       onMode: (mode) => this.applyRoomMode(mode),
-      onHit: (id, dmg) => this.df.applyRemoteHit(id, dmg, this.state),
-      onCarrierHit: (dmg) => this.df.applyRemoteCarrierHit(dmg, this.state),
+      onHit: (id, dmg, epoch) => this.df.applyRemoteHit(id, dmg, this.state, epoch),
+      onCarrierHit: (dmg, epoch) => { if (epoch === undefined || epoch === this.df.operationEpoch) this.df.applyRemoteCarrierHit(dmg, this.state); },
       onChat: (msg) => this.addChat(msg),
       onLinkDelay: (id, ms) => this.remoteFleet.setLinkDelay(id, ms),
       onBattleAction: (sender, action) => this.receiveBattleAction(sender, action),
@@ -460,7 +472,7 @@ export class Sim {
     const resolutionChanged = s.adaptiveResolution !== this.settings.adaptiveResolution;
     const daylightChanged =
       s.daylight !== this.settings.daylight || s.timeOfDay !== this.settings.timeOfDay;
-    const modeChanged = s.missionMode !== this.settings.missionMode;
+    const modeChanged = s.missionMode !== this.settings.missionMode || s.missionStyle !== this.settings.missionStyle;
     const aircraftChanged = s.aircraft !== this.settings.aircraft;
     const launchChanged = s.launchKind !== this.settings.launchKind || s.launchCarrier !== this.settings.launchCarrier;
     const restoreLaunch = launchChanged && this.phase === "menu" && this.netState.status !== "online";
@@ -493,6 +505,8 @@ export class Sim {
       // A mission profile is the room's profile: tell everyone the moment the
       // host (the only pilot with these chips) changes it.
       this.net.setMode(s.missionMode);
+      this.net.setMissionStyle(s.missionStyle ?? "operation");
+      this.df.configureOperations(s.missionStyle !== "endless", this.operationSeed, this.operationId, this.operationOrigin);
       const flying = this.phase === "flying" || this.phase === "paused";
       const combat = s.missionMode === "dogfight" || s.missionMode === "strike";
       const strike = s.missionMode === "strike";
@@ -550,6 +564,7 @@ export class Sim {
     // Always the pilot's own boat: the launch point follows where they last
     // flew from (see rememberRecovery), so a sortie picks up where it left off
     // instead of hopping to the next ship in the fleet.
+    this.operationId = Math.max(Date.now(), this.operationId + 1); this.operationOrigin = undefined;
     this.beginMission(mission, this.spawnCarrier);
   }
 
@@ -567,7 +582,9 @@ export class Sim {
       this.battle = { match: this.battleReferee.match, pilots: [] };
       this.battleTickAt = 0;
     }
-    this.net.launch(mission, this.spawnCarrier);
+    this.operationId = Math.max(Date.now(), this.operationId + 1);
+    if (!this.operationOrigin) { const spawn = spawnAircraft(mission, this.spawnCarrier, this.settings.aircraft, this.settings.bindings); this.operationOrigin = { x: spawn.pos.x, z: spawn.pos.z, heading: spawn.headingDeg, carrier: this.spawnCarrier }; }
+    this.net.launch(mission, this.spawnCarrier, { id: this.operationId, seed: this.operationSeed, style: this.settings.missionStyle ?? "operation", origin: this.operationOrigin });
     this.beginMission(mission, this.spawnCarrier);
   }
 
@@ -576,16 +593,18 @@ export class Sim {
   }
 
   /** A wingman took off: join the same strip, on the same boat. */
-  private followLaunch(mission: MissionKind, carrier: number): void {
+  private followLaunch(mission: MissionKind, carrier: number, profile?: OperationLaunch): void {
     // Only a pilot still in the menu comes along — one already flying (or
     // reading the pause menu) is left to finish the sortie they are on.
-    if (this.phase !== "menu") return;
+    if (this.phase !== "menu" && (!profile || profile.id === this.operationId)) return;
+    if (profile) { this.operationId = profile.id; this.operationSeed = profile.seed; this.operationOrigin = profile.origin; this.applyRoomStyle(profile.style); }
     const boats = carriers().length;
     this.spawnCarrier = ((Math.floor(carrier) % boats) + boats) % boats;
     this.beginMission(mission, this.spawnCarrier);
   }
 
   private beginMission(mission: MissionKind, carrierIndex: number): void {
+    this.operationDebrief = false; this.allPilotsDown = 0; this.combatSentAt = -Infinity;
     this.mission = mission;
     this.recoveryPending = false;
     this.spawnCarrier = clampCarrier(carrierIndex);
@@ -602,6 +621,9 @@ export class Sim {
     this.battleRecoveryLife = -1;
     // size the racks and hull for this airframe before the fight is armed
     this.df.setAircraft(this.state);
+    if (!this.operationOrigin) this.operationOrigin = { x: this.state.pos.x, z: this.state.pos.z, heading: this.state.headingDeg, carrier: this.spawnCarrier };
+    this.df.configureOperations(this.settings.missionStyle !== "endless", this.operationSeed, this.operationId, this.operationOrigin);
+    this.df.setMirror(this.netState.status === "online" && !this.netState.host && this.settings.missionMode !== "versus", this.state);
     // Mission modes: the bandits / targets are out there from the start, but
     // the fight itself only begins when the jet leaves the deck/runway — the
     // launch is part of it.
@@ -646,6 +668,7 @@ export class Sim {
   }
 
   resume(): void {
+    this.operationDebrief = false;
     // Back in the air: the in-flight settings request is spent, so the next
     // Escape opens the plain pause screen.
     this.settingsRequest = false;
@@ -675,8 +698,23 @@ export class Sim {
 
   restart(): void {
     // retry the same mission from the same carrier
-    this.beginMission(this.mission, this.spawnCarrier);
+    if (this.netState.status === "online") {
+      if (this.netState.host) this.startRoomMission(this.mission);
+      else this.pushBanner("THE HOST CHOOSES RETRY OR NEXT OPERATION");
+      return;
+    }
+    this.operationId = Math.max(Date.now(), this.operationId + 1); this.beginMission(this.mission, this.spawnCarrier);
   }
+
+  nextOperation(): void {
+    if (this.netState.status === "online" && !this.netState.host) return;
+    this.operationSeed++; this.operationOrigin = undefined; this.restart();
+  }
+  finishOperation(): void {
+    if (!this.df.operationState) return;
+    this.operationDebrief = true; this.setPhase("paused"); this.updateHud();
+  }
+  recoverOperation(): void { this.operationDebrief = false; this.resume(); }
 
   /**
    * A dead (or trapped) pilot in a live room goes back to the room's lobby
@@ -715,7 +753,7 @@ export class Sim {
     this.endPod();
     this.crashSeq = null;
     this.breakupHide = false;
-    this.df.clear();
+    if (!(this.netState.status === "online" && this.df.operationState)) this.df.clear();
     this.state = spawnAircraft(this.mission, this.spawnCarrier, this.settings.aircraft, this.settings.bindings);
     this.rig.resetFollow();
     this.updateJetPose(1);
@@ -866,6 +904,11 @@ export class Sim {
     this.applySettings(next);
     for (const fn of this.settingsListeners) fn(next);
   }
+  private applyRoomStyle(style: MissionStyle): void {
+    if ((this.settings.missionStyle ?? "operation") === style) return;
+    const next: Settings = { ...this.settings, missionStyle: style };
+    this.applySettings(next); for (const fn of this.settingsListeners) fn(next);
+  }
 
   get netSnapshot(): NetState {
     return this.netState;
@@ -876,6 +919,7 @@ export class Sim {
    * mesh from the previous session cannot bleed into this one.
    */
   openRoom(callsign: string, room: string): void {
+    this.operationOrigin = undefined;
     this.remoteFleet.clear();
     this.chatLog = [];
     // Open/join set the room code, and the room code is the world: the terrain
@@ -883,9 +927,11 @@ export class Sim {
     this.battle = { match: 0, pilots: [] };
     this.net.open(room, callsign, this.settings.aircraft);
     this.net.setMode(this.settings.missionMode);
+    this.net.setMissionStyle(this.settings.missionStyle ?? "operation");
   }
 
   joinRoom(callsign: string, room: string): void {
+    this.operationOrigin = undefined;
     this.remoteFleet.clear();
     this.chatLog = [];
     this.battle = { match: 0, pilots: [] };
@@ -1018,6 +1064,13 @@ export class Sim {
     // evolving while the wreck replay plays out — but freezes on pause.
     if (this.phase === "flying" || this.phase === "result") this.explosions.step(frameDt);
 
+    // The host advances the shared operation while opening menus or recovering.
+    // Solo pause freezes combat; a landing decision keeps the convoy moving.
+    if (this.df.operationState && (this.phase !== "flying" || this.crashSeq) && (this.netState.status === "online" || this.phase === "result") && !this.df.mirroring) {
+      this.state.time += frameDt; this.df.step(frameDt, this.state, false, false, true); this.updateHud();
+    }
+    this.checkOperationPilots(frameDt);
+
     this.advanceDaylight(frameDt);
     // Multiplayer: interpolate the wingmen and hand our own pose to the net
     // layer, which sends it at its own fixed rate rather than per frame.
@@ -1027,6 +1080,7 @@ export class Sim {
       this.remoteFleet.setCombatPilots(roster ? roster.pilots.filter(p => p.ready && p.hp > 0).map(p => p.id) : null);
     }
     this.remoteFleet.update(nowMs);
+    this.startOperationWithWingman();
     this.net.publish(this.buildPose());
     this.syncFight();
     if (this.battleActive) {
@@ -1067,17 +1121,39 @@ export class Sim {
     const online = this.netState.status === "online";
     const versus = online && this.settings.missionMode === "versus";
     const mirror = online && !this.netState.host && !versus;
+    this.df.setDefenders(this.netState.self, online ? this.remoteFleet.combatTargets() : []);
     this.df.setMirror(mirror, this.state);
     if (!online) { this.df.setOpponents([]); return; }
     if (versus) { this.net.publishEnemies(null); this.syncBattle(); return; }
     if (mirror) {
       const hits = this.df.takeHits();
-      for (const h of hits) this.net.hitBandit(h.id, h.dmg);
+      for (const h of hits) this.net.hitBandit(h.id, h.dmg, h.combatId);
       const cv = this.df.takeCarrierHit();
-      if (cv > 0) this.net.hitCarrier(cv);
+      if (cv > 0) this.net.hitCarrier(cv, this.df.hasSharedCombat ? this.df.operationEpoch : undefined);
     } else {
-      this.net.publishEnemies(this.df.enemySnapshot());
+      if (this.df.hasSharedCombat) {
+        this.net.publishEnemies(null);
+        const now = performance.now();
+        if (now - this.combatSentAt >= 200) { this.combatSentAt = now; this.net.publishCombat(this.df.sharedSnapshot()); }
+        this.net.sendEnemyFire(this.df.takeEnemyFire());
+      } else this.net.publishEnemies(this.df.enemySnapshot());
     }
+  }
+
+  private checkOperationPilots(dt: number): void {
+    if (this.df.operationState?.status !== "active" || this.df.mirroring) return;
+    const selfAlive = this.phase !== "menu" && this.state.result?.kind !== "crash";
+    const others = this.netState.status === "online" ? this.remoteFleet.activePilotCount() : 0;
+    this.allPilotsDown = selfAlive || others > 0 ? 0 : this.allPilotsDown + dt;
+    if (this.allPilotsDown > 3) this.df.failOperation("All active pilots were lost before the objective was secured.");
+  }
+
+  private startOperationWithWingman(): void {
+    if (this.netState.status !== "online" || !this.netState.host || this.df.operationState?.status !== "briefing") return;
+    if (!this.remoteFleet.combatTargets().some(p => p.onGround === false)) return;
+    this.dfArmed = false;
+    if (this.settings.missionMode === "strike") this.df.beginStrike(this.state); else this.df.begin(this.state);
+    this.updateHud();
   }
 
   private get battleActive(): boolean {
@@ -1547,7 +1623,7 @@ export class Sim {
       // the pilot goes on to press REARM & CONTINUE or not.
       if (this.state.result && !this.launchRemembered) {
         this.launchRemembered = true;
-        if (this.state.result.kind !== "crash") this.rememberRecovery();
+        if (this.state.result.kind !== "crash") { this.df.recordRecovery?.(this.state.wire ?? 0); this.rememberRecovery(); }
       }
       wasAirborne = this.state.airborne;
       this.acc -= FIXED_DT;
@@ -1573,6 +1649,7 @@ export class Sim {
     if (this.battleActive && (!self?.ready || self.hp <= 0)) return;
     this.endPod();
     const landed = this.state;
+    this.df.recordRecovery?.(landed.wire ?? 0);
     // Standing on the deck it just caught a wire on, that deck is now home:
     // read it off the surface under the jet and write it into the gamestate, so
     // "rearm & continue" and the pilot's next session both start from here.
@@ -1814,6 +1891,7 @@ export class Sim {
       netPilots: this.netState.pilots.length,
       battle: this.battleActive ? this.battle : undefined,
       battleSelf: this.netState.self,
+      operation: this.df.operationHud?.(st),
       ...this.dfHud(),
     };
     // React re-renders at most ~20 Hz; the pitch-ladder canvas redraws

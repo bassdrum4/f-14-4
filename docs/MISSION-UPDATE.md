@@ -1,9 +1,9 @@
 # Mission update: convoy interdiction and fleet defense
 
-Design for the next playable update. **Not implemented in this release.**
-The current modes still run their original waves; `docs/IDEAS.md` tracks the
-larger wishlist. Start with two authored operations rather than adding many
-shallow mission names.
+**Implemented in v1.8.0:** Stop the Convoy and Fleet Defense are the default
+Strike/Aggressor operations. Endless Practice retains the original waves.
+This document records the operation rules and the planned later variants;
+`docs/IDEAS.md` tracks the wider wishlist.
 
 ## What makes the loop work
 
@@ -25,7 +25,10 @@ line. Destroying or disabling propulsion counts as stopping a transport.
 The third transport and escorts are optional bonuses. Two arrivals make the
 primary objective impossible and fail the operation immediately.
 
-Initial balancing targets below are playtest values, not measured results:
+Initial balancing values remain subject to human playtesting. The convoy
+starts roughly 9–10 minutes from arrival at 6 m/s; damaged cargo slows to 3 m/s
+and is disabled at half hull. AA tracks for 3 seconds (6 without radar), then
+fires six rounds with a 5-second cooldown, up to eight bursts:
 
 | Element | Starting design | Player decision or consequence |
 | --- | --- | --- |
@@ -108,24 +111,23 @@ a different consequence rather than an identical kill-all objective.
 
 ## Implementation order and multiplayer contract
 
-1. **Shared combat correctness first.** Current `EnemySnapshot` and binary
-   packets transmit the hostile carrier and bandits; they omit Strike targets.
-   `applyRemoteHit()` also only resolves bandit IDs. Add bounded target
-   snapshots with identity, kind, pose, health, disabled/dead state and target
-   hit handling. Mirror clients must not spawn their own targets or advance
-   waves. Verify this before adding convoy clocks or escorts.
-2. **Target readability.** Objective markers, offscreen direction, bomber
+1. **Shared combat correctness — shipped.** Operations and Strike practice
+   use bounded, versioned combat snapshots with target identity, kind, pose,
+   health, disabled/dead/arrival state and scoped target hits. Mirrors do not
+   spawn independent targets or advance waves. The older binary enemy stream
+   remains available for endless dogfights.
+2. **Target readability — shipped.** Objective markers, offscreen direction, bomber
    altitude/closure, and the current objective line. Make finding and hitting
    targets reliable before adding pressure.
-3. **Operation state.** A separate typed state machine owns phase, clock,
+3. **Operation state — shipped.** A separate typed state machine owns phase, clock,
    objectives, outcome and deterministic seed. Combat reports events (target
    disabled, scout resolved, bomber released, carrier hit), rather than HUD
    text driving progression. Recovery replenishes aircraft without clearing
    that state.
-4. **Ship the convoy operation first.** Safe routes, transport consequences,
+4. **Convoy operation — shipped.** Safe routes, transport consequences,
    finite success/failure, escort warnings, optional recovery and debrief.
    Playtest one aircraft/one operation before adding variants.
-5. **Ship fleet defense.** Enemy roles, target priorities, finite stores,
+5. **Fleet defense — shipped.** Enemy roles, target priorities, finite stores,
    withdrawal, friendly-carrier mission hull, flight-deck suppression, and two
    paced attacks. Add dynamic variants after both basic paths are fun.
 
@@ -138,6 +140,16 @@ otherwise migration quietly restores spent weapons or duplicates an attack.
 Reject stale operation IDs after Retry/Next and coalesce snapshots under
 congestion. Room admission remains governed by the default-on late-join
 checkbox introduced in v1.7.3.
+
+## Verification
+
+`test:operations` exercises outcomes, phase timing, route safety, real bomb
+impacts, AA warnings, finite enemy stores, target claims, stale frames and
+host takeover. `test:mp` covers operation traffic over mock PeerJS links, late
+joins, congestion, authorization and retries. Browser checks cover briefings,
+objectives, debrief/retry/next and endless practice in the built standalone
+game. Live cross-network WebRTC connectivity and human difficulty/fun tuning
+remain outside these automated checks.
 
 ## Acceptance checks
 

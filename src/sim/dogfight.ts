@@ -1,7 +1,9 @@
 import { captureFlare, missileWarning, type FlareTarget } from "./countermeasures";
 import type { BattleMissile, BattleWeapon, WeaponLaunch } from "../net/versus";
 import { advanceBomb, canBombReach, BOMB_ARM_TIME as BOMB_ARM, BOMB_DETONATION_RADIUS as LGB_DET } from "./bombTrajectory";
-// Combat layer for the mission modes. Two scenarios share one machinery:
+// Combat, authored operations and endless practice share this machinery.
+// Objective transitions live in operations.ts; co-op state in combatSnapshot.ts.
+// The scenario descriptions below describe the original endless machinery:
 //
 //   dogfight — a hostile carrier steams in and launches AI bandits off its
 //              catapults; the player fights them with guns and bombs.
@@ -33,7 +35,9 @@ import { advanceBomb, canBombReach, BOMB_ARM_TIME as BOMB_ARM, BOMB_DETONATION_R
 // The player keeps the real F-14 physics; only the hostiles are simplified.
 
 import * as THREE from "three";
-import { buildTomcat, type TomcatMesh } from "../render/geometry";
+import { buildAircraft, buildTomcat, type TomcatMesh } from "../render/geometry";
+import { Operation, convoyRoute, type OperationHud, type OperationState, type EnemyRole, type TargetRole, type ConvoyRoute } from "./operations";
+import { validSharedCombat, validEnemyFire, type SharedCombat, type SharedBandit, type EnemyFire } from "./combatSnapshot";
 import { buildCarrier } from "../render/scene";
 import {
   TARGET_HP,
@@ -258,6 +262,7 @@ const MISSILE_PLAYER_DMG = 34; // warhead damage against the player's hull
 const MISSILE_WARN_R = 9000; // m: the RWR call-out range
 
 interface Missile {
+  targetPilot?: string;
   id: number;
   pos: THREE.Vector3;
   vel: THREE.Vector3;
@@ -291,6 +296,11 @@ function fighterSkill(wave: number) {
 }
 
 interface Bandit {
+  role?: EnemyRole;
+  ammo?: number;
+  bombs?: number;
+  retreat?: boolean;
+  sortieTime?: number;
   id: number;
   hp: number;
   pos: THREE.Vector3;
@@ -392,6 +402,7 @@ export interface EnemySnapshot {
 export interface EnemyHit {
   id: number;
   dmg: number;
+  combatId?: number;
 }
 
 /** Nothing to report: returned instead of a fresh array on an idle frame. */
@@ -417,6 +428,7 @@ interface Bomb {
   target: THREE.Vector3 | null;
   trailT: number; // s until the next trail puff
 }
+interface EnemyBomb { id: number; pos: THREE.Vector3; vel: THREE.Vector3; age: number; mesh: THREE.Mesh }
 
 /** Which mission machinery is running. */
 export type Scenario = "dogfight" | "strike";
@@ -427,6 +439,14 @@ export type Scenario = "dogfight" | "strike";
  * little lead, like the enemy carrier does.
  */
 interface StrikeTarget {
+  role?: TargetRole;
+  disabled?: boolean;
+  arrived?: boolean;
+  route?: ConvoyRoute | null;
+  progress?: number;
+  ammo?: number;
+  tracking?: number;
+  cooldown?: number;
   id: number;
   kind: TargetKind;
   sea: boolean;
@@ -492,7 +512,7 @@ export interface DogfightHud {
   /** 1 -> 0 damage flash: we are taking hits. */
   damageT: number;
   /** Per-bandit 3D position + gun lead point, for the HUD designators. */
-  spots: Array<{ x: number; y: number; z: number; lx: number; ly: number; lz: number; km: number; health?: number }>;
+  spots: Array<{ x: number; y: number; z: number; lx: number; ly: number; lz: number; km: number; health?: number; label?: string }>;
   /** Bombs still on the racks. */
   bombs: number;
   bombsMax: number;
@@ -585,6 +605,25 @@ export class Dogfight {
   active = false;
   /** Mission machinery in play: bandits, or bombable targets. */
   private scenario: Scenario = "dogfight";
+  private authored = false;
+  private operationSeed = 1;
+  private operationOrigin: { x: number; z: number; heading: number; carrier?: number } | undefined;
+  private combatId = 1;
+  private combatRevision = 0;
+  private receivedRevision = -1;
+  operation: Operation | null = null;
+  private roleQueue: EnemyRole[] = [];
+  private recoveryBonus = 0;
+  private recoveryWire = 0;
+  private storesUsed = 0;
+  private defenseWarning = false;
+  private defenders: Array<{ id: string; pos: THREE.Vector3; vel: THREE.Vector3; onGround?: boolean }> = [];
+  private localPilot = "";
+  private enemyFire: EnemyFire[] = [];
+  private fireSerial = 0;
+  private receivedFire = 0;
+  private enemyBombs: EnemyBomb[] = [];
+  private fleetSmokeTimer = 0;
   private hull = HULL_MAX;
   private kills = 0;
   private wave = 0;
@@ -649,6 +688,7 @@ export class Dogfight {
   // the spot: the line read as a stray laser sweeping the canopy the moment a
   // weapon left the rack, and the ring already says where the pod is looking.
   private designation: THREE.Vector3 | null = null;
+  private designationAttachment: { id: number | "carrier"; along: number; across: number; height: number } | null = null;
   private designator: THREE.Mesh;
   /** Where/how the last weapon actually detonated (diagnostics/tests). */
   readonly lastImpact = new THREE.Vector3();
@@ -853,11 +893,248 @@ export class Dogfight {
     if (!this.active) this.flaresLeft = this.flaresMax;
   }
 
+  configureOperations(authored: boolean, seed: number, id: number, origin?: { x: number; z: number; heading: number; carrier?: number }): void {
+    this.authored = authored; this.operationSeed = seed; if (origin) this.operationOrigin = { ...origin };
+    if (this.combatId !== id) { this.combatId = id; this.combatRevision = 0; this.receivedRevision = -1; this.fireSerial = this.receivedFire = 0; this.enemyFire = []; this.hitsOut = []; this.carrierHitOut = 0; }
+  }
+
+  get operationState(): OperationState | null { return this.operation?.state ?? null; }
+  get hasSharedCombat(): boolean { return this.operation !== null || this.scenario === "strike"; }
+  get operationEpoch(): number { return this.combatId; }
+  operationHud(player: AircraftState): OperationHud | undefined {
+    const state = this.operation?.state; if (!state) return undefined;
+    const cargo = this.strikeTargets.filter(t => t.role === "cargo" && !t.dead && !t.disabled && !t.arrived);
+    const threat = this.bandits.filter(b => !b.retreat && (b.role === "scout" || b.role === "bomber")).sort((a, b) => a.pos.distanceToSquared(player.pos) - b.pos.distanceToSquared(player.pos))[0];
+    const target = state.kind === "convoy" ? cargo.sort((a, b) => a.pos.distanceToSquared(player.pos) - b.pos.distanceToSquared(player.pos))[0] : threat;
+    const cvPoint = state.kind === "fleet" && !target && this.cv ? new THREE.Vector3(this.cv.def.x, this.cv.def.deckY + 30, this.cv.def.z) : undefined;
+    const pos = target?.pos ?? cvPoint; const vel = new THREE.Vector3();
+    if (target && "quat" in target) vel.set(0, 0, -target.speed).applyQuaternion(target.quat);
+    else if (target) vel.set(Math.sin(target.headingDeg * Math.PI / 180) * target.speed, 0, -Math.cos(target.headingDeg * Math.PI / 180) * target.speed);
+    let eta: number | null = null;
+    if (state.kind === "convoy" && cargo.length) eta = Math.min(...cargo.map(t => ((t.route?.length ?? 0) - (t.progress ?? 0)) / Math.max(t.speed, .1)));
+    else if (state.phase === "forming") eta = Math.max(0, (state.scoutStopped ? 60 : 15) - state.phaseTime);
+    else if (state.phase === "counterattack") eta = Math.max(0, 60 - state.phaseTime);
+    else if (this.enemyBombs.length) { const c = carriers()[state.fleetCarrier] ?? carriers()[0]; eta = Math.min(...this.enemyBombs.map(b => b.pos.distanceTo(new THREE.Vector3(c.x, c.deckY, c.z)) / Math.max(b.vel.length(), 1))); }
+    else if (threat) { const c = carriers()[state.fleetCarrier] ?? carriers()[0]; eta = Math.max(0, (Math.hypot(threat.pos.x - c.x, threat.pos.z - c.z) - (threat.role === "scout" ? 3000 : 1000)) / Math.max(threat.speed, 120)); }
+    return { state: { ...state }, eta, warning: this.defenseWarning || this.strikeTargets.some(t => (t.tracking ?? 0) > 0 && t.pos.distanceTo(player.pos) < 2200), ...this.missionStats,
+      target: pos ? { x: pos.x, y: pos.y + (target && "quat" in target ? 0 : 10), z: pos.z, label: target?.role?.toUpperCase() ?? (cvPoint ? "FLIGHT DECK" : "OBJECTIVE"), km: pos.distanceTo(player.pos) / 1000,
+        altitudeFt: pos.y * 3.28084, closureKt: player.vel.clone().sub(vel).dot(pos.clone().sub(player.pos).normalize()) * 1.94384,
+        bearing: (Math.atan2(pos.x - player.pos.x, -(pos.z - player.pos.z)) * 180 / Math.PI + 360) % 360 } : null };
+  }
+  get missionStats(): { storesUsed: number; recoveryBonus: number; recoveryWire: number; kills: number } {
+    return { storesUsed: this.storesUsed, recoveryBonus: this.recoveryBonus, recoveryWire: this.recoveryWire, kills: this.kills };
+  }
+  recordRecovery(wire = 0): void { this.recoveryBonus = Math.max(this.recoveryBonus, wire > 0 ? 150 : 100); if (wire > 0) this.recoveryWire = wire; }
+  failOperation(reason: string): void { this.operation?.finish(false, reason); }
+
+  sharedSnapshot(): SharedCombat {
+    const enemies = this.enemySnapshot();
+    const finite = (n: number | undefined) => Number.isFinite(n) ? n! : 0;
+    return { version: 1, id: this.combatId, revision: ++this.combatRevision, scenario: this.scenario, active: this.active,
+      wave: this.wave, kills: this.kills, nextId: this.nextId, carrier: enemies.carrier ? { ...enemies.carrier } : null,
+      fireSerial: this.fireSerial,
+      bombs: this.enemyBombs.map(b => ({ id: b.id, pos: b.pos.toArray(), vel: b.vel.toArray(), age: b.age })),
+      operation: this.operation ? { ...this.operation.state } : null, queue: [...this.roleQueue], launchTimer: this.launchTimer,
+      targets: this.strikeTargets.map(t => ({ id: t.id, kind: t.kind, role: t.role ?? "practice", x: t.pos.x, y: t.pos.y, z: t.pos.z, hp: t.hp,
+        sea: t.sea, dead: t.dead, disabled: t.disabled ?? false, arrived: t.arrived ?? false, headingDeg: t.headingDeg, speed: t.speed,
+        progress: t.progress ?? 0, route: t.route ? { ...t.route } : null, ammo: t.ammo ?? 0, tracking: t.tracking ?? 0, cooldown: t.cooldown ?? 0 })),
+      bandits: this.bandits.map(b => ({ id: b.id, x: b.pos.x, y: b.pos.y, z: b.pos.z, qx: b.quat.x, qy: b.quat.y, qz: b.quat.z, qw: b.quat.w,
+        hp: b.hp, onDeck: b.catT >= 0, role: b.role ?? "fighter", speed: b.speed, missiles: b.missiles, ammo: b.ammo ?? 70,
+        bombs: b.bombs ?? 0, retreat: b.retreat ?? false, sortieTime: b.sortieTime ?? 0, launchWave: b.launchWave ?? this.wave,
+        missileCd: finite(b.missileCd), fireCd: finite(b.fireCd), burst: b.burst, catT: b.catT, catAcross: b.catAcross ?? 0, climbT: b.climbT })),
+    };
+  }
+
+  applySharedSnapshot(frame: SharedCombat, nowMs: number): void {
+    if (!this.mirror || !validSharedCombat(frame) || frame.id !== this.combatId || frame.revision <= this.receivedRevision) return;
+    const hadSnapshot = this.receivedRevision >= 0;
+    if (hadSnapshot && this.operation && frame.operation && frame.operation.fleetHull < this.operation.state.fleetHull) {
+      const c = carriers()[frame.operation.fleetCarrier] ?? carriers()[0]; this.blasts.spawn(new THREE.Vector3(c.x, c.deckY + 2, c.z), "ground", 1.8);
+    }
+    if (hadSnapshot && frame.kills > this.kills) this.confirmDamage("TEAM TARGET DESTROYED", "destroyed");
+    this.receivedRevision = frame.revision; this.combatRevision = frame.revision;
+    this.fireSerial = Math.max(frame.fireSerial, this.receivedFire);
+    this.scenario = frame.scenario; this.active = frame.active; this.wave = frame.wave; this.kills = frame.kills;
+    this.operation = frame.operation ? new Operation({ ...frame.operation }) : null;
+    this.authored = !!frame.operation; this.roleQueue = [...frame.queue]; this.launchTimer = frame.launchTimer; this.nextId = frame.nextId;
+    this.applyRemoteCarrier(frame.carrier);
+    const seen = new Set<number>();
+    for (const p of frame.targets) {
+      seen.add(p.id);
+      let t = this.strikeTargets.find(t => t.id === p.id);
+      if (t && p.disabled && !t.disabled) this.confirmDamage("TEAM TRANSPORT DISABLED", "destroyed");
+      if (!t) { this.spawnTarget(p.kind, p.x, p.y, p.z, p.headingDeg, p.sea); t = this.strikeTargets[this.strikeTargets.length - 1]; t.id = p.id; }
+      if (p.dead && !t.dead) wreckTarget(t.mesh);
+      Object.assign(t, { role: p.role, hp: p.hp, dead: p.dead, disabled: p.disabled, arrived: p.arrived, headingDeg: p.headingDeg,
+        speed: p.speed, progress: p.progress, route: p.route ? { ...p.route } : null, ammo: p.ammo, tracking: p.tracking, cooldown: p.cooldown });
+      t.pos.set(p.x, p.y, p.z); t.mesh.position.copy(t.pos); t.mesh.rotation.y = ((90 - t.headingDeg) * Math.PI) / 180;
+      t.mesh.visible = !t.arrived;
+    }
+    for (let i = this.strikeTargets.length - 1; i >= 0; i--) if (!seen.has(this.strikeTargets[i].id)) {
+      const t = this.strikeTargets[i]; t.mesh.removeFromParent(); disposeSubtree(t.mesh); this.strikeTargets.splice(i, 1);
+    }
+    this.snapDt = this.snapAt > 0 ? THREE.MathUtils.clamp((nowMs - this.snapAt) / 1000, .05, .6) : .2; this.snapAt = nowMs;
+    seen.clear();
+    for (const p of frame.bandits) {
+      seen.add(p.id); let b = this.findBandit(p.id);
+      if (b && b.role !== p.role) { this.removeBandit(b); b = null; }
+      if (!b) b = this.spawnMirrorBandit(p);
+      Object.assign(b, { role: p.role, hp: p.hp, speed: p.speed, missiles: p.missiles, ammo: p.ammo, bombs: p.bombs, retreat: p.retreat,
+        sortieTime: p.sortieTime, launchWave: p.launchWave, missileCd: p.missileCd, fireCd: p.fireCd, burst: p.burst,
+        catT: p.catT, catAcross: p.catAcross, climbT: p.climbT });
+      b.netVel.set(0, 0, -p.speed).applyQuaternion(new THREE.Quaternion(p.qx, p.qy, p.qz, p.qw));
+      b.netPos.set(p.x, p.y, p.z); b.netQuat.set(p.qx, p.qy, p.qz, p.qw);
+    }
+    for (let i = this.bandits.length - 1; i >= 0; i--) if (!seen.has(this.bandits[i].id)) this.removeBandit(this.bandits[i]);
+    this.nextId = frame.nextId;
+    const bombIds = new Set(frame.bombs.map(b => b.id));
+    for (let i = this.enemyBombs.length - 1; i >= 0; i--) if (!bombIds.has(this.enemyBombs[i].id)) this.retireEnemyBomb(i);
+    for (const p of frame.bombs) {
+      let b = this.enemyBombs.find(b => b.id === p.id);
+      if (!b) b = this.createEnemyBomb(p.id, new THREE.Vector3().fromArray(p.pos), new THREE.Vector3().fromArray(p.vel));
+      b.pos.fromArray(p.pos); b.vel.fromArray(p.vel); b.age = p.age;
+    }
+  }
+
+  private spawnConvoy(player: AircraftState): void {
+    const route = convoyRoute(this.operationOrigin?.x ?? player.pos.x, this.operationOrigin?.z ?? player.pos.z, this.operationSeed);
+    if (!route) { this.operation?.finish(false, "No safe convoy route in this world. Choose a new operation."); return; }
+    const heading = Math.atan2(route.dx, -route.dz) * 180 / Math.PI;
+    for (let i = 0; i < 5; i++) {
+      const side = i < 3 ? (i - 1) * 450 : i === 3 ? -850 : 850;
+      const start = { ...route, x: route.x - route.dz * side, z: route.z + route.dx * side, length: route.length - (i < 3 ? i * 100 : 0) };
+      this.spawnTarget(i < 3 ? "ship" : "patrol", start.x, 0, start.z, heading, true);
+      const t = this.strikeTargets[this.strikeTargets.length - 1];
+      Object.assign(t, { role: i < 3 ? "cargo" : i === 3 ? "escort" : "radar", route: start, progress: 0, speed: 6,
+        ammo: i === 3 ? 48 : 0, tracking: 0, cooldown: 0, disabled: false, arrived: false });
+    }
+  }
+
+  private stepOperation(dt: number, player: AircraftState): void {
+    const op = this.operation!; const before = op.state.status;
+    const phase = op.advance(dt, { stopped: this.strikeTargets.filter(t => t.role === "cargo" && (t.dead || t.disabled)).length,
+      arrived: this.strikeTargets.filter(t => t.role === "cargo" && t.arrived).length,
+      scouts: this.bandits.filter(b => b.role === "scout").length, attackers: this.bandits.filter(b => b.role !== "scout").length + this.enemyBombs.length, queued: this.roleQueue.length });
+    if (phase === "strike" || phase === "final") {
+      this.wave = phase === "strike" ? 2 : 3; this.roleQueue = ["bomber", "bomber", "escort"]; this.launchTimer = 1;
+      this.banner(player, phase === "final" ? "FINAL STRIKE — SPLIT BOMBERS INBOUND" : "BOMBER STRIKE — INTERCEPT THE BOMBERS FIRST");
+    } else if (phase === "forming") this.banner(player, op.state.scoutStopped ? "SCOUT STOPPED — 60 SECONDS TO PREPARE" : "SCOUT REPORTED — STRIKE FORMING IN 15 SECONDS");
+    else if (phase === "counterattack") this.banner(player, "COUNTERATTACK WINDOW — 60 SECONDS · BOMB THE FLIGHT DECK OR REARM");
+    if (op.state.suppressed) this.roleQueue = [];
+    if (before !== op.state.status) {
+      this.roleQueue = []; this.launchQueued = 0;
+      for (const b of this.bandits) b.retreat = true;
+      this.banner(player, `${op.state.status === "success" ? "OPERATION COMPLETE" : "OPERATION FAILED"} — ${op.state.reason}`);
+    }
+  }
+
+  private stepOperationLaunches(dt: number, player: AircraftState): void {
+    if (!this.cv || this.operation?.state.status !== "active" || this.operation.state.suppressed || this.roleQueue.length === 0) return;
+    this.launchTimer -= dt; if (this.launchTimer > 0) return;
+    this.launchTimer = 8;
+    this.launchOne(player, this.cv, this.roleQueue.shift()!);
+  }
+
+  private stepRoleAircraft(b: Bandit, dt: number, player: AircraftState): void {
+    if (b.catT >= 0) { this.stepLaunch(b, dt); return; }
+    b.sortieTime = (b.sortieTime ?? 0) + dt;
+    const op = this.operation!, fleet = carriers()[op.state.fleetCarrier] ?? carriers()[0];
+    if (b.hp <= 9 || (b.role === "escort" && (b.ammo ?? 0) + b.missiles <= 0) || b.sortieTime > 240 || op.state.status !== "active") b.retreat = true;
+    const split = op.state.phase === "final" && !b.retreat && b.role === "bomber";
+    const approach = new THREE.Vector3(fleet.x, Math.max(1400, groundAt(b.pos.x, b.pos.z).y + 500), fleet.z);
+    if (split && Math.hypot(b.pos.x - fleet.x, b.pos.z - fleet.z) > 9000) {
+      const sign = b.id % 2 ? 1 : -1; approach.x += sign * 5500; approach.z += sign * 3500;
+    }
+    if (b.retreat) approach.set(this.cv?.def.x ?? fleet.x + 20000, 1800, this.cv?.def.z ?? fleet.z + 20000);
+    const dist = Math.hypot(b.pos.x - fleet.x, b.pos.z - fleet.z);
+    if (!b.retreat && b.role === "scout" && dist < 3000) { op.reportScout(); this.removeBandit(b); this.banner(player, "SCOUT REPORTED YOUR FLEET POSITION"); return; }
+    if (!b.retreat && b.role === "bomber" && dist < 3200 && (b.bombs ?? 0) > 0) {
+      b.bombs = 0; b.retreat = true;
+      this.createEnemyBomb(this.nextId++, b.pos.clone().add(new THREE.Vector3(0, -2, 0)), new THREE.Vector3(0, 0, -b.speed).applyQuaternion(b.quat));
+      this.banner(player, "BOMBER RELEASE — GUIDED BOMB INBOUND TO YOUR CARRIER");
+    }
+    if (b.retreat && (b.pos.distanceTo(approach) < 900 || b.sortieTime > 300)) { this.removeBandit(b); return; }
+    FWD.set(0, 0, -1).applyQuaternion(b.quat); DESIRED.copy(approach).sub(b.pos).normalize();
+    AXIS.crossVectors(FWD, DESIRED); const angle = FWD.angleTo(DESIRED);
+    if (AXIS.lengthSq() > 1e-8) FWD.applyAxisAngle(AXIS.normalize(), Math.min(angle, .18 * dt));
+    if (b.climbT > 0) { b.climbT -= dt; FWD.y = Math.max(FWD.y, .2); FWD.normalize(); }
+    const ahead = b.pos.clone().addScaledVector(FWD, 1800);
+    if (groundAt(ahead.x, ahead.z).y + 400 > b.pos.y) { FWD.y = Math.max(FWD.y, .3); FWD.normalize(); }
+    const bank = THREE.MathUtils.clamp(AXIS.y * angle, -.7, .7); this.aimQuat(b, FWD, bank);
+    b.speed += ((b.role === "scout" ? 220 : 185) - b.speed) * Math.min(1, dt * .5);
+    b.pos.addScaledVector(FWD, b.speed * dt); b.mesh.group.position.copy(b.pos); b.mesh.group.quaternion.copy(b.quat);
+    this.stepDamageSmoke(b, dt);
+    if (b.pos.y <= groundAt(b.pos.x, b.pos.z).y + 2) this.crashBandit(b, player, "ground");
+  }
+
+  private stepEscortDefense(dt: number, player: AircraftState): void {
+    if (!this.operation || this.operation.state.status !== "active") return;
+    this.defenseWarning = false;
+    const radar = this.strikeTargets.some(t => t.role === "radar" && !t.dead && !t.arrived);
+    for (const t of this.strikeTargets) {
+      if (t.role !== "escort" || t.dead || t.arrived || (t.ammo ?? 0) <= 0 || this.mirror) continue;
+      t.cooldown = Math.max(0, (t.cooldown ?? 0) - dt);
+      const pilot = this.nearestDefender(player, t.pos), distance = t.pos.distanceTo(pilot.pos);
+      if (distance > 2200 || pilot.onGround || pilot.result || terrainBlocks(t.pos.clone().add(new THREE.Vector3(0, 12, 0)), pilot.pos)) { t.tracking = 0; continue; }
+      if (t.cooldown > 0) continue;
+      this.defenseWarning = true; t.tracking = (t.tracking ?? 0) + dt;
+      if (t.tracking < (radar ? 3 : 6)) continue;
+      t.ammo = (t.ammo ?? 0) - 6; t.tracking = 0; t.cooldown = 5;
+      const origin = t.pos.clone().add(new THREE.Vector3(0, 12, 0));
+      for (let i = 0; i < 6; i++) {
+        const aim = pilot.pos.clone().addScaledVector(pilot.vel, distance / MUZZLE_V).sub(origin).normalize();
+        this.scatter(aim, .05, this.operation.state.elapsed * 7 + i); this.spawnTracer(origin, aim, true, null);
+      }
+      this.threatT = THREAT_HOLD;
+    }
+  }
+
+  setDefenders(self: string, defenders: typeof this.defenders): void { this.localPilot = self; this.defenders = defenders; }
+  private createEnemyBomb(id: number, pos: THREE.Vector3, vel: THREE.Vector3): EnemyBomb {
+    const geo = new THREE.CylinderGeometry(.25, .25, 2.8, 8); geo.rotateX(Math.PI / 2);
+    const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0xffd250, roughness: .7 }));
+    mesh.position.copy(pos); this.root.add(mesh);
+    const b = { id, pos, vel, age: 0, mesh }; this.enemyBombs.push(b); return b;
+  }
+  private retireEnemyBomb(index: number): void {
+    const b = this.enemyBombs[index]; b.mesh.removeFromParent(); disposeSubtree(b.mesh); this.enemyBombs.splice(index, 1);
+  }
+  private stepEnemyBombs(dt: number, player: AircraftState): void {
+    const s = this.operation?.state; if (!s) return;
+    const c = carriers()[s.fleetCarrier] ?? carriers()[0], target = new THREE.Vector3(c.x, c.deckY + 2, c.z);
+    if (s.fleetHull < 70) { this.fleetSmokeTimer -= dt; if (this.fleetSmokeTimer <= 0) { this.blasts.trail(target, 3, 4); this.fleetSmokeTimer = .7; } }
+    for (let i = this.enemyBombs.length - 1; i >= 0; i--) {
+      const b = this.enemyBombs[i]; b.age += dt; advanceBomb(b.pos, b.vel, target, dt);
+      b.mesh.position.copy(b.pos); b.mesh.quaternion.setFromUnitVectors(NOSE_Z, b.vel.clone().normalize());
+      if (this.mirror) continue;
+      const hit = b.age >= BOMB_ARM && (b.pos.distanceTo(target) < 15 || (b.pos.y <= c.deckY + 2 && isOnDeck(c, b.pos.x, b.pos.z)));
+      if (hit || b.age > 90 || b.pos.y <= groundAt(b.pos.x, b.pos.z).y) {
+        if (hit) { this.operation!.damageFleet(30); this.banner(player, `BOMB IMPACT — FRIENDLY CARRIER ${s.fleetHull}%`); }
+        this.blasts.spawn(b.pos, hit ? "ground" : "water", 1.8); this.retireEnemyBomb(i);
+      }
+    }
+  }
+  private nearestDefender(player: AircraftState, from: THREE.Vector3): AircraftState {
+    let closest: typeof this.defenders[number] | null = null, distance = player.result ? Infinity : from.distanceToSquared(player.pos);
+    for (const p of this.defenders) { const d = p.pos.distanceToSquared(from); if (d < distance) { closest = p; distance = d; } }
+    return closest ? { ...player, pos: closest.pos, vel: closest.vel, speed: closest.vel.length(), onGround: closest.onGround ?? false, result: null } : player;
+  }
+  takeEnemyFire(): EnemyFire[] { const shots = this.enemyFire; this.enemyFire = []; return shots; }
+  receiveEnemyFire(shot: EnemyFire): void {
+    if (!this.mirror || !validEnemyFire(shot) || shot.combatId !== this.combatId || shot.seq <= this.receivedFire) return;
+    this.receivedFire = shot.seq;
+    const pos = new THREE.Vector3().fromArray(shot.pos), vel = new THREE.Vector3().fromArray(shot.vel);
+    if (shot.weapon === "gun") this.spawnTracer(pos, vel.normalize(), true, null);
+    else if (this.putHostileRound(pos, vel, shot.seq)) this.missiles[this.missiles.length - 1].targetPilot = shot.target;
+    this.threatT = THREAT_HOLD;
+  }
+
   prepare(player: AircraftState): void {
     this.setAircraft(player);
     this.clear();
     // A wingman never owns the boat: the host's arrives on the wire.
     if (!this.mirror) this.spawnEnemyCarrier(player);
+    if (this.authored && !this.mirror) this.operation = Operation.create("fleet", this.combatId, this.operationSeed, this.operationOrigin?.carrier ?? player.catCarrier);
   }
 
   /**
@@ -876,6 +1153,15 @@ export class Dogfight {
    *  already inbound from prepare(). */
   begin(player: AircraftState): void {
     this.setAircraft(player);
+    if (this.authored) {
+      if ((!this.operation || this.operation.state.kind !== "fleet") && !this.mirror) this.prepare(player);
+      this.active = true; this.refill();
+      if (!this.mirror && this.operation?.state.status === "briefing") {
+        this.operation.start(); this.wave = 1; this.roleQueue = ["scout"]; this.launchTimer = 1;
+        this.banner(player, "FLEET DEFENSE — INTERCEPT SCOUT · THEN PROTECT THE CARRIER FROM BOMBERS");
+      }
+      return;
+    }
     if (this.cv) this.clearFight();
     else {
       this.clear();
@@ -906,7 +1192,10 @@ export class Dogfight {
     this.scenario = "strike";
     this.wave = 1;
     this.kills = 0;
-    this.spawnStrikeWave(player);
+    if (!this.mirror) {
+      if (this.authored) { this.operation = Operation.create("convoy", this.combatId, this.operationSeed, this.operationOrigin?.carrier ?? player.catCarrier); this.spawnConvoy(player); }
+      else this.spawnStrikeWave(player);
+    }
   }
 
   /**
@@ -916,7 +1205,13 @@ export class Dogfight {
    */
   beginStrike(player: AircraftState): void {
     this.setAircraft(player);
-    if (this.scenario !== "strike" || this.strikeTargets.length === 0) {
+    if (this.authored) {
+      if ((!this.operation || this.operation.state.kind !== "convoy") && !this.mirror) this.prepareStrike(player);
+      this.active = true; this.refill(); if (!this.mirror) this.operation?.start();
+      this.banner(player, "STOP THE CONVOY — DISABLE 2 TRANSPORTS · ESCORT & RADAR OPTIONAL");
+      return;
+    }
+    if (!this.mirror && (this.scenario !== "strike" || this.strikeTargets.length === 0)) {
       this.clear();
       this.scenario = "strike";
       this.wave = 1;
@@ -983,12 +1278,21 @@ export class Dogfight {
    * them; null clears the aim point.
    */
   setDesignation(p: THREE.Vector3 | null): void {
+    this.designationAttachment = null;
     if (!p) {
       this.designation = null;
       return;
     }
     if (this.designation) this.designation.copy(p);
     else this.designation = p.clone();
+    const ship = this.strikeTargets.find(t => t.sea && !t.dead && !t.arrived && t.pos.distanceTo(p) < t.radius + (t.kind === "ship" ? 55 : 30));
+    const cv = this.cv && this.cv.status !== "sinking" && this.cv.status !== "sunk" && isOnDeck(this.cv.def, p.x, p.z) ? this.cv : null;
+    if (ship || cv) {
+      const x = ship?.pos.x ?? cv!.def.x, z = ship?.pos.z ?? cv!.def.z;
+      const { fwd, right } = deckAxes(ship?.headingDeg ?? cv!.def.headingDeg);
+      this.designationAttachment = { id: ship?.id ?? "carrier", along: (p.x - x) * fwd[0] + (p.z - z) * fwd[1],
+        across: (p.x - x) * right[0] + (p.z - z) * right[1], height: p.y - (ship?.pos.y ?? cv!.def.deckY) };
+    }
     for (const b of this.bombs) {
       if (b.guided && b.target) b.target.copy(p);
     }
@@ -996,6 +1300,19 @@ export class Dogfight {
 
   get designated(): THREE.Vector3 | null {
     return this.designation;
+  }
+
+  private followDesignation(): void {
+    const lock = this.designationAttachment, d = this.designation;
+    if (!lock || !d) return;
+    const ship = typeof lock.id === "number" ? this.strikeTargets.find(t => t.id === lock.id) : null;
+    const cv = lock.id === "carrier" ? this.cv : null;
+    if ((!ship && !cv) || ship?.arrived) { this.designationAttachment = null; return; }
+    const { fwd, right } = deckAxes(ship?.headingDeg ?? cv!.def.headingDeg);
+    d.set((ship?.pos.x ?? cv!.def.x) + fwd[0] * lock.along + right[0] * lock.across,
+      (ship?.pos.y ?? cv!.def.deckY) + lock.height,
+      (ship?.pos.z ?? cv!.def.z) + fwd[1] * lock.along + right[1] * lock.across);
+    for (const b of this.bombs) if (b.guided && b.target) b.target.copy(d);
   }
 
   /**
@@ -1038,16 +1355,17 @@ export class Dogfight {
   setMirror(on: boolean, player: AircraftState): void {
     if (this.mirror === on) return;
     this.mirror = on;
-    this.clearBandits();
+    if (!this.operation || on) this.clearBandits();
     this.takenDown.clear();
     this.hitsOut = [];
     this.carrierHitOut = 0;
     if (on) {
+      this.clearTargets(); this.operation = null; this.receivedRevision = -1;
       // Our own boat is the host's business now; theirs arrives on the next
       // packet. Our wave queue goes with it.
       this.releaseCarrier();
       this.launchQueued = 0;
-    } else if (!this.cv && this.scenario === "dogfight" && !this.versus) {
+    } else if (!this.cv && !this.operation && this.scenario === "dogfight" && !this.versus) {
       // Promoted to lead mid-flight: the boat is ours again, and stepWaves will
       // spot the next wave on it.
       this.spawnEnemyCarrier(player);
@@ -1106,7 +1424,7 @@ export class Dogfight {
    * appears or disappears here.
    */
   applyRemoteSnapshot(snap: EnemySnapshot, nowMs: number): void {
-    if (!this.mirror) return;
+    if (!this.mirror || this.operation) return;
     this.snapDt = this.snapAt > 0
       ? THREE.MathUtils.clamp((nowMs - this.snapAt) / 1000, 0.05, 0.6)
       : 0.14;
@@ -1142,7 +1460,10 @@ export class Dogfight {
   }
 
   /** Host side: a wingman's rounds landed on a bandit of ours. */
-  applyRemoteHit(id: number, dmg: number, player: AircraftState): void {
+  applyRemoteHit(id: number, dmg: number, player: AircraftState, combatId?: number): void {
+    if (combatId !== undefined && combatId !== this.combatId) return;
+    const target = this.strikeTargets.find(t => t.id === id);
+    if (target) { this.damageTarget(target, dmg, player); return; }
     const b = this.findBandit(id);
     if (!b) return;
     this.hitT = HIT_FLASH;
@@ -1221,7 +1542,7 @@ export class Dogfight {
    * steering. Used when a packet names an aircraft we have no mesh for yet.
    */
   private spawnMirrorBandit(p: EnemyPose): Bandit {
-    const mesh = buildTomcat("bandit");
+    const mesh = buildAircraft((p as SharedBandit).role === "bomber" ? "intruder" : "tomcat", "bandit");
     mesh.gear.visible = p.onDeck;
     mesh.afterburner.visible = false;
     mesh.wings[0].rotation.y = 0;
@@ -1278,8 +1599,7 @@ export class Dogfight {
     b.pos.lerp(SYNC, k);
     b.quat.slerp(b.netQuat, k);
     b.sweepT = Math.min(1, b.sweepT + dt / 6);
-    b.mesh.wings[0].rotation.y = -1.0 * b.sweepT;
-    b.mesh.wings[1].rotation.y = 1.0 * b.sweepT;
+    if (b.role !== "bomber") { b.mesh.wings[0].rotation.y = -1.0 * b.sweepT; b.mesh.wings[1].rotation.y = 1.0 * b.sweepT; }
     b.mesh.gear.visible = b.catT >= 0;
     b.mesh.group.position.copy(b.pos);
     b.mesh.group.quaternion.copy(b.quat);
@@ -1305,6 +1625,7 @@ export class Dogfight {
     // or negative number would make the bandit impossible to kill.
     if (!Number.isFinite(dmg) || dmg <= 0) return;
     if (b.hp <= 0) return;
+    if (this.mirror && this.operation) { this.hitsOut.push({ id: b.id, dmg: Math.min(dmg, MAX_CLAIMED_HIT), combatId: this.combatId }); this.confirmDamage("BANDIT HIT", "hit"); return; }
     b.hp -= Math.min(dmg, MAX_CLAIMED_HIT);
     if (b.hp > 0) this.confirmDamage("AIRCRAFT HIT", "hit");
     if (this.mirror) this.hitsOut.push({ id: b.id, dmg });
@@ -1339,6 +1660,8 @@ export class Dogfight {
   /** Drop bandits, ordnance, flashes and timers — but leave the boat afloat. */
   private clearFight(): void {
     this.active = false;
+    while (this.enemyBombs.length) this.retireEnemyBomb(this.enemyBombs.length - 1);
+    this.operation = null; this.roleQueue = []; this.recoveryBonus = 0; this.recoveryWire = 0; this.storesUsed = 0; this.defenseWarning = false; this.enemyFire = []; this.hitsOut = []; this.carrierHitOut = 0;
     this.scenario = "dogfight";
     this.versus = false;
     this.opponents = [];
@@ -1427,7 +1750,8 @@ export class Dogfight {
    * @param bombHeld true while the player holds the bomb release
    * @returns true if the player was shot down this step
    */
-  step(dt: number, player: AircraftState, fireHeld: boolean, bombHeld = false): boolean {
+  step(dt: number, player: AircraftState, fireHeld: boolean, bombHeld = false, worldOnly = false): boolean {
+    this.followDesignation();
     // The release and impact markers decay with the sim so they freeze on
     // pause, and they run even with no fight on (a cruise-leg bomb still has to
     // have its hit marked, and the mark has to expire).
@@ -1454,14 +1778,15 @@ export class Dogfight {
     this.stepBombs(dt, player, bombHeld && !player.result);
     // Missiles likewise: one in the air keeps hunting after the shooter is gone.
     this.stepMissiles(dt, player);
+    this.stepEnemyBombs(dt, player);
     // Flares burn in every mode: a cruise-leg cartridge still has to fall away
     // and go out, and the countermeasure cooldown has to run.
     this.stepFlares(dt);
     this.stepDesignator(player);
-    if (player.result) return false;
+    if (player.result && !worldOnly) return false;
     // The guns are live in every scenario — plinking at the sea on a cruise
     // leg is half the fun — so the trigger is read before the mode branches.
-    this.playerGuns(dt, player, fireHeld);
+    if (!worldOnly) this.playerGuns(dt, player, fireHeld);
     // A mirror flies the room's aircraft whether or not our own fight is armed:
     // a wingman watching the host's battle should see it even before their own
     // wheels leave the deck. Their guns only open up once we are in it.
@@ -1493,8 +1818,12 @@ export class Dogfight {
       this.stepTargets(dt);
       this.stepTracers(dt, player);
       this.stepFlashes(dt);
-      this.stepStrikeWaves(dt, player);
-      return false;
+      if (!this.mirror) {
+        if (this.operation) this.stepOperation(dt, player);
+        else this.stepStrikeWaves(dt, player);
+      }
+      this.stepEscortDefense(dt, player);
+      return this.hull <= 0;
     }
     this.stepCarrier(dt, player);
     // A mirror owns no launches and no waves: those aircraft are the host's, and
@@ -1502,20 +1831,29 @@ export class Dogfight {
     // ours — so a wingman is shot at, and shoots back, with nothing in the middle
     // of it. That is the least lag a shared fight can have.
     if (!this.mirror) {
-      this.stepLaunches(dt, player);
+      if (this.operation) this.stepOperationLaunches(dt, player);
+      else this.stepLaunches(dt, player);
       // Walk the bandits backwards: one that flies into the ground is removed on
       // the spot, and splicing the current index is only safe that way.
       for (let i = this.bandits.length - 1; i >= 0; i--) {
         const b = this.bandits[i];
-        if (!this.stepBandit(b, dt, player)) continue;
-        this.banditGuns(b, dt, player);
-        this.banditMissiles(b, dt, player);
+        if (this.operation && (b.role !== "escort" || b.retreat || b.hp <= 9 || (b.ammo ?? 0) + b.missiles <= 0 || (b.sortieTime ?? 0) > 240)) {
+          this.stepRoleAircraft(b, dt, player); continue;
+        }
+        if (this.operation) b.sortieTime = (b.sortieTime ?? 0) + dt;
+        const defender = this.operation ? this.nearestDefender(player, b.pos) : player;
+        if (!this.stepBandit(b, dt, defender)) continue;
+        this.banditGuns(b, dt, defender);
+        this.banditMissiles(b, dt, defender);
       }
     }
     this.stepCollisions(player);
     this.stepTracers(dt, player);
     this.stepFlashes(dt);
-    if (!this.mirror) this.stepWaves(dt, player);
+    if (!this.mirror) {
+      if (this.operation) this.stepOperation(dt, player);
+      else this.stepWaves(dt, player);
+    }
     return false;
   }
 
@@ -1528,7 +1866,7 @@ export class Dogfight {
     let best: Missile | null = null;
     let bestD = Infinity;
     for (const m of this.missiles) {
-      if (!m.hostile || m.decoy) continue; // a decoyed round is no longer a threat
+      if (!m.hostile || m.decoy || (m.targetPilot && m.targetPilot !== this.localPilot)) continue; // a decoyed round is no longer a threat
       const d = m.pos.distanceTo(player.pos);
       if (d < bestD) {
         bestD = d;
@@ -1568,7 +1906,7 @@ export class Dogfight {
       lx = b.pos.x + vel.x * tof;
       ly = b.pos.y + vel.y * tof;
       lz = b.pos.z + vel.z * tof;
-      return { x: b.pos.x, y: b.pos.y, z: b.pos.z, lx, ly, lz, km: dist / 1000, health: Math.max(0, b.hp / BANDIT_HP) };
+      return { x: b.pos.x, y: b.pos.y, z: b.pos.z, lx, ly, lz, km: dist / 1000, health: Math.max(0, b.hp / BANDIT_HP), label: this.operation ? b.role?.toUpperCase() : undefined };
     });
     for (const opponent of this.opponents) {
       const dist = opponent.pos.distanceTo(player.pos);
@@ -1589,7 +1927,7 @@ export class Dogfight {
         brgDeg: (Math.atan2(cdx, -cdz) * 180) / Math.PI,
         hp: Math.max(0, Math.round(cv.hp)),
         status: cv.status,
-        inbound: this.launchQueued + this.bandits.filter((b) => b.catT >= 0).length,
+        inbound: (this.operation ? this.roleQueue.length : this.launchQueued) + this.bandits.filter((b) => b.catT >= 0).length,
         headingDeg: cv.def.headingDeg,
       };
     }
@@ -1650,7 +1988,7 @@ export class Dogfight {
     const spots: DogfightHud["spots"] = [];
     const markers: Array<{ x: number; z: number; headingDeg: number }> = [];
     for (const t of this.strikeTargets) {
-      if (t.dead) continue;
+      if (t.dead || t.arrived) continue;
       alive++;
       const d = t.pos.distanceTo(player.pos);
       if (d < nearestD) {
@@ -1659,7 +1997,7 @@ export class Dogfight {
         ndz = t.pos.z - player.pos.z;
       }
       const ty = t.pos.y + 6;
-      spots.push({ x: t.pos.x, y: ty, z: t.pos.z, lx: t.pos.x, ly: ty, lz: t.pos.z, km: d / 1000 });
+      spots.push({ x: t.pos.x, y: ty, z: t.pos.z, lx: t.pos.x, ly: ty, lz: t.pos.z, km: d / 1000, health: Math.max(0, t.hp / TARGET_HP[t.kind]), label: t.disabled ? "STOPPED" : t.role?.toUpperCase() });
       markers.push({ x: t.pos.x, z: t.pos.z, headingDeg: t.headingDeg });
     }
     return {
@@ -1672,11 +2010,11 @@ export class Dogfight {
       nearestKm: alive ? nearestD / 1000 : 0,
       nearestBrgDeg: alive ? (Math.atan2(ndx, -ndz) * 180) / Math.PI : 0,
       markers,
-      threat: false,
+      threat: this.threatT > 0,
       firing: this.gunLive,
       hitT: this.hitT / HIT_FLASH,
       confirmation: this.confirmation ? { ...this.confirmation } : null,
-      damageT: 0,
+      damageT: this.damageT / DAMAGE_FLASH,
       spots,
       bombs: this.bombsLeft,
       bombsMax: this.bombsMax,
@@ -1781,7 +2119,7 @@ export class Dogfight {
       }
       if (hit) break;
       for (const t of this.strikeTargets) {
-        if (t.dead) continue;
+        if (t.dead || t.arrived) continue;
         GUN_T.copy(t.pos);
         GUN_T.y += 8;
         if (segSphere(GUN_PREV, GUN_P, GUN_T, t.radius + 2)) {
@@ -1901,8 +2239,11 @@ export class Dogfight {
    * is open water there, and let it steam in from there.
    */
   private spawnEnemyCarrier(player: AircraftState): void {
-    const hdg = this.playerHeading(player);
-    const base = hdg + (hash(this.wave * 23.7 + 4.1) * 2 - 1) * 0.8;
+    const hdg = this.authored && this.operationOrigin ? this.operationOrigin.heading * Math.PI / 180 : this.playerHeading(player);
+    const originX = this.authored ? this.operationOrigin?.x ?? player.pos.x : player.pos.x;
+    const originZ = this.authored ? this.operationOrigin?.z ?? player.pos.z : player.pos.z;
+    const base = hdg + (hash(this.wave * 23.7 + 4.1 + (this.authored ? this.operationSeed : 0)) * 2 - 1) * 0.8;
+    const startDistance = this.authored ? 18000 : CV_START_DIST;
     // Fan out around the first bearing until the whole approach is water —
     // a carrier must not spawn on a hillside, and must not have to cross one.
     // The fan widens to the full circle, so an island dead ahead cannot leave
@@ -1910,8 +2251,8 @@ export class Dogfight {
     let ang = base;
     for (let i = 0; i < 17; i++) {
       if (i > 0) ang = base + (i % 2 === 0 ? 1 : -1) * Math.ceil(i / 2) * 0.42;
-      const x = player.pos.x + Math.sin(ang) * CV_START_DIST;
-      const z = player.pos.z - Math.cos(ang) * CV_START_DIST;
+      const x = originX + Math.sin(ang) * startDistance;
+      const z = originZ - Math.cos(ang) * startDistance;
       const mx = (x + player.pos.x) / 2;
       const mz = (z + player.pos.z) / 2;
       // the chain is 60 km across: keep the fan inside it, and outside that
@@ -1920,8 +2261,8 @@ export class Dogfight {
       if (groundAt(x, z).kind !== "water" || groundAt(mx, mz).kind !== "water") continue;
       break;
     }
-    const x = player.pos.x + Math.sin(ang) * CV_START_DIST;
-    const z = player.pos.z - Math.cos(ang) * CV_START_DIST;
+    const x = originX + Math.sin(ang) * startDistance;
+    const z = originZ - Math.cos(ang) * startDistance;
     // The bow points back at the player: it is coming for us.
     const headingDeg = (((ang + Math.PI) * 180) / Math.PI + 360) % 360;
     const def = makeCarrier(CV_NAME, x, z, headingDeg);
@@ -1999,7 +2340,7 @@ export class Dogfight {
   }
 
   /** Roll one bandit: down a catapult, off the bow, then it is the AI's job. */
-  private launchOne(player: AircraftState, cv: EnemyCarrier): void {
+  private launchOne(player: AircraftState, cv: EnemyCarrier, role: EnemyRole = "fighter"): void {
     const def = cv.def;
     this.launchSide = -this.launchSide;
     const { fwd, right } = deckAxes(def.headingDeg);
@@ -2010,7 +2351,7 @@ export class Dogfight {
       def.z + fwd[1] * CAT_START_ALONG + right[1] * across,
     );
     const id = this.nextId++;
-    const mesh = buildTomcat("bandit");
+    const mesh = role === "bomber" ? buildAircraft("intruder", "bandit") : buildTomcat("bandit");
     mesh.gear.visible = true; // gear down on the cat, up once it is flying
     mesh.afterburner.visible = true; // deck launches are full-burner shots
     mesh.wings[0].rotation.y = 0; // spread for the deck
@@ -2019,6 +2360,7 @@ export class Dogfight {
     this.root.add(mesh.group);
     const b: Bandit = {
       id,
+      role, ammo: this.operation ? 70 : undefined, bombs: role === "bomber" ? 1 : 0, retreat: false, sortieTime: 0,
       hp: BANDIT_HP,
       pos: start.clone(),
       quat: new THREE.Quaternion(),
@@ -2031,7 +2373,7 @@ export class Dogfight {
       launchWave: this.wave,
       reactionT: 0,
       smokeT: 0,
-      missiles: this.wave >= BANDIT_MISSILE_FIRST_WAVE ? BANDIT_MISSILE_LOAD : 0,
+      missiles: (role === "fighter" || role === "escort") && this.wave >= BANDIT_MISSILE_FIRST_WAVE ? BANDIT_MISSILE_LOAD : 0,
       missileCd: BANDIT_MISSILE_ARM_DELAY + hash(id * 7.3) * 6,
       phase: hash(id * 11.3) * Math.PI * 2,
       mesh,
@@ -2052,7 +2394,7 @@ export class Dogfight {
     };
     this.setCatPose(b, def.deckY);
     this.bandits.push(b);
-    if (this.bandits.length === 1) this.banner(player, `CAT LAUNCH — BANDITS OFF ${CV_NAME}`);
+    if (this.bandits.length === 1) this.banner(player, `CAT LAUNCH — ${this.operation ? role.toUpperCase() : "BANDITS"} OFF ${CV_NAME}`);
   }
 
   /** Deck pose: on the cat at `t` seconds after release (heading + 6 deg nose up). */
@@ -2156,7 +2498,7 @@ export class Dogfight {
       // detonates on it rather than falling through to the surface below.
       let hitTarget = false;
       for (const t of this.strikeTargets) {
-        if (t.dead) continue;
+        if (t.dead || t.arrived) continue;
         TMP.copy(t.pos);
         TMP.y += 8;
         if (TMP.distanceToSquared(b.pos) < (t.radius + 3) * (t.radius + 3)) {
@@ -2236,7 +2578,7 @@ export class Dogfight {
       target: guided ? this.designation!.clone() : null,
       trailT: 0,
     });
-    this.bombsLeft--;
+    this.bombsLeft--; this.storesUsed++;
   }
 
   /**
@@ -2395,6 +2737,7 @@ export class Dogfight {
    * boresight and with the player in sight takes the shot.
    */
   private banditMissiles(b: Bandit, dt: number, player: AircraftState): void {
+    if (this.operation && (this.mirror || b.role !== "escort" || b.retreat)) return;
     if (b.catT >= 0 || b.missiles <= 0) return;
     b.missileCd -= dt;
     if (b.missileCd > 0 || player.result) return;
@@ -2424,6 +2767,11 @@ export class Dogfight {
       .multiplyScalar(Math.max(b.speed, 140))
       .add(new THREE.Vector3(side * 4, -3, 0).applyQuaternion(b.quat));
     if (!this.putHostileRound(pos, vel, hash(b.id * 2.3 + player.time) * 97)) return false;
+    if (this.operation) {
+      const target = this.defenders.find(p => p.pos === player.pos)?.id ?? this.localPilot;
+      this.missiles[this.missiles.length - 1].targetPilot = target;
+      if (!this.mirror) this.enemyFire.push({ combatId: this.combatId, seq: ++this.fireSerial, weapon: "missile", pos: pos.toArray(), vel: vel.toArray(), target });
+    }
     this.threatT = THREAT_HOLD;
     this.banner(player, "MISSILE INBOUND — BREAK AND FLARE");
     return true;
@@ -2542,7 +2890,7 @@ export class Dogfight {
       if (d < bestD) { bestD = d; best = opponent.pos; }
     }
     for (const t of this.strikeTargets) {
-      if (t.dead) continue;
+      if (t.dead || t.arrived) continue;
       const d = t.pos.distanceToSquared(from);
       if (d < bestD) {
         bestD = d;
@@ -2594,7 +2942,7 @@ export class Dogfight {
       seed: hash(pos.x * 1.7 + pos.z * 0.9 + this.missiles.length),
     });
     if (this.versus) this.weaponLaunches.push({ weapon: "missile", pos: pos.toArray(), vel: vel.toArray() });
-    this.missilesLeft--;
+    this.missilesLeft--; this.storesUsed++;
     this.missileCd = MISSILE_CD;
     this.banner(
       player,
@@ -2642,7 +2990,7 @@ export class Dogfight {
           // flare, which is why a burst of cartridges works at all.
           if (m.decoy && m.decoy.life <= 0) m.decoy = null;
           if (!m.decoy) m.decoy = this.captureFlare(m, dt);
-          const target = m.decoy ? m.decoy.pos : player.pos;
+          const target = m.decoy ? m.decoy.pos : m.targetPilot && m.targetPilot !== this.localPilot ? this.defenders.find(p => p.id === m.targetPilot)?.pos ?? player.pos : player.pos;
           this.steerSeeker(m, target, dt);
         } else {
           if (m.decoy && m.decoy.life <= 0) m.decoy = null;
@@ -2720,7 +3068,7 @@ export class Dogfight {
         }
         if (!hit) {
           for (const t of this.strikeTargets) {
-            if (t.dead) continue;
+            if (t.dead || t.arrived) continue;
             TMP.copy(t.pos);
             TMP.y += 8;
             if (TMP.distanceTo(m.pos) < t.radius + MISSILE_DET) {
@@ -2766,7 +3114,7 @@ export class Dogfight {
     this.lastImpactKind = kind;
     this.impactAge = 0;
     for (const t of this.strikeTargets) {
-      if (t.dead) continue;
+      if (t.dead || t.arrived) continue;
       const d = Math.hypot(at.x - t.pos.x, at.y - (t.pos.y + 6), at.z - t.pos.z);
       if (d > 60) continue;
       this.damageTarget(t, d < 30 ? MISSILE_HP : MISSILE_HP * 0.55, player);
@@ -2813,6 +3161,10 @@ export class Dogfight {
     // A wingman's hit goes to the host as well: the host owns the hull, and the
     // snapshot it sends back settles the damage a packet later.
     if (this.mirror) this.carrierHitOut += dmg;
+    if (!this.mirror && this.operation?.state.kind === "fleet") {
+      const before = this.operation.state.suppressed; this.operation.damageDeck(dmg);
+      if (!before && this.operation.state.suppressed) { this.roleQueue = []; this.banner(player, "FLIGHT DECK DISABLED — NO FURTHER LAUNCHES"); }
+    }
     cv.hp = Math.max(0, Math.min(CV_HP, cv.hp - dmg));
     this.hitT = HIT_FLASH;
     this.flash(at);
@@ -2843,7 +3195,7 @@ export class Dogfight {
    */
   private blastTargets(at: THREE.Vector3, player: AircraftState): void {
     for (const t of this.strikeTargets) {
-      if (t.dead) continue;
+      if (t.dead || t.arrived) continue;
       const d = Math.hypot(at.x - t.pos.x, at.y - (t.pos.y + 6), at.z - t.pos.z);
       if (d > 45) continue;
       this.damageTarget(t, BOMB_HP * (d < 15 ? 1.4 : d < 28 ? 1 : 0.6), player);
@@ -2852,8 +3204,14 @@ export class Dogfight {
 
   /** Damage a strike target; a dead one is wrecked in place and keeps smoking. */
   private damageTarget(t: StrikeTarget, dmg: number, player: AircraftState): void {
-    if (t.dead) return;
+    if (t.dead || t.arrived || !Number.isFinite(dmg) || dmg <= 0) return;
+    dmg = Math.min(dmg, BOMB_HP * 2);
+    if (this.mirror) { this.hitsOut.push({ id: t.id, dmg, combatId: this.combatId }); this.confirmDamage("TARGET HIT", "hit"); return; }
     t.hp -= dmg;
+    if (t.role === "cargo") {
+      t.speed = t.hp < TARGET_HP.ship ? 3 : 6;
+      if (t.hp <= TARGET_HP.ship * .5 && !t.disabled) { t.disabled = true; t.speed = 0; this.confirmDamage("TRANSPORT DISABLED", "destroyed"); this.banner(player, "PROPULSION DISABLED — TRANSPORT STOPPED"); }
+    }
     this.hitT = HIT_FLASH;
     if (t.hp > 0) { this.confirmDamage("TARGET HIT", "hit"); return; }
     this.confirmDamage("TARGET DESTROYED", "destroyed");
@@ -2861,6 +3219,7 @@ export class Dogfight {
     t.wreckT = 0;
     t.smokeT = 0.6;
     this.kills++;
+    if (this.operation && t.role !== "cargo") this.operation.state.optional++;
     wreckTarget(t.mesh);
     TMP.set(t.pos.x, t.pos.y + 7, t.pos.z);
     this.blasts.spawn(TMP, "ground", 1.35);
@@ -2868,12 +3227,16 @@ export class Dogfight {
     const left = this.strikeTargets.reduce((n, x) => n + (x.dead ? 0 : 1), 0);
     this.banner(
       player,
-      left > 0 ? `TARGET CLEARED — ${left} LEFT` : "ALL TARGETS DOWN — STAND BY FOR THE NEXT WAVE",
+      this.operation ? `${t.role?.toUpperCase()} DESTROYED` : left > 0 ? `TARGET CLEARED — ${left} LEFT` : "ALL TARGETS DOWN — STAND BY FOR THE NEXT WAVE",
     );
   }
 
   /** One wave: a target site on land plus a group of ships at sea. */
   private spawnStrikeWave(player: AircraftState): number {
+    // Keep the latest wrecks without growing the scene or exceeding wire limits.
+    while (this.strikeTargets.length > 8) {
+      const old = this.strikeTargets.shift()!; old.mesh.removeFromParent(); disposeSubtree(old.mesh);
+    }
     const landN = Math.min(3 + Math.floor(this.wave / 2), 5);
     const seaN = Math.min(1 + Math.floor((this.wave + 1) / 2), 3);
     let n = 0;
@@ -3005,6 +3368,13 @@ export class Dogfight {
         continue;
       }
       if (t.speed <= 0) continue;
+      if (t.route) {
+        if (this.operation?.state.status === "briefing" || t.arrived || t.disabled) continue;
+        t.progress = Math.min(t.route.length, (t.progress ?? 0) + t.speed * dt);
+        t.pos.set(t.route.x + t.route.dx * t.progress, t.pos.y, t.route.z + t.route.dz * t.progress);
+        if (t.progress >= t.route.length && !this.mirror) { t.arrived = true; t.mesh.visible = false; }
+        t.mesh.position.copy(t.pos); t.mesh.rotation.y = ((90 - t.headingDeg) * Math.PI) / 180; continue;
+      }
       const h = (t.headingDeg * Math.PI) / 180;
       t.pos.x += Math.sin(h) * t.speed * dt;
       t.pos.z += -Math.cos(h) * t.speed * dt;
@@ -3085,8 +3455,7 @@ export class Dogfight {
     }
     // away from the deck: gear up, wings sweeping back, nose held up
     b.sweepT = Math.min(1, b.sweepT + dt / 5);
-    b.mesh.wings[0].rotation.y = -1.0 * b.sweepT;
-    b.mesh.wings[1].rotation.y = 1.0 * b.sweepT;
+    if (b.role !== "bomber") { b.mesh.wings[0].rotation.y = -1.0 * b.sweepT; b.mesh.wings[1].rotation.y = 1.0 * b.sweepT; }
     if (b.climbT > 0) b.climbT -= dt;
 
     FWD.set(0, 0, -1).applyQuaternion(b.quat);
@@ -3244,6 +3613,7 @@ export class Dogfight {
   }
 
   private banditGuns(b: Bandit, dt: number, player: AircraftState): void {
+    if (this.operation && (this.mirror || b.role !== "escort" || b.retreat || (b.ammo ?? 0) <= 0)) return;
     if (b.catT >= 0) return; // still on the cat: no shooting from the deck
     b.fireCd -= dt;
     if (b.fireCd > 0) return;
@@ -3260,6 +3630,7 @@ export class Dogfight {
       return;
     }
     b.burst--;
+    if (this.operation) b.ammo = Math.max(0, (b.ammo ?? 0) - 1);
     b.fireCd = 0.09; // ~11 rps inside the burst
     // lead the player, then scatter
     AIM.copy(player.pos).addScaledVector(player.vel, dist / MUZZLE_V);
@@ -3318,6 +3689,7 @@ export class Dogfight {
     mesh.position.copy(origin);
     const vel = dir.clone().multiplyScalar(MUZZLE_V);
     if (inherit) vel.add(inherit);
+    if (hostile && this.operation && !this.mirror) this.enemyFire.push({ combatId: this.combatId, seq: ++this.fireSerial, weapon: "gun", pos: origin.toArray(), vel: vel.toArray() });
     if (!hostile && this.versus) this.weaponLaunches.push({ weapon: "gun", pos: origin.toArray(), vel: vel.toArray() });
     this.tracers.push({
       pos: origin.clone(),

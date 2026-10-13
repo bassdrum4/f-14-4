@@ -21,6 +21,7 @@ import { gamestateConfigured } from "../gamestate";
 import type { NetState } from "../net/multiplayer";
 import { APP_VERSION } from "../version";
 import { Hud, useHud } from "./Hud";
+import { operationTitle, phaseObjective } from "../sim/operations";
 import {
   ACTION_LABELS, DAYLIGHT_LABELS, DEFAULT_BINDINGS, MISSION_MODE_CHIPS, MISSION_MODE_LABELS, callsignOf, keyLabel, rebind,
   roomCode, suggestRoomCode, type Action, type DaylightMode, type MissionMode, type Quality,
@@ -98,9 +99,10 @@ export function UiRoot({ sim, settings, onSettings }: {
       {phase !== "menu" && (
         <Hud sim={sim} daylight={settings.daylight} minimap={settings.minimap} ladder={settings.hudLadder} gunCross={settings.hudGunCross} />
       )}
-      {phase === "paused" && sim && (
+      {phase === "paused" && sim && !sim.operationDebrief && (
         <PauseMenu sim={sim} settings={settings} onSettings={onSettings} />
       )}
+      {phase === "paused" && sim?.operationDebrief && <OperationDebrief sim={sim} />}
       {phase === "result" && sim && <ResultOverlay sim={sim} settings={settings} />}
     </>
   );
@@ -388,6 +390,7 @@ function FlightSetup({ sim, settings, onSettings, onBack, gate }: {
     <p className="menu-note">{craft.blurb} · {craft.bombs} bombs · {craft.missiles} missiles</p>
     <span className="menu-world-label">MISSION</span>
     <div className="menu-world-chips">{(["cruise", "dogfight", "strike"] as MissionMode[]).map(m => <button key={m} className={"world-chip" + (mode === m ? " on" : "")} onClick={() => onSettings({ ...settings, missionMode: m })}>{MISSION_MODE_CHIPS[m]}</button>)}</div>
+    {(mode === "strike" || mode === "dogfight") && <MissionBrief mode={mode} settings={settings} onSettings={onSettings} />}
     <p className="menu-note">{MISSION_MODE_LABELS[mode]}</p>
     <p className="menu-note">Home deck · {homeCarrier(settings)}. Land on another boat and that becomes home.</p>
     <div className="menu-buttons"><Btn primary onClick={() => gate(() => launch("carrier"))}>{craft.rotorcraft ? "LIFT OFF — CARRIER" : "CAT SHOT — CARRIER"}</Btn><Btn onClick={() => gate(() => launch("airfield"))}>TAKEOFF — RUNWAY</Btn><Btn onClick={onBack}>BACK</Btn></div>
@@ -414,6 +417,7 @@ function PauseMenu({ sim, settings, onSettings }: {
           <>
             <div className="menu-buttons">
               <Btn primary onClick={() => sim.resume()}>RESUME</Btn>
+              {sim.snapshot.operation && <Btn onClick={() => sim.finishOperation()}>OPERATION DEBRIEF</Btn>}
               <Btn onClick={() => setScreen("settings")}>SETTINGS</Btn>
               <Btn onClick={() => sim.restart()}>RESTART FLIGHT</Btn>
               <Btn onClick={() => sim.quitToMenu()}>QUIT TO MENU</Btn>
@@ -485,10 +489,12 @@ function ResultOverlay({ sim, settings }: { sim: Sim; settings: Settings }) {
           </p>
         )}
         <div className="menu-buttons">
+          {hud.operation && (hud.operation.state.status === "success" || hud.operation.state.status === "failure") && <Btn onClick={() => sim.finishOperation()}>OPERATION DEBRIEF</Btn>}
           {live ? (
-            <Btn primary onClick={() => sim.returnToRoom()}>
-              BACK TO THE ROOM
-            </Btn>
+            <>
+              {!died && hud.operation && (kind === "wire" || kind === "landing") && <Btn primary onClick={() => sim.continueRecovery()}>REARM & CONTINUE</Btn>}
+              <Btn primary={died || !hud.operation} onClick={() => sim.returnToRoom()}>BACK TO THE ROOM</Btn>
+            </>
           ) : (
             <Btn primary onClick={() => kind === "wire" || kind === "landing" ? sim.continueRecovery() : sim.restart()}>{kind === "wire" || kind === "landing" ? "REARM & CONTINUE" : "FLY AGAIN"}</Btn>
           )}
@@ -501,6 +507,48 @@ function ResultOverlay({ sim, settings }: { sim: Sim; settings: Settings }) {
 }
 
 // ---------------------------------------------------------------------------
+
+function MissionBrief({ mode, settings, onSettings, disabled = false }: {
+  mode: "strike" | "dogfight"; settings: Settings; onSettings: (s: Settings) => void; disabled?: boolean;
+}) {
+  const authored = settings.missionStyle !== "endless";
+  return <div className="mission-brief">
+    <div className="menu-world-chips">
+      <button disabled={disabled} className={"world-chip" + (authored ? " on" : "")} onClick={() => onSettings({ ...settings, missionStyle: "operation" })}>OPERATION</button>
+      <button disabled={disabled} className={"world-chip" + (!authored ? " on" : "")} onClick={() => onSettings({ ...settings, missionStyle: "endless" })}>ENDLESS PRACTICE</button>
+    </div>
+    <strong>{authored ? mode === "strike" ? "STOP THE CONVOY" : "FLEET DEFENSE" : "ENDLESS WAVES"}</strong>
+    <p className="menu-note">{!authored ? "Practice against repeating waves. Recover to repair and rearm." : mode === "strike"
+      ? "Disable 2 of 3 transports before they unload. Damaging cargo slows it; clearing the escort or radar makes later passes safer. Arrival clock starts on takeoff."
+      : "Intercept the scout, then two escorted bomber attacks. Protect your carrier; bomb the hostile flight deck between attacks to prevent launches."}</p>
+    {authored && <p className="menu-note">Guns and normal bombing controls work. Recovery repairs and rearms without resetting the operation. A landing is optional after success.</p>}
+  </div>;
+}
+
+function OperationDebrief({ sim }: { sim: Sim }) {
+  const hud = useHud(sim), op = hud.operation;
+  if (!op) return null;
+  const s = op.state, resolved = s.status === "success" || s.status === "failure";
+  const mayRestart = hud.netStatus !== "online" || hud.netHost;
+  return <div className="ui-root result-bg"><div className="result-panel operation-debrief">
+    <span className="menu-world-label">{operationTitle(s)} · OPERATION {s.seed}</span>
+    <h2 className="result-title">{s.status === "success" ? "OBJECTIVE SECURED" : s.status === "failure" ? "OPERATION FAILED" : "OPERATION STATUS"}</h2>
+    <p className="result-detail">{phaseObjective(s)}</p>
+    <div className="operation-stats">
+      {s.kind === "convoy" ? <p>Transports stopped {s.stopped}/3 · arrived {s.arrived}/3 · optional targets {s.optional}</p>
+        : <p>Friendly carrier {Math.round(s.fleetHull)}% · scout {s.scoutStopped ? "intercepted" : s.scoutReported ? "reported" : "pending"} · launches {s.suppressed ? "suppressed" : "active"}</p>}
+      <p>{Math.floor(s.elapsed / 60)}m {Math.floor(s.elapsed % 60)}s · shared kills {op.kills} · your ordnance released {op.storesUsed}</p>
+      <p>Recovery bonus {op.recoveryBonus ? `+${op.recoveryBonus} (${op.recoveryBonus === 150 ? `wire ${op.recoveryWire}` : "surface recovery"})` : "not yet earned"}</p>
+    </div>
+    <div className="menu-buttons">
+      {(!hud.resultKind && s.status !== "failure") && <Btn primary onClick={() => sim.recoverOperation()}>{resolved ? "RECOVER FOR BONUS" : "RESUME OPERATION"}</Btn>}
+      {mayRestart && <Btn primary={s.status === "failure"} onClick={() => sim.restart()}>RETRY SAME OPERATION</Btn>}
+      {mayRestart && <Btn onClick={() => sim.nextOperation()}>NEXT OPERATION</Btn>}
+      {!mayRestart && <p className="menu-note">The host chooses Retry or Next for the room.</p>}
+      <Btn onClick={() => sim.quitToMenu()}>FINISH TO MENU</Btn>
+    </div>
+  </div></div>;
+}
 
 function SettingsPanel({ sim = null, settings, onSettings, onBack }: {
   sim?: Sim | null; settings: Settings; onSettings: (s: Settings) => void; onBack: () => void;
@@ -645,6 +693,7 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
 
   const online = net.status === "online";
   const connecting = net.status === "connecting";
+  const activeOperation = sim?.snapshot.operation?.state.status === "active";
   const live = online || connecting;
 
   // Persist the identity/room as they are edited, so the feedback form and the
@@ -809,6 +858,7 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
                   key={m}
                   className={"world-chip" + (settings.missionMode === m ? " on" : "")}
                   title={MISSION_MODE_LABELS[m]}
+                  disabled={activeOperation}
                   onClick={() => onSettings({ ...settings, missionMode: m })}
                 >
                   {MISSION_MODE_CHIPS[m]}
@@ -816,6 +866,8 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
               ))}
             </div>
           </div>
+          {(settings.missionMode === "dogfight" || settings.missionMode === "strike") && <MissionBrief mode={settings.missionMode} settings={settings} onSettings={onSettings} disabled={activeOperation} />}
+          {activeOperation && <p className="menu-note">Finish the current operation before selecting a different shared mission.</p>}
           <label className="menu-row">
             <span>Daylight</span>
             <select

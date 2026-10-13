@@ -1,6 +1,6 @@
 # F-14 Carrier Simulator
 
-Current published build label: **1.7.3**, continuing the reconstructed version
+Current published build label: **1.8.0**, continuing the reconstructed version
 sequence. See [CHANGELOG.md](CHANGELOG.md) for the counting rule and
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md)
 for the earlier development, recovered builds and missing release history.
@@ -136,6 +136,23 @@ Controls, Graphics, Audio and Interface tabs.
   host owns hull, kills, deaths and life numbers. Late arrivals automatically enter the
   active sortie when the host allows it. The host can disable joining after
   launch using the default-on lobby checkbox. Host takeover preserves the scoreboard.
+- Strike defaults to **Stop the Convoy**: disable two of three transports
+  before arrival. Partial damage slows cargo; destroying the radar doubles
+  escort tracking delay. The escort has finite AA bursts with advance warnings.
+  A designated ship/carrier is tracked automatically through a salvo.
+- Aggressor defaults to **Fleet Defense**: intercept a scout, defend against
+  two escorted bomber strikes, and counterattack between them. Bombers release
+  guided bombs; friendly-carrier hull matters. Flight-deck suppression stops
+  further launches. Empty or damaged escorts withdraw.
+- Both modes offer **Endless Practice**. Objectives show arrival/contact estimates,
+  role labels, offscreen arrows, and bomber altitude/closure. Success can be
+  finished immediately or followed by optional recovery. Debriefs include
+  team results, personal ordnance use, and wire/surface recovery bonuses.
+- Co-op operations share targets, hull, phase clocks, enemy ammunition, pending
+  launches and inbound bombs. Late joiners catch up; host takeover preserves
+  progress. Retry keeps the seed/layout but changes the attempt ID to reject
+  old packets. Next Operation changes the seed. Recovery repairs and rearms
+  without resetting objectives. See [mission rules](docs/MISSION-UPDATE.md).
 - In flight, **O** opens settings without leaving the cockpit, **M** throws up
   the tactical map (the minimap, scaled to fill the view), and **Enter** opens
   the room radio in multiplayer — Enter sends, Escape closes it without pausing.

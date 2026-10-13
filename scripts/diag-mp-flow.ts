@@ -22,6 +22,11 @@
 // Usage: bun scripts/diag-mp-flow.ts
 
 import type { Peer } from "peerjs";
+import { Scene } from "three";
+import { Dogfight } from "../src/sim/dogfight";
+import { spawnAircraft } from "../src/sim/flight";
+import { ExplosionField } from "../src/render/effects";
+import type { SharedCombat, EnemyFire } from "../src/sim/combatSnapshot";
 import {
   Multiplayer,
   emptyPose,
@@ -281,6 +286,8 @@ interface Pilot {
   /** Mission profiles the room pushed at us. */
   modes: MissionMode[];
   fleetClocks: number[];
+  combatFrames: SharedCombat[];
+  enemyFire: EnemyFire[];
   /** Fight snapshots, as they arrived. */
   enemies: EnemySnapshot[];
   /** Hits another pilot reported landing on an enemy we run. */
@@ -305,6 +312,8 @@ function makePilot(): Pilot {
     launches: [],
     modes: [],
     fleetClocks: [],
+    combatFrames: [],
+    enemyFire: [],
     enemies: [],
     hits: [],
     carrierHits: [],
@@ -338,6 +347,8 @@ function makePilot(): Pilot {
       onMode: (mode) => rec.modes.push(mode),
       onFleetClock: seconds => rec.fleetClocks.push(seconds),
       onEnemies: (snap) => rec.enemies.push(snap),
+      onCombat: frame => rec.combatFrames.push(frame),
+      onEnemyFire: shot => rec.enemyFire.push(shot),
       onHit: (id, dmg) => rec.hits.push({ id, dmg }),
       onCarrierHit: (dmg) => rec.carrierHits.push(dmg),
       onBattleAction: (sender, action) => rec.battleActions.push({ sender, action }),
@@ -890,6 +901,51 @@ missing.net.open("NOSUCHROOM", "FOUND", "tomcat"); await flush();
 check("the player can create the room immediately after failure", missing.net.snapshot.host && missing.net.snapshot.status === "online");
 check("a fresh room resets admission and launch state", missing.net.snapshot.allowLateJoin === true && missing.net.snapshot.started === false);
 for (const p of [policyHost, policyWing, policySecond, denied, welcomed, deniedAfterTakeover, missing]) p.net.dispose();
+
+// Versioned mission frames include targets, operation deadlines and finite stores.
+console.log("\n[shared operations]");
+const opLead = makePilot(), opWing = makePilot(), opLate = makePilot();
+opLead.net.open("OPSYNC", "LEAD", "tomcat"); await flush();
+opWing.net.join("OPSYNC", "WING", "hornet"); await flush();
+opLead.net.setMode("strike");
+opLead.net.launch("carrier", 0, { id: 5001, seed: 7, style: "operation" }); await flush();
+const opScene = new Scene(), opFight = new Dogfight(opScene, new ExplosionField(opScene, "low")), opPlayer = spawnAircraft("carrier", 0);
+opFight.configureOperations(true, 7, 5001); opFight.prepareStrike(opPlayer); opFight.beginStrike(opPlayer);
+const opFrame = opFight.sharedSnapshot(); opFrame.targets[0].disabled = true; opFrame.targets[0].speed = 0;
+opLead.net.publishCombat(opFrame); await flush();
+check("shared targets cross the actual room connection", opWing.combatFrames.length === 1 && opWing.combatFrames[0].targets.length === 5);
+opLate.net.join("OPSYNC", "LATE", "intruder"); await flush();
+check("late arrivals immediately get damaged targets and the operation seed", opLate.combatFrames.some(f => f.id === 5001 && f.operation?.seed === 7 && f.targets[0].disabled));
+const existingFrames = opLead.combatFrames.length;
+const wingToLead = (opWing.net as any).conns.get(opLead.net.snapshot.self);
+wingToLead.send(JSON.stringify({ t: "combat", frame: opFrame })); await flush();
+check("guests cannot replace authoritative operation state", opLead.combatFrames.length === existingFrames);
+const firing = { combatId: 5001, seq: 1, weapon: "gun" as const, pos: [0,100,0], vel: [0,0,-1050] };
+opLead.net.sendEnemyFire([firing]); await flush();
+check("hostile projectile events reach wingmen", opWing.enemyFire.length === 1 && opWing.enemyFire[0].seq === 1);
+wingToLead.send(JSON.stringify({ t: "enemyFire", shots: [firing] })); await flush();
+check("guests cannot invent hostile projectiles", opLead.enemyFire.length === 0);
+const blocked = (opLead.net as any).conns.get(opWing.net.snapshot.self); blocked.dataChannel.bufferedAmount = 9000;
+const countBeforeBlock = opWing.combatFrames.length;
+opLead.net.publishCombat({ ...opFrame, revision: 2 }); opLead.net.publishCombat({ ...opFrame, revision: 3 }); await flush();
+check("operation snapshots respect congestion", opWing.combatFrames.length === countBeforeBlock);
+blocked.dataChannel.bufferedAmount = 0; (opLead.net as any).tick(); await flush();
+check("drain sends only the newest operation revision", opWing.combatFrames.length === countBeforeBlock + 1 && opWing.combatFrames[opWing.combatFrames.length - 1]?.revision === 3);
+opLead.net.launch("carrier", 0, { id: 5002, seed: 7, style: "operation" }); await flush();
+const beforeStale = opWing.combatFrames.length;
+(opLead.net as any).conns.get(opWing.net.snapshot.self).send(JSON.stringify({ t: "combat", frame: opFrame })); await flush();
+check("a retry rejects old operation snapshots", opWing.combatFrames.length === beforeStale);
+const hitsBeforeStale = opLead.hits.length; opWing.net.hitBandit(opFrame.targets[0].id, 30, 5001); await flush();
+check("a retry rejects old target damage claims", opLead.hits.length === hitsBeforeStale);
+opLead.net.publishCombat({ ...opFrame, id: 5002, operation: { ...opFrame.operation!, id: 5002 }, revision: 1 }); await flush();
+opLead.net.leave(); await flush(); await advance(3000);
+const newOpLead = [opWing, opLate].find(p => p.net.snapshot.host)!;
+check("takeover retains the retry's operation profile", !!newOpLead);
+const promotedFrame = { ...opFrame, id: 5002, operation: { ...opFrame.operation!, id: 5002 }, revision: 2 };
+newOpLead.net.publishCombat(promotedFrame); await flush();
+const survivor = newOpLead === opWing ? opLate : opWing;
+check("a promoted host can continue the shared operation stream", survivor.combatFrames.some(f => f.id === 5002 && f.revision === 2));
+for (const p of [opLead, opWing, opLate]) p.net.dispose(); opFight.dispose();
 
 for (const p of [host, wing, third, late, early, lateHost, clash, lead, numberTwo, scout, wingTwo, skipper, joiner, lateEnemy]) p.net.dispose();
 
