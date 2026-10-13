@@ -1,7 +1,7 @@
 // UI chrome: main menu, pause, settings, controls, flight results.
 // React only; the canvas keeps rendering behind these overlays.
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import type { Sim, Phase } from "../sim/engine";
 import { AIRCRAFT_LIST } from "../sim/aircraft";
 import { carriers, worldSeedForRoom } from "../sim/world";
@@ -18,7 +18,7 @@ import {
   type Account,
 } from "../accounts";
 import { gamestateConfigured } from "../gamestate";
-import type { ChatMsg, NetState } from "../net/multiplayer";
+import type { NetState } from "../net/multiplayer";
 import { APP_VERSION } from "../version";
 import { Hud, useHud } from "./Hud";
 import {
@@ -68,19 +68,6 @@ function useNet(sim: Sim | null): NetState {
     subscribe,
     () => (sim ? sim.netSnapshot : IDLE_NET),
     () => IDLE_NET,
-  );
-}
-
-/** Shown before any session exists, so the store read stays referentially stable. */
-const EMPTY_CHAT: readonly ChatMsg[] = [];
-
-function useChat(sim: Sim | null): readonly ChatMsg[] {
-  const subscribe = (cb: () => void) =>
-    sim ? sim.subscribeChat(cb) : () => {};
-  return useSyncExternalStore(
-    subscribe,
-    () => (sim ? sim.chat : EMPTY_CHAT),
-    () => EMPTY_CHAT,
   );
 }
 
@@ -362,7 +349,7 @@ function MainMenu({ sim, settings, onSettings, openMultiplayer, onOpenedMultipla
           <div className="dispatch-stamp">CLEAR FOR LAUNCH <span>///</span></div>
         </>}
         {screen === "solo" && <FlightSetup sim={sim} settings={settings} onSettings={onSettings} gate={gate} onBack={() => setScreen("main")} />}
-        {screen === "settings" && <SettingsPanel settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />}
+        {screen === "settings" && <SettingsPanel sim={sim} settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />}
         {screen === "controls" && <ControlsPanel settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />}
         {screen === "multiplayer" && <MultiplayerPanel sim={sim} settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />}
         {screen === "feedback" && <FeedbackPanel sim={sim} settings={settings} onBack={() => setScreen("main")} />}
@@ -445,7 +432,7 @@ function PauseMenu({ sim, settings, onSettings }: {
           </>
         )}
         {screen === "settings" && (
-          <SettingsPanel settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />
+          <SettingsPanel sim={sim} settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />
         )}
         {screen === "controls" && (
           <ControlsPanel settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />
@@ -515,13 +502,15 @@ function ResultOverlay({ sim, settings }: { sim: Sim; settings: Settings }) {
 
 // ---------------------------------------------------------------------------
 
-function SettingsPanel({ settings, onSettings, onBack }: {
-  settings: Settings; onSettings: (s: Settings) => void; onBack: () => void;
+function SettingsPanel({ sim = null, settings, onSettings, onBack }: {
+  sim?: Sim | null; settings: Settings; onSettings: (s: Settings) => void; onBack: () => void;
 }) {
+  const net = useNet(sim);
   const set = (patch: Partial<Settings>) => onSettings({ ...settings, ...patch });
   const [tab, setTab] = useState("flight");
   return <div className="menu-screen settings-screen">
     <h3 className="menu-h3">SETTINGS</h3>
+    {net.status === "online" && <p className="menu-note" role="status">ROOM {net.room} · {net.host ? "HOST" : "FLIGHT MEMBER"} · {net.allowLateJoin === false ? "JOINING AFTER LAUNCH DISABLED" : "JOINING AFTER LAUNCH ALLOWED"}</p>}
     <nav className="settings-tabs" aria-label="Settings category">{["flight", "controls", "graphics", "audio", "interface"].map(t => <button key={t} aria-pressed={tab === t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>{t.toUpperCase()}</button>)}</nav>
     {tab === "flight" && <>
       <label className="menu-row"><span>Daylight</span><select value={settings.daylight} onChange={e => set({ daylight: e.target.value as DaylightMode })}>{(Object.keys(DAYLIGHT_LABELS) as DaylightMode[]).map(m => <option key={m} value={m}>{DAYLIGHT_LABELS[m]}</option>)}</select></label>
@@ -783,7 +772,6 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
               </div>
             ))}
           </div>
-          <ChatPanel sim={sim} online={online} />
         </>
       )}
 
@@ -809,6 +797,10 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
       {online && net.host && (
         <div className="mp-launch">
           <span className="menu-world-label">LAUNCH SETUP</span>
+          <label className="menu-row">
+            <span>Allow players to join after the game starts</span>
+            <input type="checkbox" checked={net.allowLateJoin !== false} onChange={e => sim?.setAllowLateJoin(e.target.checked)} />
+          </label>
           <div className="menu-world">
             <span className="menu-world-label">MISSION</span>
             <div className="menu-world-chips">
@@ -858,78 +850,18 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
           </div>
         </div>
       )}
-      {online && !net.host && settings.missionMode === "versus" && <Btn onClick={() => sim?.joinBattle()}>JOIN ACTIVE AIR BATTLE</Btn>}
+      {online && !net.host && settings.missionMode === "versus" && net.started && <Btn onClick={() => sim?.joinBattle()}>JOIN ACTIVE AIR BATTLE</Btn>}
       {online && !net.host && (
         <div className="mp-launch">
           <span className="menu-world-label">WAITING FOR THE HOST</span>
           <div className="menu-world-note">
-            The room's mission is {MISSION_MODE_LABELS[settings.missionMode]} — the host sets it,
-            and everyone in the room flies it. Stay in the lobby: you lift off with the room.
+            The room's mission is {MISSION_MODE_LABELS[settings.missionMode]}. Stay in the lobby: you lift off with the host. In flight, press Enter to chat.
           </div>
         </div>
       )}
 
       <div className="menu-row-btns">
         <Btn onClick={onBack}>BACK</Btn>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Room radio (lobby chat over the same data channel as everything else)
-// ---------------------------------------------------------------------------
-
-function ChatPanel({ sim, online }: { sim: Sim | null; online: boolean }) {
-  const log = useChat(sim);
-  const [draft, setDraft] = useState("");
-  // The log grows downward, so the newest line is the one to keep on screen.
-  const boxRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const box = boxRef.current;
-    if (box) box.scrollTop = box.scrollHeight;
-  }, [log.length]);
-
-  const send = () => {
-    const text = draft.trim();
-    if (!text) return;
-    sim?.sendChat(text);
-    setDraft("");
-  };
-
-  return (
-    <div className="mp-chat">
-      <span className="menu-world-label">RADIO</span>
-      <div className="mp-chat-log" ref={boxRef}>
-        {log.length === 0 && (
-          <div className="mp-chat-empty">
-            Radio silence — say something to the flight.
-          </div>
-        )}
-        {log.map((m, i) => (
-          <div className="mp-chat-line" key={i}>
-            <span className={"mp-chat-from" + (m.from ? "" : " unknown")}>
-              {m.from ? m.from.toUpperCase() : "??"}
-            </span>
-            <span className="mp-chat-text">{m.text}</span>
-          </div>
-        ))}
-      </div>
-      <div className="mp-chat-row">
-        <input
-          className="menu-input"
-          value={draft}
-          maxLength={160}
-          placeholder={online ? "TRANSMIT TO THE FLIGHT" : "RADIO OFFLINE"}
-          disabled={!online}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") send();
-          }}
-        />
-        <button className="world-chip chip-inline" disabled={!online || !draft.trim()} onClick={send}>
-          SEND
-        </button>
       </div>
     </div>
   );

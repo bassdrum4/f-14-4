@@ -6,6 +6,29 @@ arrived in large exports with stale 1.0.0 metadata; see
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md) for the surviving
 timeline, recovered intermediate build, and remaining history gaps.
 
+## 1.7.3 — 2026-10-13
+
+- Remove waiting-lobby chat. Keep Enter chat during multiplayer flight,
+  show incoming messages briefly, and close with Escape without pausing.
+  Release held flight controls when focusing text fields; prevent radio from
+  opening in solo flight or over menus, and release launch-button focus.
+- Add a default-on host checkbox for joining after launch. Enforce it on
+  admission, preserve it during host takeover, and send the current launch
+  point to allowed late arrivals. Show the room code and admission policy in
+  O-settings. Hide the inactive air-battle join button before launch.
+- Return failed room searches to an actionable error state, name the missing
+  room, and offer OPEN ROOM so the player can immediately create it.
+- Restrict mission profile handshakes and enemy snapshots to the room host;
+  a wingman's handshake or binary packet cannot overwrite the shared fight.
+- Apply a cloud-restored launch point to the parked solo aircraft immediately
+  instead of requiring a reload. Keep airborne aircraft in place.
+- Specify the next Strike convoy and Aggressor fleet-defense operations in
+  docs/MISSION-UPDATE.md, including the missing Strike target-sync prerequisite.
+  These operations remain a design, not implemented gameplay.
+- Extend local regression checks for room policy, late arrival, takeover,
+  missing-room recovery, host authority, text-entry controls and launch restore.
+  Rebuild both standalone HTML copies; no Actions test changes.
+
 ## 1.7.2 — 2026-10-11
 
 - Give wave-1 Aggressors a 1.1-second evasive reaction delay and wave-2

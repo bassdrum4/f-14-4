@@ -34,6 +34,13 @@ await check('Focus loss immediately releases smoothed flight axes', () => {
   key('ArrowUp'); assert(input.sample(.2).pitch > 0); dispatch('blur');
   assert.equal(input.sample(1 / 120).pitch, 0); input.detach();
 });
+await check('Opening a text field releases held flight controls and queued weapons', () => {
+  const input = new InputManager(settings.defaultSettings()); input.attach(canvas as any);
+  key('ArrowUp'); key('Space'); key('KeyE'); assert(input.sample(.2).pitch > 0);
+  dispatch('focusin', { target: { tagName: 'INPUT' } });
+  assert.equal(input.sample(1 / 120).pitch, 0); assert(!input.sample(1 / 120).fire); assert(!input.take('missile'));
+  input.detach();
+});
 await check('An occupied binding swaps keys and both actions remain usable', () => {
   const rebind = (settings as any).rebind;
   const s = settings.defaultSettings(); s.bindings = rebind ? rebind(s.bindings, 'camera', 'KeyE') : { ...s.bindings, camera: 'KeyE' };

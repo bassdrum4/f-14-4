@@ -462,6 +462,8 @@ export class Sim {
       s.daylight !== this.settings.daylight || s.timeOfDay !== this.settings.timeOfDay;
     const modeChanged = s.missionMode !== this.settings.missionMode;
     const aircraftChanged = s.aircraft !== this.settings.aircraft;
+    const launchChanged = s.launchKind !== this.settings.launchKind || s.launchCarrier !== this.settings.launchCarrier;
+    const restoreLaunch = launchChanged && this.phase === "menu" && this.netState.status !== "online";
     this.settings = s;
     this.input.applySettings(s);
     this.audio.setVolume(s.volume);
@@ -472,8 +474,12 @@ export class Sim {
     if (resolutionChanged) this.renderer.setAdaptiveResolution(s.adaptiveResolution);
     if (daylightChanged) this.dayHours = this.resolveDayHours(s);
     // Changing airframe: rebuild the mesh and re-park the jet on the new type.
-    if (aircraftChanged) {
-      this.renderer.setAircraft(s.aircraft);
+    if (restoreLaunch) {
+      this.mission = s.launchKind;
+      this.spawnCarrier = clampCarrier(s.launchCarrier);
+    }
+    if (aircraftChanged || restoreLaunch) {
+      if (aircraftChanged) this.renderer.setAircraft(s.aircraft);
       this.state = spawnAircraft(this.mission, this.spawnCarrier, s.aircraft, s.bindings);
       this.prevPos.copy(this.state.pos);
       this.prevQuat.copy(this.state.quat);
@@ -625,6 +631,8 @@ export class Sim {
     // snap the camera to the new jet instead of gliding in from the old scene
     this.rig.resetFollow();
     this.setPhase("flying");
+    // A keyboard-activated launch button must not keep intercepting flight keys.
+    if (typeof document !== "undefined") (document.activeElement as HTMLElement | null)?.blur?.();
     this.acc = 0;
     this.last = performance.now() / 1000;
     this.input.clearEdges();
@@ -891,6 +899,8 @@ export class Sim {
     this.battle = { match: 0, pilots: [] };
     this.df.setOpponents([]);
   }
+
+  setAllowLateJoin(allow: boolean): void { this.net.setAllowLateJoin(allow); }
 
   /** Rename ourselves mid-session; the roster updates in place. */
   setCallsign(callsign: string): void {

@@ -200,6 +200,7 @@ interface Pilot {
   launches: Array<{ mission: string; carrier: number }>;
   modes: string[];
   battleStates: number;
+  enemyStates: number;
   shots: Array<{ sender: string; shot: unknown }>;
   links: Array<{ id: string; ms: number }>;
 }
@@ -213,6 +214,7 @@ function makePilot(): Pilot {
     launches: [],
     modes: [],
     battleStates: 0,
+    enemyStates: 0,
     shots: [],
     links: [],
   };
@@ -224,6 +226,7 @@ function makePilot(): Pilot {
       onLaunch: (mission, carrier) => rec.launches.push({ mission, carrier }),
       onMode: (mode) => rec.modes.push(mode),
       onBattleState: () => rec.battleStates++,
+      onEnemies: () => rec.enemyStates++,
       onBattleShot: (sender, shot) => rec.shots.push({ sender, shot }),
       onLinkDelay: (id, ms) => rec.links.push({ id, ms }),
     },
@@ -513,12 +516,17 @@ deliver(w1.net, h2Id, { t: "mode", mode: "strike" });
 await flush();
 check("the host's mission profile lands", w1.modes.join() === "strike", w1.modes.join());
 
-deliver(w1.net, w2Id, { t: "hello", name: "MERLIN", aircraft: "tomcat", host: true });
+deliver(w1.net, w2Id, { t: "hello", name: "MERLIN", aircraft: "tomcat", host: true, mode: "cruise" });
 deliver(w1.net, w2Id, { t: "mode", mode: "versus" });
 deliver(w1.net, w2Id, { t: "battleState", snapshot: { match: 7, pilots: [] } });
 await flush();
 check("a wingman cannot rewrite the mission profile", w1.modes.join() === "strike", w1.modes.join());
 check("a wingman cannot fabricate the scoreboard", w1.battleStates === 0, String(w1.battleStates));
+const enemyFrame = packEnemies({ carrier: null, bandits: [], wave: 77 }, 1);
+(w1.net as any).onData((w1.net as any).conns.get(w2Id), enemyFrame);
+check("a wingman cannot overwrite the enemy stream", w1.enemyStates === 0);
+(w1.net as any).onData((w1.net as any).conns.get(h2Id), enemyFrame);
+check("the host can still publish the enemy stream", w1.enemyStates === 1);
 
 deliver(w1.net, h2Id, { t: "battleState", snapshot: { match: 7, pilots: [] } });
 await flush();

@@ -74,6 +74,10 @@ export class InputManager {
     this.pressStart = null;
     this.clicks.length = 0;
   };
+  private onFocusBound = (e: FocusEvent) => {
+    const target = e.target as HTMLElement | null;
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) this.onBlurBound();
+  };
 
   constructor(settings: Settings) {
     this.bindings = { ...settings.bindings };
@@ -85,6 +89,7 @@ export class InputManager {
     window.addEventListener("keydown", this.onKeyBound);
     window.addEventListener("keyup", this.onKeyUpBound);
     window.addEventListener("blur", this.onBlurBound);
+    window.addEventListener("focusin", this.onFocusBound);
     el.addEventListener("mousedown", this.onDownBound);
     window.addEventListener("mouseup", this.onUpBound);
     window.addEventListener("mousemove", this.onMoveBound);
@@ -94,6 +99,7 @@ export class InputManager {
     window.removeEventListener("keydown", this.onKeyBound);
     window.removeEventListener("keyup", this.onKeyUpBound);
     window.removeEventListener("blur", this.onBlurBound);
+    window.removeEventListener("focusin", this.onFocusBound);
     if (this.el) {
       this.el.removeEventListener("mousedown", this.onDownBound);
       this.el = null;

@@ -11,6 +11,10 @@ you want based on everything you have asked for so far.
 Start with **Stop the Convoy** for Strike and **Fleet Defense** for Aggressor.
 Keep quick bombing controls, short briefings, and optional recovery intact.
 
+Detailed operation rules, phase pacing, multiplayer prerequisites and acceptance
+checks are in [MISSION-UPDATE.md](MISSION-UPDATE.md). That is a design document;
+the authored operations are not implemented yet.
+
 - [ ] Replace endless-wave-only progression with finite operations, clear
   success/failure conditions, and an optional endless mode.
 - [ ] Strike / Stop the Convoy: transports head toward a destination; escorts

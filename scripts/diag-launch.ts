@@ -284,6 +284,24 @@ console.log("launch point — the engine writes it down (real stepSim, no WebGL)
     `${sim.spawnCarrier}/${sim.mission}`);
 }
 
+console.log("launch point — cloud restore takes effect without a reload");
+{
+  const sim = Object.create(Sim.prototype) as Record<string, any>;
+  sim.settings = defaultSettings(); sim.phase = "menu"; sim.netState = { status: "idle" };
+  sim.mission = "carrier"; sim.spawnCarrier = 0; sim.state = spawnAircraft("carrier", 0);
+  sim.input = { applySettings() {} }; sim.audio = { setVolume() {} };
+  sim.renderer = { setAircraft() {} }; sim.df = { setAircraft() {} }; sim.net = { setAircraft() {} };
+  sim.prevPos = new Vector3(); sim.prevQuat = new Quaternion(); sim.updateJetPose = () => {};
+  sim.applySettings({ ...sim.settings, launchCarrier: 2 });
+  check("pulling a saved carrier moves the current home deck", sim.spawnCarrier === 2 && sim.state.catCarrier === 2);
+  sim.applySettings({ ...sim.settings, launchKind: "airfield" });
+  check("pulling a saved runway re-parks the current aircraft", sim.mission === "airfield" && sim.state.groundKind === "runway");
+  const airborne = sim.state;
+  sim.phase = "flying";
+  sim.applySettings({ ...sim.settings, launchKind: "carrier", launchCarrier: 1 });
+  check("a launch preference does not teleport an airborne pilot", sim.state === airborne && sim.mission === "airfield");
+}
+
 if (failures > 0) {
   console.error(`\n${failures} launch-point check(s) failed`);
   process.exit(1);

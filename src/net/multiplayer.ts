@@ -84,6 +84,9 @@ export interface NetState {
   /** Poses received since the session opened. */
   recv: number;
   error?: string;
+  /** Room admission policy, owned by the host and retained on takeover. */
+  allowLateJoin?: boolean;
+  started?: boolean;
 }
 
 /** One radio transmission, as the lobby chat log sees it. */
@@ -339,9 +342,13 @@ interface RosterEntry {
   host: boolean;
 }
 
+interface RoomLaunch { mission: MissionKind; carrier: number }
+
 type Control =
   | { t: "hello"; name: string; aircraft: AircraftId; mode: MissionMode; owner?: string }
-  | { t: "roster"; peers: RosterEntry[]; mode: MissionMode }
+  | { t: "roster"; peers: RosterEntry[]; mode: MissionMode; allowLateJoin?: boolean; launch?: RoomLaunch | null }
+  | { t: "roomPolicy"; allowLateJoin: boolean; launch: RoomLaunch | null }
+  | { t: "reject"; reason: "started" }
   | { t: "join"; peer: RosterEntry }
   | { t: "bye"; id: string }
   | { t: "name"; name: string; aircraft: AircraftId }
@@ -514,6 +521,9 @@ export class Multiplayer {
   private aircraft: AircraftId = DEFAULT_AIRCRAFT;
   /** The room's mission profile. The host owns it; everyone else follows. */
   private mode: MissionMode = "cruise";
+  private allowLateJoin = true;
+  private roomLaunch: RoomLaunch | null = null;
+  private admitted = new Set<string>();
   private status: NetStatus = "idle";
   private error: string | undefined;
   /**
@@ -616,6 +626,8 @@ export class Multiplayer {
       sent: this.sent,
       recv: this.recv,
       error: this.error,
+      allowLateJoin: this.allowLateJoin,
+      started: this.roomLaunch !== null,
     };
   }
 
@@ -781,6 +793,9 @@ export class Multiplayer {
     this.fleetClock = null;
     this.fleetSentAt = -Infinity;
     this.enemyFlip = false;
+    this.allowLateJoin = true;
+    this.roomLaunch = null;
+    this.admitted.clear();
   }
 
   private fail(err: unknown): void {
@@ -812,9 +827,13 @@ export class Multiplayer {
       // While other wingmen are still linked this is a lost link to one
       // peer, not a missing room — say so, and don't contradict the message
       // that was just shown for the host leaving.
-      this.error = this.conns.size > 0
-        ? "The room host is not answering — wingmen already linked still fly."
-        : "No room with that code — check it, or open the room yourself.";
+      if (this.conns.size > 0) {
+        this.error = "The room host is not answering — wingmen already linked still fly.";
+      } else {
+        this.stopSession();
+        this.status = "error";
+        this.error = `No room named ${this.room}. Check the code, or choose OPEN ROOM to create it.`;
+      }
       this.emit();
       return;
     }
@@ -854,7 +873,9 @@ export class Multiplayer {
     peer.on("open", () => {
       this.host = true;
       this.sendAll(JSON.stringify({ t: "host" } satisfies Control));
-      this.error = "You are the room host now — new wingmen can join with the same code.";
+      this.error = this.roomLaunch && !this.allowLateJoin
+        ? "You are the room host now — joining after launch is disabled."
+        : "You are the room host now — new wingmen can join with the same code.";
       this.emit();
     });
     peer.on("connection", (conn) => this.attach(conn, null));
@@ -987,7 +1008,7 @@ export class Multiplayer {
     if (seq === null) {
       // Not a pose: the other binary format on this channel is the fight.
       const snap = unpackEnemies(buf);
-      if (snap) this.handlers.onEnemies?.(snap);
+      if (snap && this.isHostConn(conn)) this.handlers.onEnemies?.(snap);
       return;
     }
     const prev = this.lastSeq.get(conn.peer);
@@ -1000,6 +1021,12 @@ export class Multiplayer {
   private onControl(conn: DataConnection, msg: Control): void {
     switch (msg.t) {
       case "hello": {
+        if (this.host && this.roomLaunch && !this.allowLateJoin && !this.admitted.has(conn.peer)) {
+          this.send(conn, { t: "reject", reason: "started" } satisfies Control);
+          // Let the rejection reach the receiver before closing the channel.
+          window.setTimeout(() => { if (this.conns.get(conn.peer) === conn) this.drop(conn.peer, false); }, 250);
+          break;
+        }
         const entry: RosterEntry = {
           id: conn.peer,
           owner: conn.peer === hostPeerId(this.room) && typeof msg.owner === "string" && msg.owner.startsWith(`f14sim-${idSlug(this.room)}-`) ? msg.owner : undefined,
@@ -1014,6 +1041,7 @@ export class Multiplayer {
         };
         const known = this.pilots.has(conn.peer);
         if (!this.adopt(conn.peer, entry)) break;
+        this.admitted.add(conn.peer);
         if (this.host || this.hostDuty) {
           // Tell the newcomer who else is here, and everyone else about them.
           // The room's mission profile rides the roster: a pilot joining an
@@ -1022,12 +1050,12 @@ export class Multiplayer {
             { id: this.rosterId(), owner: this.selfId, name: this.name, aircraft: this.aircraft, host: true },
             ...this.pilots.values(),
           ].filter((p) => p.id !== conn.peer);
-          this.send(conn, { t: "roster", peers: roster, mode: this.mode } satisfies Control);
+          this.send(conn, { t: "roster", peers: roster, mode: this.mode, allowLateJoin: this.allowLateJoin, launch: this.roomLaunch } satisfies Control);
           for (const other of this.conns.values()) {
             if (other === conn || !other.open) continue;
             this.send(other, { t: "join", peer: entry } satisfies Control);
           }
-        } else {
+        } else if (this.isHostConn(conn)) {
           // Someone else is hosting: their profile is the room's.
           this.adoptMode(msg.mode);
         }
@@ -1042,18 +1070,34 @@ export class Multiplayer {
         // array used to throw straight out of the data handler.
         if (!this.isHostConn(conn) || !Array.isArray(msg.peers)) break;
         this.adoptMode(msg.mode);
+        this.adoptRoomPolicy(msg.allowLateJoin, msg.launch);
         for (const entry of msg.peers) {
           if (!entry || typeof entry.id !== "string" || entry.id === this.selfId) continue;
           const known = this.pilots.has(entry.id);
           if (!this.adopt(entry.id, entry)) break;
+          this.admitted.add(entry.id);
           // Deterministic tie-break so both ends do not dial each other.
           if (!entry.host && !this.conns.has(entry.id) && this.selfId < entry.id) {
             this.dial(entry.id, entry);
           }
           if (!known) this.emit();
         }
+        this.emit();
+        // A late joiner enters the running sortie with the room's launch point.
+        if (this.roomLaunch) this.handlers.onLaunch?.(this.roomLaunch.mission, this.roomLaunch.carrier);
         break;
       }
+      case "roomPolicy":
+        if (this.isHostConn(conn)) { this.adoptRoomPolicy(msg.allowLateJoin, msg.launch); this.emit(); }
+        break;
+      case "reject":
+        if (this.isHostConn(conn) && msg.reason === "started") {
+          this.stopSession();
+          this.status = "error";
+          this.error = "This game has already started and the host has disabled joining after launch. Join another room or open your own.";
+          this.emit();
+        }
+        break;
       case "join": {
         // Same rule as `roster`: the host introduces pilots, nobody else.
         const entry = msg.peer;
@@ -1084,6 +1128,8 @@ export class Multiplayer {
         if (!this.isHostConn(conn)) break;
         if (msg.mission !== "carrier" && msg.mission !== "airfield") break;
         if (!Number.isFinite(msg.carrier)) break;
+        this.roomLaunch = { mission: msg.mission, carrier: Math.trunc(msg.carrier) };
+        this.emit();
         this.handlers.onLaunch?.(msg.mission, Math.trunc(msg.carrier));
         break;
       case "fleet":
@@ -1201,6 +1247,14 @@ export class Multiplayer {
     this.handlers.onMode?.(mode);
   }
 
+  private adoptRoomPolicy(allow: boolean | undefined, launch: RoomLaunch | null | undefined): void {
+    if (typeof allow === "boolean") this.allowLateJoin = allow;
+    if (launch === null) this.roomLaunch = null;
+    else if (launch && (launch.mission === "carrier" || launch.mission === "airfield") && Number.isFinite(launch.carrier)) {
+      this.roomLaunch = { mission: launch.mission, carrier: Math.trunc(launch.carrier) };
+    }
+  }
+
   /** Record a pilot. False when the room is already at its ceiling. */
   private adopt(id: string, entry: RosterEntry): boolean {
     if (id === this.selfId) return true;
@@ -1271,6 +1325,9 @@ export class Multiplayer {
    * boat to use; wingmen who are still in the lobby lift off with them.
    */
   launch(mission: MissionKind, carrier: number): void {
+    if (!this.host || !this.online || !Number.isFinite(carrier) || (mission !== "carrier" && mission !== "airfield")) return;
+    this.roomLaunch = { mission, carrier: Math.trunc(carrier) };
+    this.emit();
     const msg = JSON.stringify({ t: "launch", mission, carrier } satisfies Control);
     for (const conn of this.conns.values()) {
       if (!conn.open) continue;
@@ -1280,6 +1337,13 @@ export class Multiplayer {
         /* ignore */
       }
     }
+  }
+
+  setAllowLateJoin(allow: boolean): void {
+    if (!this.host || !this.online || typeof allow !== "boolean") return;
+    this.allowLateJoin = allow;
+    this.sendAll(JSON.stringify({ t: "roomPolicy", allowLateJoin: allow, launch: this.roomLaunch } satisfies Control));
+    this.emit();
   }
 
   /**

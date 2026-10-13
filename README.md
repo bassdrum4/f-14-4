@@ -1,6 +1,6 @@
 # F-14 Carrier Simulator
 
-Current published build label: **1.7.2**, continuing the reconstructed version
+Current published build label: **1.7.3**, continuing the reconstructed version
 sequence. See [CHANGELOG.md](CHANGELOG.md) for the counting rule and
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md)
 for the earlier development, recovered builds and missing release history.
@@ -133,11 +133,13 @@ Controls, Graphics, Audio and Interface tabs.
   re-arm the racks, and return the aircraft to a launch position. Hull repair
   is confirmed by the host after checking the recovery surface and speed.
   Guns and missiles damage player aircraft; the
-  host owns hull, kills, deaths and life numbers. Late arrivals can join an
-  active battle from the lobby. Host takeover preserves the scoreboard.
+  host owns hull, kills, deaths and life numbers. Late arrivals automatically enter the
+  active sortie when the host allows it. The host can disable joining after
+  launch using the default-on lobby checkbox. Host takeover preserves the scoreboard.
 - In flight, **O** opens settings without leaving the cockpit, **M** throws up
   the tactical map (the minimap, scaled to fill the view), and **Enter** opens
-  the room radio — Enter sends, Escape closes it without pausing. The green
+  the room radio in multiplayer — Enter sends, Escape closes it without pausing.
+  The waiting lobby has no chat. O-settings shows the current room code. The green
   angle ladder and the gun cross can each be switched off in Settings →
   Interface for a clean view.
 - Trees, rocks and airbase details are procedural. Instanced scenery is split

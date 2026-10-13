@@ -856,6 +856,41 @@ renderNow += 40; flying.x += 14.4; skipper.net.publish(flying); await flush();
 check("a drained channel resumes with the newest pose", joiner.poseCount === slowBefore + 1 && Math.abs(joiner.poses.get(skipper.net.snapshot.self)!.x - flying.x) < .001);
 performance.now = realNow;
 
+// Room admission, actual late launches, and takeover preserve the host's policy.
+console.log("\n[late join policy]");
+const policyHost = makePilot(), policyWing = makePilot(), policySecond = makePilot();
+policyHost.net.open("POLICY", "LEAD", "tomcat"); await flush();
+check("new rooms allow joining after launch by default", policyHost.net.snapshot.allowLateJoin === true);
+policyHost.net.setAllowLateJoin(false);
+policyWing.net.join("POLICY", "TWO", "hornet"); await flush();
+policySecond.net.join("POLICY", "THREE", "crusader"); await flush();
+check("unchecked policy still admits lobby players", policyHost.net.snapshot.pilots.length === 2);
+check("the host policy reaches guests", policyWing.net.snapshot.allowLateJoin === false);
+policyWing.net.setAllowLateJoin(true); await flush();
+check("guests cannot change the room policy", policyHost.net.snapshot.allowLateJoin === false);
+policyHost.net.launch("airfield", 2); await flush();
+check("launch marks the room started on both ends", policyHost.net.snapshot.started === true && policyWing.net.snapshot.started === true);
+const denied = makePilot(); denied.net.join("POLICY", "LATE", "tomcat"); await flush(); await advance(300);
+check("closed games reject new players with an explanation", denied.net.snapshot.status === "error" && (denied.net.snapshot.error ?? "").includes("disabled joining"), JSON.stringify(denied.net.snapshot));
+check("rejection leaves the existing roster intact", policyHost.net.snapshot.pilots.length === 2 && policyWing.net.snapshot.status === "online");
+policyHost.net.setAllowLateJoin(true); await flush();
+const welcomed = makePilot(); welcomed.net.join("POLICY", "FOUR", "intruder"); await flush();
+check("reopening admits a late player", welcomed.net.snapshot.status === "online" && welcomed.net.snapshot.pilots.length === 3);
+check("late arrival follows the actual active launch", welcomed.launches.length === 1 && welcomed.launches[0].mission === "airfield" && welcomed.launches[0].carrier === 2, JSON.stringify(welcomed.launches));
+policyHost.net.setAllowLateJoin(false); await flush();
+policyHost.net.leave(); await flush(); await advance(3000);
+const promoted = [policyWing, policySecond, welcomed].find(p => p.net.snapshot.host)!;
+check("host takeover retains the active closed game", !!promoted && promoted.net.snapshot.allowLateJoin === false && promoted.net.snapshot.started === true);
+const deniedAfterTakeover = makePilot(); deniedAfterTakeover.net.join("POLICY", "FIVE", "tomcat"); await flush(); await advance(300);
+check("a promoted host also enforces the policy", deniedAfterTakeover.net.snapshot.status === "error");
+const missing = makePilot(); missing.net.join("NOSUCHROOM", "LOST", "tomcat"); await flush(); await advance(16000);
+check("a missing room exits the phantom online session", missing.net.snapshot.status === "error" && !missing.net.online);
+check("the missing-room error offers creation and names the room", (missing.net.snapshot.error ?? "").includes("NOSUCHROOM") && (missing.net.snapshot.error ?? "").includes("OPEN ROOM"), missing.net.snapshot.error);
+missing.net.open("NOSUCHROOM", "FOUND", "tomcat"); await flush();
+check("the player can create the room immediately after failure", missing.net.snapshot.host && missing.net.snapshot.status === "online");
+check("a fresh room resets admission and launch state", missing.net.snapshot.allowLateJoin === true && missing.net.snapshot.started === false);
+for (const p of [policyHost, policyWing, policySecond, denied, welcomed, deniedAfterTakeover, missing]) p.net.dispose();
+
 for (const p of [host, wing, third, late, early, lateHost, clash, lead, numberTwo, scout, wingTwo, skipper, joiner, lateEnemy]) p.net.dispose();
 
 console.log(failures === 0 ? "\nALL MULTIPLAYER FLOW CHECKS PASSED" : `\n${failures} FAILURES`);

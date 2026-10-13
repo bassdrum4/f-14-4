@@ -70,7 +70,7 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
       {hud.pod && <TargetPod sim={sim} />}
       {minimap && !hud.pod && !hud.bigMap && <Minimap hud={hud} />}
       {!hud.pod && hud.bigMap && <Minimap hud={hud} big />}
-      <RadioOverlay sim={sim} />
+      {sim?.phase === "flying" && hud.netStatus === "online" && <RadioOverlay sim={sim} />}
       <div className="hud-left">
         <Gauge label="AIRSPEED" value={Math.round(hud.speedKt)} unit="KT" big />
         <Gauge label="MACH" value={hud.mach.toFixed(2)} />
@@ -1153,6 +1153,14 @@ function RadioOverlay({ sim }: { sim: Sim | null }) {
   const [line, setLine] = useState("");
   const box = useRef<HTMLInputElement>(null);
   const online = sim?.netSnapshot.status === "online";
+  const [recent, setRecent] = useState(false);
+
+  useEffect(() => {
+    if (log.length === 0) return;
+    setRecent(true);
+    const timer = window.setTimeout(() => setRecent(false), 8000);
+    return () => window.clearTimeout(timer);
+  }, [log]);
 
   useEffect(() => {
     if (open) box.current?.focus();
@@ -1160,17 +1168,21 @@ function RadioOverlay({ sim }: { sim: Sim | null }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.code !== "Enter" || e.repeat) return;
+      if (e.code !== "Enter" || e.repeat || sim?.phase !== "flying" || sim.netSnapshot.status !== "online") return;
       const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.tagName === "BUTTON" || target.isContentEditable)) return;
       e.preventDefault();
+      e.stopPropagation();
       setOpen(true);
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+  }, [sim]);
 
-  if (!open) return null;
+  if (!open) return recent ? <div className="hud-radio" aria-live="polite">
+    <div className="hud-radio-log">{log.slice(-3).map((m, i) => <div key={i} className="hud-radio-line"><b>{m.from.toUpperCase()}</b> {m.text}</div>)}</div>
+    <div className="hud-radio-empty">Enter to reply</div>
+  </div> : null;
 
   const send = () => {
     const text = line.trim();
@@ -1200,8 +1212,9 @@ function RadioOverlay({ sim }: { sim: Sim | null }) {
         onKeyDown={(e) => {
           // Keep Enter and Escape away from the flight controls behind us.
           e.stopPropagation();
-          if (e.code === "Enter") send();
-          else if (e.code === "Escape") setOpen(false);
+          if (e.nativeEvent.isComposing) return;
+          if (e.code === "Enter") { e.preventDefault(); if (!e.repeat) send(); }
+          else if (e.code === "Escape") { e.preventDefault(); setLine(""); setOpen(false); }
         }}
       />
     </div>
