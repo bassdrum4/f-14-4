@@ -268,7 +268,8 @@ export class RemoteFleet {
 
   activePilotCount(): number {
     let count = 0;
-    for (const r of this.remotes.values()) if (r.buf.length && (r.buf[r.buf.length - 1].p.flags & FLAG_ACTIVE)) count++;
+    for (const r of this.remotes.values()) if (r.buf.length && performance.now() - r.lastAt <= GONE_MS &&
+      (r.buf[r.buf.length - 1].p.flags & FLAG_ACTIVE)) count++;
     return count;
   }
 

@@ -8,6 +8,8 @@ import { spawnAircraft } from "../src/sim/flight";
 import { carriers, setWorldSeed, DEFAULT_SEED } from "../src/sim/world";
 import { Sim } from "../src/sim/engine";
 import { defaultSettings } from "../src/settings";
+import { emptyPose } from "../src/net/multiplayer";
+import { RemoteFleet, FLAG_ACTIVE } from "../src/render/remoteJets";
 
 let failures = 0;
 function test(name: string, run: () => void) { try { run(); console.log("PASS " + name); } catch (e) { failures++; console.error("FAIL " + name, e); } }
@@ -163,5 +165,56 @@ test("one laser designation follows a moving cargo ship and an actual bomb disab
   for (let i = 0; i < 2400 && !cargo.disabled; i++) { player.time += 1 / 120; df.step(1 / 120, player, false); }
   assert(cargo.progress > 20); assert(cargo.disabled, `cargo hp ${cargo.hp}`);
   assert.equal(df.missionStats.storesUsed, 1); df.dispose();
+});
+test("unopposed fleet attacks release all four bombs and disable the carrier without terrain losses", () => {
+  for (const world of [DEFAULT_SEED, 71, 1123]) {
+    setWorldSeed(world);
+    const { df, player, internal: d } = combat("fleet");
+    let releases = 0, terrainLosses = 0;
+    const createBomb = d.createEnemyBomb.bind(d), crash = d.crashBandit.bind(d);
+    d.createEnemyBomb = (...args: any[]) => { releases++; return createBomb(...args); };
+    d.crashBandit = (...args: any[]) => { if (args[0].role === "bomber") terrainLosses++; return crash(...args); };
+    try {
+      for (let i = 0; i < 120 * 850 && df.operationState!.status === "active"; i++) {
+        player.time += 1 / 120; df.step(1 / 120, player, false, false, true);
+      }
+      assert.equal(terrainLosses, 0, `world ${world}: bombers must clear terrain`);
+      assert.equal(releases, 4, `world ${world}: both attacks must make their passes`);
+      assert.equal(df.operationState!.status, "failure", `world ${world}: ignoring every attack cannot win`);
+      assert.equal(df.operationState!.fleetHull, 0);
+    } finally { df.dispose(); setWorldSeed(DEFAULT_SEED); }
+  }
+});
+test("a recovered wingman remains alive for the shared operation while the host is down", () => {
+  const { df, player } = combat("convoy"), wing: any = Object.create(Sim.prototype);
+  Object.assign(wing, { df, state: spawnAircraft("carrier", 0), phase: "result", fleetClock: 0,
+    settings: { ...defaultSettings(), missionMode: "strike" }, netState: { status: "online" }, poseOut: emptyPose() });
+  wing.state.result = { kind: "wire", title: "Recovered", detail: "" };
+  const pose = { ...wing.buildPose() };
+  assert(pose.flags & FLAG_ACTIVE, "a successful recovery is a surviving pilot, including in the result screen");
+  const remote: any = Object.create(RemoteFleet.prototype);
+  remote.remotes = new Map([["wing", { buf: [{ p: pose }], lastAt: performance.now() }]]);
+  const host: any = Object.create(Sim.prototype);
+  Object.assign(host, { df, state: player, phase: "result", allPilotsDown: 0, netState: { status: "online" }, remoteFleet: remote });
+  player.result = { kind: "crash", title: "Downed", detail: "" }; host.checkOperationPilots(4);
+  assert.equal(df.operationState!.status, "active");
+  wing.state.result = { kind: "crash", title: "Downed", detail: "" };
+  assert.equal(wing.buildPose().flags & FLAG_ACTIVE, 0);
+  wing.phase = "menu"; wing.state.result = null; assert.equal(wing.buildPose().flags & FLAG_ACTIVE, 0);
+  remote.remotes.get("wing").lastAt = performance.now() - 13000;
+  host.checkOperationPilots(4); assert.equal(df.operationState!.status, "failure", "stale poses cannot keep a lost team alive forever");
+  df.dispose();
+});
+test("host takeover resumes aircraft at the latest authoritative pose rather than the display interpolation", () => {
+  const host = combat("fleet", 901), wing = combat("fleet", 901);
+  host.df.step(2, host.player, false);
+  wing.df.setMirror(true, wing.player); wing.df.applySharedSnapshot(host.df.sharedSnapshot(), 1000);
+  host.internal.bandits[0].pos.add(new Vector3(700, 200, -300));
+  const frame = host.df.sharedSnapshot(); wing.df.applySharedSnapshot(frame, 1200);
+  assert.notDeepEqual(wing.internal.bandits[0].pos.toArray(), [frame.bandits[0].x, frame.bandits[0].y, frame.bandits[0].z]);
+  wing.df.setMirror(false, wing.player);
+  assert.deepEqual(wing.internal.bandits[0].pos.toArray(), [frame.bandits[0].x, frame.bandits[0].y, frame.bandits[0].z]);
+  assert.deepEqual(wing.internal.bandits[0].quat.toArray(), [frame.bandits[0].qx, frame.bandits[0].qy, frame.bandits[0].qz, frame.bandits[0].qw]);
+  host.df.dispose(); wing.df.dispose();
 });
 if (failures) process.exit(1);

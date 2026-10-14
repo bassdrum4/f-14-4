@@ -1058,8 +1058,15 @@ export class Dogfight {
     AXIS.crossVectors(FWD, DESIRED); const angle = FWD.angleTo(DESIRED);
     if (AXIS.lengthSq() > 1e-8) FWD.applyAxisAngle(AXIS.normalize(), Math.min(angle, .18 * dt));
     if (b.climbT > 0) { b.climbT -= dt; FWD.y = Math.max(FWD.y, .2); FWD.normalize(); }
-    const ahead = b.pos.clone().addScaledVector(FWD, 1800);
-    if (groundAt(ahead.x, ahead.z).y + 400 > b.pos.y) { FWD.y = Math.max(FWD.y, .3); FWD.normalize(); }
+    // A fixed climb bias is too shallow for the archipelago's steep coasts.
+    // Sample the approach corridor and climb at the slope needed to clear it.
+    const horizontal = AHEAD.copy(FWD).setY(0).normalize();
+    let climbSlope = FWD.y / Math.max(Math.hypot(FWD.x, FWD.z), .01);
+    for (const distance of [600, 1200, 2400, 3600]) {
+      const floor = groundAt(b.pos.x + horizontal.x * distance, b.pos.z + horizontal.z * distance).y + 400;
+      climbSlope = Math.max(climbSlope, (floor - b.pos.y) / distance);
+    }
+    FWD.copy(horizontal).setY(climbSlope).normalize();
     const bank = THREE.MathUtils.clamp(AXIS.y * angle, -.7, .7); this.aimQuat(b, FWD, bank);
     b.speed += ((b.role === "scout" ? 220 : 185) - b.speed) * Math.min(1, dt * .5);
     b.pos.addScaledVector(FWD, b.speed * dt); b.mesh.group.position.copy(b.pos); b.mesh.group.quaternion.copy(b.quat);
@@ -1356,6 +1363,12 @@ export class Dogfight {
     if (this.mirror === on) return;
     this.mirror = on;
     if (!this.operation || on) this.clearBandits();
+    else for (const b of this.bandits) {
+      // Display interpolation may lag a frame or lead a launch off the deck.
+      // Authority resumes from the last accepted host pose, not that display.
+      b.pos.copy(b.netPos); b.quat.copy(b.netQuat); b.remote = false;
+      b.mesh.group.position.copy(b.pos); b.mesh.group.quaternion.copy(b.quat);
+    }
     this.takenDown.clear();
     this.hitsOut = [];
     this.carrierHitOut = 0;

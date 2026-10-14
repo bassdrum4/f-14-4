@@ -925,6 +925,13 @@ opLead.net.sendEnemyFire([firing]); await flush();
 check("hostile projectile events reach wingmen", opWing.enemyFire.length === 1 && opWing.enemyFire[0].seq === 1);
 wingToLead.send(JSON.stringify({ t: "enemyFire", shots: [firing] })); await flush();
 check("guests cannot invent hostile projectiles", opLead.enemyFire.length === 0);
+const authoritativeHits = opLead.hits.length;
+opWing.net.hitBandit(opFrame.targets[0].id, 12, 5001); opWing.net.hitCarrier(11, 5001); await flush();
+check("only the host receives wingman target and carrier claims", opLead.hits.length === authoritativeHits + 1 && opLead.carrierHits.length === 1 && opLate.hits.length === 0 && opLate.carrierHits.length === 0);
+const foreignLink = (opWing.net as any).conns.get(opLate.net.snapshot.self);
+foreignLink.send(JSON.stringify({ t: "hit", id: opFrame.targets[0].id, dmg: 12, combatId: 5001 }));
+foreignLink.send(JSON.stringify({ t: "cvhit", dmg: 11, combatId: 5001 })); await flush();
+check("a guest ignores damage claims sent directly by another guest", opLate.hits.length === 0 && opLate.carrierHits.length === 0);
 const blocked = (opLead.net as any).conns.get(opWing.net.snapshot.self); blocked.dataChannel.bufferedAmount = 9000;
 const countBeforeBlock = opWing.combatFrames.length;
 opLead.net.publishCombat({ ...opFrame, revision: 2 }); opLead.net.publishCombat({ ...opFrame, revision: 3 }); await flush();
@@ -945,6 +952,24 @@ const promotedFrame = { ...opFrame, id: 5002, operation: { ...opFrame.operation!
 newOpLead.net.publishCombat(promotedFrame); await flush();
 const survivor = newOpLead === opWing ? opLate : opWing;
 check("a promoted host can continue the shared operation stream", survivor.combatFrames.some(f => f.id === 5002 && f.revision === 2));
+// Endless Strike uses the same versioned target stream, so it needs the same
+// attempt scope as authored operations. Legacy endless dogfights still use
+// their binary enemy stream and unscoped claims.
+newOpLead.net.setMissionStyle("endless");
+newOpLead.net.launch("carrier", 0, { id: 5003, seed: 8, style: "endless" }); await flush();
+const practiceHits = newOpLead.hits.length;
+const practiceCarrierHits = newOpLead.carrierHits.length;
+survivor.net.hitBandit(7, 10); await flush();
+check("endless Strike rejects target claims without an attempt id", newOpLead.hits.length === practiceHits);
+survivor.net.hitBandit(7, 10, 5002); await flush();
+check("endless Strike rejects target claims from the previous attempt", newOpLead.hits.length === practiceHits);
+survivor.net.hitBandit(7, 10, 5003); await flush();
+check("endless Strike accepts current scoped target damage", newOpLead.hits.length === practiceHits + 1);
+survivor.net.hitCarrier(11, 5003); await flush();
+check("takeover delivers carrier damage once despite simultaneous host links", newOpLead.carrierHits.length === practiceCarrierHits + 1);
+newOpLead.net.setMode("dogfight"); await flush();
+survivor.net.hitBandit(8, 10); await flush();
+check("legacy endless dogfight claims remain compatible", newOpLead.hits.length === practiceHits + 2);
 for (const p of [opLead, opWing, opLate]) p.net.dispose(); opFight.dispose();
 
 for (const p of [host, wing, third, late, early, lateHost, clash, lead, numberTwo, scout, wingTwo, skipper, joiner, lateEnemy]) p.net.dispose();

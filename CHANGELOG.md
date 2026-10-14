@@ -6,6 +6,22 @@ arrived in large exports with stale 1.0.0 metadata; see
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md) for the surviving
 timeline, recovered intermediate build, and remaining history gaps.
 
+## 1.8.1 — 2026-10-13
+
+- Give mission aircraft terrain clearance based on the upcoming approach slope.
+  The default-world final bomber no longer flies into a coast and awards an
+  unopposed Fleet Defense win.
+- Count successfully recovered co-op pilots as survivors while they choose
+  rearm/continue, and stop counting remote aircraft after their poses expire.
+- Resume enemy aircraft from the latest authoritative pose at host takeover,
+  preserving the streamed ammunition and mission clocks.
+- Deliver wingman damage only to the host, once even when takeover retains
+  two connections to it. Guests ignore peer damage instead of echoing claims.
+- Require attempt-scoped damage in Endless Strike as well as authored
+  operations, retaining legacy Endless Aggressor compatibility.
+- Add full unopposed fleet runs across three worlds, recovery/loss, takeover
+  pose and practice damage regressions. Keep diagnostics local, off Actions.
+
 ## 1.8.0 — 2026-10-13
 
 - Make Strike default to Stop the Convoy: three transports follow a validated

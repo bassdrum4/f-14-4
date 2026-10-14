@@ -1210,19 +1210,19 @@ export class Multiplayer {
         // as a real positive number: a NaN or a negative used to poison the
         // bandit's hull (an unkillable bandit) or heal it.
         if (
-          this.pilots.has(conn.peer) &&
+          this.host && this.pilots.has(conn.peer) &&
           Number.isInteger(msg.id) &&
           Number.isFinite(msg.dmg) &&
           msg.dmg > 0
         ) {
-          if (this.roomLaunch?.profile?.style === "operation" && (this.mode === "strike" || this.mode === "dogfight") && msg.combatId !== this.roomLaunch.profile.id) break;
+          if (this.roomLaunch?.profile && (this.mode === "strike" || this.mode === "dogfight" && this.roomLaunch.profile.style === "operation") && msg.combatId !== this.roomLaunch.profile.id) break;
           if (msg.combatId !== undefined && msg.combatId !== this.roomLaunch?.profile?.id) break;
           this.handlers.onHit?.(msg.id, msg.dmg, msg.combatId);
         }
         break;
       case "cvhit":
-        if (this.pilots.has(conn.peer) && Number.isFinite(msg.dmg) && msg.dmg > 0) {
-          if (this.roomLaunch?.profile?.style === "operation" && (this.mode === "strike" || this.mode === "dogfight") && msg.combatId !== this.roomLaunch.profile.id) break;
+        if (this.host && this.pilots.has(conn.peer) && Number.isFinite(msg.dmg) && msg.dmg > 0) {
+          if (this.roomLaunch?.profile && (this.mode === "strike" || this.mode === "dogfight" && this.roomLaunch.profile.style === "operation") && msg.combatId !== this.roomLaunch.profile.id) break;
           if (msg.combatId !== undefined && msg.combatId !== this.roomLaunch?.profile?.id) break;
           this.handlers.onCarrierHit?.(msg.dmg, msg.combatId);
         }
@@ -1483,12 +1483,21 @@ export class Multiplayer {
 
   /** Mirror: our rounds landed on an aircraft the host owns. */
   hitBandit(id: number, dmg: number, combatId?: number): void {
-    this.sendAll(JSON.stringify({ t: "hit", id, dmg, combatId } satisfies Control));
+    this.sendHost(JSON.stringify({ t: "hit", id, dmg, combatId } satisfies Control));
   }
 
   /** Mirror: our weapon landed on the hostile boat. */
   hitCarrier(dmg: number, combatId?: number): void {
-    this.sendAll(JSON.stringify({ t: "cvhit", dmg, combatId } satisfies Control));
+    this.sendHost(JSON.stringify({ t: "cvhit", dmg, combatId } satisfies Control));
+  }
+
+  private sendHost(msg: string): void {
+    if (this.host) return;
+    // Takeover can temporarily leave both a mesh link and the room-door link
+    // connected to the same host. A damage claim must use exactly one of them.
+    const authority = this.hostAuthority ? this.conns.get(this.hostAuthority) : undefined;
+    const conn = authority?.open ? authority : [...this.conns.values()].find(c => c.open && this.isHostConn(c));
+    if (conn) try { conn.send(msg); } catch { /* the host link is being replaced */ }
   }
 
   /**
