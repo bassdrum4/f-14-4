@@ -1344,7 +1344,9 @@ export class Sim {
     if (st.speedbrake) flags |= FLAG_SPEEDBRAKE;
     if (st.stalled) flags |= FLAG_STALLED;
     if (st.abLevel > 0.05) flags |= FLAG_AB;
-    if ((this.phase === "flying" || this.phase === "paused") && !st.result) flags |= FLAG_ACTIVE;
+    const recovered = this.df.operationState && (st.result?.kind === "wire" || st.result?.kind === "landing");
+    if (((this.phase === "flying" || this.phase === "paused") && !st.result) ||
+      (recovered && this.phase !== "menu")) flags |= FLAG_ACTIVE;
     p.flags = flags;
     return p;
   }
