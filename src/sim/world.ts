@@ -49,6 +49,11 @@ export interface CarrierDef {
   wireSpacing: number; // meters between wires
   catapultOffsetX: number; // cat track lateral offset from deck centreline
   catapultLength: number;
+  /** Live sea state on this hull: heave (m) and deck pitch/roll (deg).
+   *  Written every fleet tick from the active weather; 0 on a calm sea. */
+  heave?: number;
+  pitchDeg?: number;
+  rollDeg?: number;
 }
 
 function carrier(name: string, x: number, z: number, headingDeg: number): CarrierDef {
@@ -170,8 +175,74 @@ export function fleetVelocityAt(index: number, seconds: number, x: number, z: nu
   };
 }
 
+// ---------------------------------------------------------------------------
+// Sea state: what the water is doing to the fleet
+// ---------------------------------------------------------------------------
+
+/**
+ * The swell the fleet is riding: heave amplitude in metres plus the deck's
+ * pitch and roll, all on one period. Set from the active weather preset; null
+ * (the default) is a flat calm sea, which is what the solo clear-sky flight and
+ * every headless diagnostic expect.
+ */
+export interface SeaState {
+  heave: number;
+  pitchDeg: number;
+  rollDeg: number;
+  period: number;
+}
+
+let seaState: SeaState | null = null;
+
+/** Install the sea state (or null for calm water) and re-pose the fleet with it. */
+export function setSeaState(state: SeaState | null): void {
+  seaState = state && (state.heave || state.pitchDeg || state.rollDeg) ? state : null;
+  setFleetTime(activeFleetTime);
+}
+
+export function currentSeaState(): SeaState | null {
+  return seaState;
+}
+
+let activeFleetTime = 0;
+
+/**
+ * The swell a hull is riding at a moment in time. Each ship sits on its own
+ * phase, so a formation does not move as one rigid piece of scenery, but the
+ * phase is a pure function of the clock: every pilot computes the same sea.
+ */
+function hullMotion(index: number, seconds: number): { heave: number; pitchDeg: number; rollDeg: number } {
+  if (!seaState) return { heave: 0, pitchDeg: 0, rollDeg: 0 };
+  const phase = (seconds * Math.PI * 2) / Math.max(seaState.period, 1) + index * 1.7;
+  return {
+    heave: seaState.heave * Math.sin(phase),
+    pitchDeg: seaState.pitchDeg * Math.sin(phase * 1.13 + 0.6),
+    rollDeg: seaState.rollDeg * Math.sin(phase * 0.87 + index * 0.9),
+  };
+}
+
 export function setFleetTime(seconds: number): void {
-  activeWorld.carriers.forEach((c, i) => Object.assign(c, fleetPoseAt(i, seconds)));
+  activeFleetTime = seconds;
+  activeWorld.carriers.forEach((c, i) => {
+    Object.assign(c, fleetPoseAt(i, seconds));
+    Object.assign(c, hullMotion(i, seconds));
+  });
+}
+
+/**
+ * Height of a hull's flight deck at a world point, swell included. Physics asks
+ * this (through groundAt) so a parked jet rides the deck and a landing meets the
+ * deck where it actually is; the renderer tilts the same hull by the same
+ * numbers, so what the pilot sees is what the model used.
+ *
+ * The deck is treated as a plane through the ship: bow rises with a positive
+ * pitch, starboard drops with a positive roll.
+ */
+export function deckSurfaceY(c: CarrierDef, x: number, z: number): number {
+  const [along, across] = worldToDeck(c, x, z);
+  const pitch = ((c.pitchDeg ?? 0) * Math.PI) / 180;
+  const roll = ((c.rollDeg ?? 0) * Math.PI) / 180;
+  return c.deckY + (c.heave ?? 0) + Math.sin(pitch) * along - Math.sin(roll) * across;
 }
 
 // ---------------------------------------------------------------------------
@@ -475,7 +546,7 @@ export type SurfaceKind = "terrain" | "runway" | "deck" | "water";
  */
 export function groundAt(x: number, z: number): { y: number; kind: SurfaceKind } {
   const deck = carrierAt(x, z);
-  if (deck) return { y: deck.deckY, kind: "deck" };
+  if (deck) return { y: deckSurfaceY(deck, x, z), kind: "deck" };
   const h = terrainHeight(x, z);
   const af = activeWorld.airfield;
   if (isRunway(x, z) && h > af.elevation - 30) {

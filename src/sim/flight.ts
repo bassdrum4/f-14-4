@@ -20,6 +20,7 @@ import {
   carrierAt,
   carriers,
   deckAxes,
+  deckSurfaceY,
   groundAt,
   nearestCarrier,
   worldToDeck,
@@ -394,6 +395,30 @@ export interface Banner {
   until: number; // sim time
 }
 
+export interface SubsystemDamage {
+  engineL: number; // 0..1 (1 = healthy, < 1 = reduced thrust & yaw bias)
+  engineR: number; // 0..1
+  hydraulics: number; // 0..1 (< 1 = sluggish pitch/roll response)
+  avionics: number; // 0..1 (< 1 = HUD/radar glitching)
+  fuelLeak: boolean; // drains fuel over time
+  fuelPct: number; // 0..100
+}
+
+export interface LsoSample {
+  rangeM: number;
+  devM: number;
+  lineupM: number;
+  aoaErr: number;
+}
+
+export interface LsoGrade {
+  grade: "OK" | "(OK)" | "---" | "C" | "B";
+  wire?: number;
+  points: number;
+  summary: string;
+  samples: LsoSample[];
+}
+
 export interface AircraftState {
   // the airframe being flown (mass, aero, thrust, ordnance)
   spec: AircraftSpec;
@@ -458,6 +483,15 @@ export interface AircraftState {
   time: number;
   result: SimResult | null;
   banner: Banner | null;
+
+  // weather & subsystem immersion
+  windX?: number;
+  windZ?: number;
+  turbulence?: number;
+  subsystems?: SubsystemDamage;
+  lsoSamples?: LsoSample[];
+  lsoGrade?: LsoGrade | null;
+  lsoCall?: string | null;
 
   // interpolation snapshots (written by the frame loop)
   prevPos: Vector3;
@@ -629,6 +663,17 @@ export function spawnAircraft(
     flightTime: 0,
     time: 0,
     result: null,
+    subsystems: {
+      engineL: 1,
+      engineR: 1,
+      hydraulics: 1,
+      avionics: 1,
+      fuelLeak: false,
+      fuelPct: 100,
+    },
+    lsoSamples: [],
+    lsoGrade: null,
+    lsoCall: null,
     banner: rotor
       ? {
           text:
@@ -645,12 +690,16 @@ export function spawnAircraft(
   };
 }
 
-/** Carry a deck-relative pose through ship translation and yaw. */
+/** Carry a deck-relative pose through ship translation, yaw and swell. */
 export function carryDeckPose(pos: Vector3, quat: Quaternion, before: CarrierDef, after: CarrierDef, vel?: Vector3): void {
   const [along, across] = worldToDeck(before, pos.x, pos.z);
+  const wasY = deckSurfaceY(before, pos.x, pos.z);
   const { fwd, right } = deckAxes(after.headingDeg);
   pos.x = after.x + fwd[0] * along + right[0] * across;
   pos.z = after.z + fwd[1] * along + right[1] * across;
+  // Ride the swell: a deck that heaves lifts what is parked on it, so the jet
+  // keeps its deck-relative height through a rolling ship.
+  pos.y += deckSurfaceY(after, pos.x, pos.z) - wasY;
   const yaw = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), -(after.headingDeg - before.headingDeg) * Math.PI / 180);
   quat.premultiply(yaw);
   vel?.applyQuaternion(yaw);
@@ -789,7 +838,12 @@ export function stepAircraft(st: AircraftState, inp: FlightInput, dt: number): v
   // --- atmosphere / body-frame airspeed ---
   const atm = atmosphere(st.pos.y);
   const qInv = QINV.copy(st.quat).invert();
-  const vBody = VBODY.copy(st.vel).applyQuaternion(qInv);
+  const vBody = VBODY.copy(st.vel);
+  if (!st.onGround && (st.windX || st.windZ)) {
+    vBody.x -= st.windX ?? 0;
+    vBody.z -= st.windZ ?? 0;
+  }
+  vBody.applyQuaternion(qInv);
   const V = vBody.length();
   const u = -vBody.z; // forward speed
   const alpha = V > 1 ? Math.atan2(-vBody.y, Math.max(u, 0.5)) : 0;
@@ -858,9 +912,10 @@ export function stepAircraft(st: AircraftState, inp: FlightInput, dt: number): v
     // pilot's, and it is what drops the nose at the stall.
     const qScCtrl = Math.max(qSc, ELEV_Q_FLOOR * spec.sWing * cM);
     const qHat = (st.omega.x * cM) / (2 * Math.max(V, 30));
+    const hydAuth = st.subsystems ? 0.45 + 0.55 * st.subsystems.hydraulics : 1;
     // 1. the stick (and the trim wheel) walks the commanded attitude
     st.pitchRef +=
-      inp.pitch * PITCH_RATE_MAX * (st.gearT > .8 && st.flapT > .8 && V < 135 ? .32 : 1) * clamp(110 / Math.max(V, 110), 0.42, 1) * dt;
+      inp.pitch * PITCH_RATE_MAX * hydAuth * (st.gearT > .8 && st.flapT > .8 && V < 135 ? .32 : 1) * clamp(110 / Math.max(V, 110), 0.42, 1) * dt;
     st.pitchRef += (st.trim - 0.5) * TRIM_RATE_BIAS * dt;
     const path = Math.asin(clamp(st.vel.y / Math.max(V, 1), -1, 1));
     // The reference may never sit past the stall, or chasing it would hold the
@@ -922,7 +977,7 @@ export function stepAircraft(st: AircraftState, inp: FlightInput, dt: number): v
     M.z +=
       qSb *
       (CL_BETA * beta -
-        spec.clAil * rollAuth * inp.roll -
+        spec.clAil * rollAuth * hydAuth * inp.roll -
         spec.clP * ((st.omega.z * bM) / (2 * Math.max(V, 30))));
     // Yaw damper: drives the rudder to kill sideslip and yaw rate, which
     // tames the swept wing's lightly damped dutch roll. Positive = nose right.
@@ -962,13 +1017,31 @@ export function stepAircraft(st: AircraftState, inp: FlightInput, dt: number): v
     st.stalled = false;
   }
 
-  // --- thrust ---
+  // --- thrust & subsystem asymmetries ---
+  const sub = st.subsystems;
+  if (sub && sub.fuelLeak && !st.onGround) {
+    sub.fuelPct = Math.max(0, sub.fuelPct - dt * 0.45);
+  }
+  const engScale = sub ? (sub.fuelPct <= 0 ? 0 : 0.5 * (sub.engineL + sub.engineR)) : 1;
+  const engDiff = sub && sub.fuelPct > 0 ? sub.engineL - sub.engineR : 0; // + = left stronger -> yaw right (-M.y)
   const sigma = atm.sigma;
   let thrust = spec.idleThrust + (spec.thrustDry - spec.idleThrust) * st.rpm;
-  thrust *= Math.pow(sigma, 0.75);
-  if (st.abLevel > 0.01) thrust += spec.abThrust * st.abLevel * Math.pow(sigma, 0.6);
+  thrust *= Math.pow(sigma, 0.75) * engScale;
+  if (st.abLevel > 0.01) thrust += spec.abThrust * st.abLevel * Math.pow(sigma, 0.6) * engScale;
   if (st.crashFall) thrust = 0; // the engines are gone
   F.z -= thrust; // body forward is -Z
+  // One engine weaker than the other yaws and rolls the jet: a real asymmetric
+  // thrust case needs rudder and aileron to hold a heading, which is exactly
+  // what a battle-damaged Tomcat is like.
+  if (Math.abs(engDiff) > 0.01 && !st.onGround && !st.crashFall) {
+    M.y -= engDiff * thrust * 0.22;
+    M.z -= engDiff * thrust * 0.14;
+  }
+  if (st.turbulence && st.turbulence > 0 && !st.onGround && !st.crashFall) {
+    const tb = st.turbulence;
+    M.x += spec.iPitch * tb * 0.16 * Math.sin(st.time * 4.3);
+    M.z += spec.iRoll * tb * 0.35 * Math.cos(st.time * 5.7);
+  }
 
   // --- gravity ---
   const accWorld = F.applyQuaternion(st.quat);
@@ -1042,6 +1115,94 @@ export function stepAircraft(st: AircraftState, inp: FlightInput, dt: number): v
   }
 
   st.gLoad = st.onGround ? 1 : liftAccel / GRAVITY;
+
+  // --- LSO approach telemetry & Paddles callouts ---
+  updateLsoApproach(st);
+}
+
+function updateLsoApproach(st: AircraftState): void {
+  if (st.spec.rotorcraft) return;
+  if (st.result?.kind === "wire" && !st.lsoGrade) {
+    st.lsoGrade = evaluateLsoGrade(st.lsoSamples ?? [], st.wire ?? 3);
+    st.lsoCall = `TRAPPED WIRE ${st.wire ?? 3} — GRADE ${st.lsoGrade.grade}`;
+    return;
+  }
+  if (st.onGround || st.result) {
+    st.lsoCall = null;
+    return;
+  }
+  const g = glideStateFor(st);
+  if (!g || g.rangeM > 2200) {
+    st.lsoCall = null;
+    if (st.lsoSamples && st.lsoSamples.length > 0 && (!g || g.rangeM > 2800)) st.lsoSamples.length = 0;
+    return;
+  }
+  const samples = st.lsoSamples ?? (st.lsoSamples = []);
+  const aoaErr = st.alpha * (180 / Math.PI) - g.onSpeedAoaDeg;
+  if (samples.length === 0 || samples[samples.length - 1].rangeM - g.rangeM >= 45) {
+    samples.push({ rangeM: g.rangeM, devM: g.deviationM, lineupM: g.lineupM, aoaErr });
+    if (samples.length > 48) samples.shift();
+  }
+  if (!st.gearDown || st.gearT < 0.8) {
+    st.lsoCall = "PADDLES: CHECK GEAR DOWN!";
+  } else if (g.deviationM < -14 && g.rangeM < 900) {
+    st.lsoCall = "PADDLES: POWER! POWER! LOW IN THE GROOVE";
+  } else if (g.deviationM < -7) {
+    st.lsoCall = "PADDLES: LITTLE LOW — ADD POWER";
+  } else if (g.deviationM > 14) {
+    st.lsoCall = "PADDLES: YOU'RE HIGH — EASY ON THE NOSE";
+  } else if (Math.abs(g.lineupM) > 14) {
+    st.lsoCall = g.lineupM > 0 ? "PADDLES: COME LEFT FOR LINEUP" : "PADDLES: RIGHT FOR LINEUP";
+  } else if (Math.abs(aoaErr) > 2.2) {
+    st.lsoCall = aoaErr > 0 ? "PADDLES: SLOW — ADD POWER" : "PADDLES: FAST — WORK IT ON SPEED";
+  } else {
+    st.lsoCall = "PADDLES: ROGER BALL — KEEP IT COMING";
+  }
+}
+
+export function evaluateLsoGrade(samples: LsoSample[], wire: number): LsoGrade {
+  if (samples.length === 0) {
+    return {
+      grade: wire === 3 ? "OK" : "(OK)",
+      wire,
+      points: wire === 3 ? 4 : 3,
+      summary: `Caught #${wire} wire.`,
+      samples: [],
+    };
+  }
+  let avgDev = 0;
+  let avgLine = 0;
+  for (const s of samples) {
+    avgDev += Math.abs(s.devM);
+    avgLine += Math.abs(s.lineupM);
+  }
+  avgDev /= samples.length;
+  avgLine /= samples.length;
+  if (avgDev < 6 && avgLine < 6 && (wire === 2 || wire === 3)) {
+    return {
+      grade: "OK",
+      wire,
+      points: 4,
+      summary: `OK ${wire}-WIRE — Textbook rails pass in the groove (±${avgDev.toFixed(1)}m slope, ±${avgLine.toFixed(1)}m lineup).`,
+      samples: [...samples],
+    };
+  }
+  if (avgDev < 13 && avgLine < 12) {
+    return {
+      grade: "(OK)",
+      wire,
+      points: 3,
+      summary: `FAIR (OK) ${wire}-WIRE — Reasonable corrections (±${avgDev.toFixed(1)}m slope, ±${avgLine.toFixed(1)}m lineup).`,
+      samples: [...samples],
+    };
+  }
+  return {
+    grade: "---",
+    wire,
+    points: 2,
+    summary: `NO GRADE ${wire}-WIRE — Safe aboard, rough groove (±${avgDev.toFixed(1)}m slope, ±${avgLine.toFixed(1)}m lineup).`,
+    samples: [...samples],
+  };
 }
 
 // ---------------------------------------------------------------------------

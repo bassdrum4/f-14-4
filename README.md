@@ -1,6 +1,6 @@
 # F-14 Carrier Simulator
 
-Current published build label: **1.8.1**, continuing the reconstructed version
+Current published build label: **1.9.0**, continuing the reconstructed version
 sequence. See [CHANGELOG.md](CHANGELOG.md) for the counting rule and
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md)
 for the earlier development, recovered builds and missing release history.
@@ -77,9 +77,11 @@ checks are not connected to GitHub Actions.
 - `src/sim/aircraft.ts` — F-14A, F/A-18C, A-6E
 - `src/sim/flight.ts` — aircraft handling, carrier launches and recovery
 - `src/sim/dogfight.ts` — bandits, shared host fight, bombs/missiles, strike
+- `src/sim/weather.ts` — theatre weather: wind, gust cycle, sea state, visibility
 - `src/sim/engine.ts` — flight loop, missions, HUD, chat, world sync
 - `src/net/multiplayer.ts` — peer-to-peer rooms, roster, chat, pose exchange
-- `src/render/` — terrain, aircraft geometry, remote aircraft, visual effects
+- `src/render/` — terrain, aircraft geometry, remote aircraft, visual effects,
+  rain/lightning
 - `src/ui/` — HUD, menus, target pod, multiplayer screens
 - `src/accounts.ts`, `src/gamestate.ts`, `src/feedback/` — profiles,
   persisted flight preferences, feedback
@@ -153,8 +155,34 @@ Controls, Graphics, Audio and Interface tabs.
   progress. Retry keeps the seed/layout but changes the attempt ID to reject
   old packets. Next Operation changes the seed. Recovery repairs and rearms
   without resetting objectives. See [mission rules](docs/MISSION-UPDATE.md).
+- **Operation Iron Bastion** is the island strike: a command bunker, hardened
+  hangars and a fuel depot inside a radar-cued SAM belt and an AAA curtain.
+  Terrain masks the radar picture (the HUD says when, and the batteries lose the
+  lock) and killing the radar shortens their reach and slows their lock. The
+  depot chains into what is stored beside it, and a locking battery puts a
+  guided round in the air at the pilot.
+- **Task Force Archon** is the three-stage theatre campaign — island bastion,
+  then a reinforcement convoy, then the opposing fleet. The stages are stepped
+  in order, so clearing the map does not win it, and a recovery carries the
+  stage, the wrecks and the hull damage into the next sortie. Losing the
+  flagship fails it outright at any stage.
+- **Weather** is a look and a feel at once: wind, gusting and turbulence for the
+  flight model, heave and deck pitch/roll for the fleet, cloud, rain, lightning,
+  thunder and visibility for the renderer. It is a pure function of the preset
+  and the world seed, so a room flies the same squall without a packet, and the
+  host's weather is the room's weather.
+- Battle damage is flown, not just listed: an engine can be lost on one side,
+  hydraulics and avionics degrade, and a punctured tank runs dry and takes the
+  engines with it. **Paddles** calls the approach live, and every recovery is
+  graded from slope and lineup with the deck report on the results card.
+- A pilot can enter the room as a **spectator**, watch without asking the host
+  to admit another aircraft, ride a pilot, bandit, deck or the LSO platform, and
+  switch back into a seat from the lobby. **P** pings a headed, timed marker
+  that crosses the room as a threat, target or join call.
 - In flight, **O** opens settings without leaving the cockpit, **M** throws up
-  the tactical map (the minimap, scaled to fill the view), and **Enter** opens
+  the tactical map (the minimap, scaled to fill the view), **P** pings the
+  current threat, target or join call, and a spectator moves to its next view
+  (pilots, bandits, decks, the LSO platform, free camera) with **N**. **Enter** opens
   the room radio in multiplayer — Enter sends, Escape closes it without pausing.
   The waiting lobby has no chat. O-settings shows the current room code. The green
   angle ladder and the gun cross can each be switched off in Settings →
@@ -180,5 +208,9 @@ npm run test:net-authority
 npm run test:mp
 npm run test:menu
 npm run test:launch
+npm run test:iads
+npm run test:campaign
+npm run test:weather
+npm run test:spectate
 npm run check:standalone
 ```

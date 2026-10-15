@@ -1,5 +1,11 @@
 // Engine sound: two-jet turbine whine, rumble, afterburner roar, wind noise.
 // All synthesized — no audio files. Created on first user gesture.
+//
+// On top of the basic engine bed sit the immersion layers: a buffet rattle that
+// rises with turbulence and stall, a G-strain squeeze that ducks the high
+// frequencies as the pilot loads the airframe, a flyby whoosh for a wingman
+// passing at speed (its pitch follows the closing rate, which is the audible
+// half of Doppler), and thunder for the squall's lightning.
 
 export class AudioEngine {
   private ctx: AudioContext | null = null;
@@ -17,6 +23,16 @@ export class AudioEngine {
   private windGain: GainNode | null = null;
   private windFilter: BiquadFilterNode | null = null;
   private windQ: BiquadFilterNode | null = null;
+  // Immersion layers.
+  private buffetSrc: AudioBufferSourceNode | null = null;
+  private buffetGain: GainNode | null = null;
+  private buffetFilter: BiquadFilterNode | null = null;
+  private strain: OscillatorNode | null = null;
+  private strainGain: GainNode | null = null;
+  private flybySrc: AudioBufferSourceNode | null = null;
+  private flybyGain: GainNode | null = null;
+  private flybyFilter: BiquadFilterNode | null = null;
+  private noiseBuffer: AudioBuffer | null = null;
 
   volume = 0.7;
 
@@ -85,6 +101,39 @@ export class AudioEngine {
     this.rumbleSrc.connect(this.rumbleFilter).connect(this.rumbleGain).connect(this.master);
     this.rumbleSrc.start();
 
+    this.noiseBuffer = buf;
+
+    // --- buffet: the airframe shaking in turbulence, at the stall, or under G ---
+    this.buffetSrc = makeLoop();
+    this.buffetFilter = ctx.createBiquadFilter();
+    this.buffetFilter.type = "bandpass";
+    this.buffetFilter.frequency.value = 62;
+    this.buffetFilter.Q.value = 0.9;
+    this.buffetGain = ctx.createGain();
+    this.buffetGain.gain.value = 0;
+    this.buffetSrc.connect(this.buffetFilter).connect(this.buffetGain).connect(this.master);
+    this.buffetSrc.start();
+
+    // --- G-strain: a low squeeze that swells as the pilot pulls ---
+    this.strain = ctx.createOscillator();
+    this.strain.type = "triangle";
+    this.strain.frequency.value = 74;
+    this.strainGain = ctx.createGain();
+    this.strainGain.gain.value = 0;
+    this.strain.connect(this.strainGain).connect(this.master);
+    this.strain.start();
+
+    // --- flyby: a whoosh whose pitch tracks a wingman's closing speed ---
+    this.flybySrc = makeLoop();
+    this.flybyFilter = ctx.createBiquadFilter();
+    this.flybyFilter.type = "bandpass";
+    this.flybyFilter.frequency.value = 700;
+    this.flybyFilter.Q.value = 1.1;
+    this.flybyGain = ctx.createGain();
+    this.flybyGain.gain.value = 0;
+    this.flybySrc.connect(this.flybyFilter).connect(this.flybyGain).connect(this.master);
+    this.flybySrc.start();
+
     // --- wind (bandpassed noise, gains with airspeed) ---
     this.windSrc = makeLoop();
     this.windFilter = ctx.createBiquadFilter();
@@ -132,8 +181,20 @@ export class AudioEngine {
     }
   }
 
-  /** rpm 0..1, ab 0..1, speed m/s, stalled, muted (menu/pause). */
-  update(rpm: number, ab: number, speed: number, stalled: boolean, muted: boolean): void {
+  /**
+   * rpm 0..1, ab 0..1, speed m/s, stalled, muted (menu/pause), plus the
+   * immersion layers: turbulence 0..1, load factor and whether the airframe is
+   * heavy enough to be riding the buffet.
+   */
+  update(
+    rpm: number,
+    ab: number,
+    speed: number,
+    stalled: boolean,
+    muted: boolean,
+    turbulence = 0,
+    gLoad = 1,
+  ): void {
     if (!this.ctx || !this.started) return;
     const t = this.ctx.currentTime;
     const ramp = 0.08;
@@ -151,8 +212,55 @@ export class AudioEngine {
     this.rumbleGain?.gain.setTargetAtTime(vol * (0.05 + 0.22 * rpm + 0.25 * ab), t, ramp);
 
     const sN = Math.min(1, speed / 320);
+    // Buffet and G both make the pilot strain to hear: the high-frequency bed
+    // ducks a little as the low-frequency layers come up.
+    const buffet = Math.min(1, turbulence + (stalled ? 0.5 : 0) + Math.max(0, (gLoad - 3.5) / 5) * 0.5);
+    const strain = Math.max(0, Math.min(1, (gLoad - 3.2) / 4.5));
+    const duck = 1 - 0.35 * Math.max(buffet, strain);
     this.windFilter?.frequency.setTargetAtTime(300 + 1100 * sN, t, ramp);
-    this.windGain?.gain.setTargetAtTime(vol * (0.4 * sN * sN + (stalled ? 0.15 : 0)), t, ramp);
+    this.windGain?.gain.setTargetAtTime(vol * duck * (0.4 * sN * sN + (stalled ? 0.15 : 0)), t, ramp);
+
+    this.buffetFilter?.frequency.setTargetAtTime(48 + 70 * buffet, t, ramp);
+    this.buffetGain?.gain.setTargetAtTime(vol * (0.22 * buffet * buffet + (stalled ? 0.1 : 0)), t, ramp);
+
+    this.strain?.frequency.setTargetAtTime(66 + 34 * strain, t, ramp);
+    this.strainGain?.gain.setTargetAtTime(vol * 0.11 * strain, t, ramp);
+  }
+
+  /**
+   * A wingman passing: range in metres and closing rate in m/s. The whoosh gets
+   * louder and brighter as the gap closes, which is the audible half of the
+   * Doppler shift a flyby has on the ground. Silent when nobody is close.
+   */
+  flyby(rangeM: number, closureMS: number): void {
+    if (!this.ctx || !this.started) return;
+    const t = this.ctx.currentTime;
+    const near = Math.min(1, Math.max(0, 1 - rangeM / 1400));
+    const bright = 420 + 1400 * Math.min(1, Math.abs(closureMS) / 260);
+    this.flybyGain?.gain.setTargetAtTime(near * near * this.volume * 0.5, t, 0.06);
+    this.flybyFilter?.frequency.setTargetAtTime(bright, t, 0.08);
+  }
+
+  /** Thunder: a low, slow noise swell, delayed by distance. */
+  thunder(rangeKm: number): void {
+    const ctx = this.ctx, master = this.master, buf = this.noiseBuffer;
+    if (!ctx || !master || !buf || ctx.state !== "running" || this.volume <= 0) return;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const filter = ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.value = 220;
+    const gain = ctx.createGain();
+    // Sound covers a kilometre in ~2.9 s: the clap arrives after the flash.
+    const start = ctx.currentTime + Math.min(6, Math.max(0, rangeKm) / 0.343);
+    const peak = Math.max(0.05, 0.5 / (1 + rangeKm * 0.05)) * this.volume;
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(peak, start + 0.12);
+    gain.gain.exponentialRampToValueAtTime(0.001, start + 2.2);
+    src.connect(filter).connect(gain).connect(master);
+    src.onended = () => { src.disconnect(); filter.disconnect(); gain.disconnect(); };
+    src.start(start);
+    src.stop(start + 2.4);
   }
 
   dispose(): void {
@@ -160,6 +268,9 @@ export class AudioEngine {
     this.whine2?.stop();
     this.rumbleSrc?.stop();
     this.windSrc?.stop();
+    this.buffetSrc?.stop();
+    this.strain?.stop();
+    this.flybySrc?.stop();
     void this.ctx?.close();
     this.started = false;
   }

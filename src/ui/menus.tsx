@@ -23,9 +23,9 @@ import { APP_VERSION } from "../version";
 import { Hud, useHud } from "./Hud";
 import { operationTitle, phaseObjective } from "../sim/operations";
 import {
-  ACTION_LABELS, DAYLIGHT_LABELS, DEFAULT_BINDINGS, MISSION_MODE_CHIPS, MISSION_MODE_LABELS, callsignOf, keyLabel, rebind,
+  ACTION_LABELS, DAYLIGHT_LABELS, DEFAULT_BINDINGS, MISSION_MODE_CHIPS, MISSION_MODE_LABELS, WEATHER_LABELS, callsignOf, keyLabel, rebind,
   roomCode, suggestRoomCode, type Action, type DaylightMode, type MissionMode, type Quality,
-  type Settings,
+  type Settings, type WeatherMode,
 } from "../settings";
 import {
   clearPending, exportPending, feedbackConfigured,
@@ -389,9 +389,10 @@ function FlightSetup({ sim, settings, onSettings, onBack, gate }: {
     <div className="menu-world-chips">{AIRCRAFT_LIST.map(a => <button key={a.id} className={"world-chip" + (settings.aircraft === a.id ? " on" : "")} onClick={() => onSettings({ ...settings, aircraft: a.id })}>{a.name}</button>)}</div>
     <p className="menu-note">{craft.blurb} · {craft.bombs} bombs · {craft.missiles} missiles</p>
     <span className="menu-world-label">MISSION</span>
-    <div className="menu-world-chips">{(["cruise", "dogfight", "strike"] as MissionMode[]).map(m => <button key={m} className={"world-chip" + (mode === m ? " on" : "")} onClick={() => onSettings({ ...settings, missionMode: m })}>{MISSION_MODE_CHIPS[m]}</button>)}</div>
-    {(mode === "strike" || mode === "dogfight") && <MissionBrief mode={mode} settings={settings} onSettings={onSettings} />}
+    <div className="menu-world-chips">{(["cruise", "dogfight", "strike", "campaign"] as MissionMode[]).map(m => <button key={m} className={"world-chip" + (mode === m ? " on" : "")} onClick={() => onSettings({ ...settings, missionMode: m })}>{MISSION_MODE_CHIPS[m]}</button>)}</div>
+    {(mode === "strike" || mode === "dogfight" || mode === "campaign") && <MissionBrief mode={mode} settings={settings} onSettings={onSettings} />}
     <p className="menu-note">{MISSION_MODE_LABELS[mode]}</p>
+    <label className="menu-row"><span>Weather</span><select value={settings.weather ?? "clear"} onChange={e => onSettings({ ...settings, weather: e.target.value as WeatherMode })}>{(Object.keys(WEATHER_LABELS) as WeatherMode[]).map(w => <option key={w} value={w}>{WEATHER_LABELS[w]}</option>)}</select></label>
     <p className="menu-note">Home deck · {homeCarrier(settings)}. Land on another boat and that becomes home.</p>
     <div className="menu-buttons"><Btn primary onClick={() => gate(() => launch("carrier"))}>{craft.rotorcraft ? "LIFT OFF — CARRIER" : "CAT SHOT — CARRIER"}</Btn><Btn onClick={() => gate(() => launch("airfield"))}>TAKEOFF — RUNWAY</Btn><Btn onClick={onBack}>BACK</Btn></div>
   </div>;
@@ -483,6 +484,21 @@ function ResultOverlay({ sim, settings }: { sim: Sim; settings: Settings }) {
             Flight time {hud.flightTime.toFixed(0)} s · Wire {hud.wire}
           </p>
         )}
+        {/* Paddles' grade card: what the pass looked like from the platform. */}
+        {hud.lsoGrade && (
+          <div className="lso-card">
+            <div className="lso-grade-row">
+              <span className="menu-world-label">LSO GRADE</span>
+              <strong className={"lso-grade " + gradeClass(hud.lsoGrade.grade)}>{hud.lsoGrade.grade}</strong>
+            </div>
+            <p className="result-sub">{hud.lsoGrade.summary}</p>
+          </div>
+        )}
+        {hud.operation?.state.kind === "campaign" && (
+          <p className="result-sub">
+            {operationTitle(hud.operation.state)} · the stage and everything already wrecked carry to the next sortie
+          </p>
+        )}
         {!died && !live && (
           <p className="result-sub">
             Recovered on {launchPointLabel(settings)} · rearm &amp; continue launches from there
@@ -509,20 +525,36 @@ function ResultOverlay({ sim, settings }: { sim: Sim; settings: Settings }) {
 // ---------------------------------------------------------------------------
 
 function MissionBrief({ mode, settings, onSettings, disabled = false }: {
-  mode: "strike" | "dogfight"; settings: Settings; onSettings: (s: Settings) => void; disabled?: boolean;
+  mode: "strike" | "dogfight" | "campaign"; settings: Settings; onSettings: (s: Settings) => void; disabled?: boolean;
 }) {
   const authored = settings.missionStyle !== "endless";
+  const bastion = (settings.strikeVariant ?? "convoy") === "bastion";
   return <div className="mission-brief">
     <div className="menu-world-chips">
       <button disabled={disabled} className={"world-chip" + (authored ? " on" : "")} onClick={() => onSettings({ ...settings, missionStyle: "operation" })}>OPERATION</button>
       <button disabled={disabled} className={"world-chip" + (!authored ? " on" : "")} onClick={() => onSettings({ ...settings, missionStyle: "endless" })}>ENDLESS PRACTICE</button>
     </div>
-    <strong>{authored ? mode === "strike" ? "STOP THE CONVOY" : "FLEET DEFENSE" : "ENDLESS WAVES"}</strong>
-    <p className="menu-note">{!authored ? "Practice against repeating waves. Recover to repair and rearm." : mode === "strike"
-      ? "Disable 2 of 3 transports before they unload. Damaging cargo slows it; clearing the escort or radar makes later passes safer. Arrival clock starts on takeoff."
+    {authored && mode === "strike" && <div className="menu-world-chips">
+      <button disabled={disabled} className={"world-chip" + (!bastion ? " on" : "")} onClick={() => onSettings({ ...settings, strikeVariant: "convoy" })}>CONVOY</button>
+      <button disabled={disabled} className={"world-chip" + (bastion ? " on" : "")} onClick={() => onSettings({ ...settings, strikeVariant: "bastion" })}>IRON BASTION</button>
+    </div>}
+    <strong>{!authored ? "ENDLESS WAVES" : mode === "campaign" ? "TASK FORCE ARCHON" : mode === "strike" ? (bastion ? "OPERATION IRON BASTION" : "STOP THE CONVOY") : "FLEET DEFENSE"}</strong>
+    <p className="menu-note">{!authored ? "Practice against repeating waves. Recover to repair and rearm." : mode === "campaign"
+      ? "Stage 1 neutralizes the island bastion's air defences under terrain masking. Stage 2 stops the reinforcement convoy. Stage 3 defends the group against the opposing carrier. Stages, wrecks and hull damage carry across sorties — land, rearm and go again."
+      : mode === "strike"
+      ? bastion
+        ? "A fortified island airbase: command bunker, hardened hangars and a fuel depot, defended by radar-cued SAM batteries and AAA. Fly the radar shadow, kill the radar, then crater the fortifications. The fuel depot chains into everything around it."
+        : "Disable 2 of 3 transports before they unload. Damaging cargo slows it; clearing the escort or radar makes later passes safer. Arrival clock starts on takeoff."
       : "Intercept the scout, then two escorted bomber attacks. Protect your carrier; bomb the hostile flight deck between attacks to prevent launches."}</p>
-    {authored && <p className="menu-note">Guns and normal bombing controls work. Recovery repairs and rearms without resetting the operation. A landing is optional after success.</p>}
+    {authored && <p className="menu-note">Guns and normal bombing controls work. Recovery repairs and rearms without resetting the operation — in the campaign that is how a sortie is flown.</p>}
   </div>;
+}
+
+/** Colour treatment for an LSO grade: the good pass, the fair one, the ugly one. */
+function gradeClass(grade: string): string {
+  if (grade === "OK") return "good";
+  if (grade === "(OK)" || grade === "B") return "fair";
+  return "poor";
 }
 
 function OperationDebrief({ sim }: { sim: Sim }) {
@@ -535,9 +567,11 @@ function OperationDebrief({ sim }: { sim: Sim }) {
     <h2 className="result-title">{s.status === "success" ? "OBJECTIVE SECURED" : s.status === "failure" ? "OPERATION FAILED" : "OPERATION STATUS"}</h2>
     <p className="result-detail">{phaseObjective(s)}</p>
     <div className="operation-stats">
-      {s.kind === "convoy" ? <p>Transports stopped {s.stopped}/3 · arrived {s.arrived}/3 · optional targets {s.optional}</p>
+      {(s.kind === "bastion" || (s.kind === "campaign" && s.phase === "bastion")) ? <p>Fortress objectives destroyed {s.stopped}/3 · radar {op.radarOnline ? "still up" : "suppressed"} · optional targets {s.optional}</p>
+        : s.kind === "convoy" ? <p>Transports stopped {s.stopped}/3 · arrived {s.arrived}/3 · optional targets {s.optional}</p>
         : <p>Friendly carrier {Math.round(s.fleetHull)}% · scout {s.scoutStopped ? "intercepted" : s.scoutReported ? "reported" : "pending"} · launches {s.suppressed ? "suppressed" : "active"}</p>}
-      <p>{Math.floor(s.elapsed / 60)}m {Math.floor(s.elapsed % 60)}s · shared kills {op.kills} · your ordnance released {op.storesUsed}</p>
+      {s.kind === "campaign" && <p>Stage {(s.campaignStage ?? 1)}/3 — {phaseObjective(s)}</p>}
+      <p>{Math.floor(s.elapsed / 60)}m {Math.floor(s.elapsed % 60)}s · shared kills {op.kills} · your ordnance released {op.storesUsed} · weather {hud.weatherLabel}</p>
       <p>Recovery bonus {op.recoveryBonus ? `+${op.recoveryBonus} (${op.recoveryBonus === 150 ? `wire ${op.recoveryWire}` : "surface recovery"})` : "not yet earned"}</p>
     </div>
     <div className="menu-buttons">
@@ -561,6 +595,7 @@ function SettingsPanel({ sim = null, settings, onSettings, onBack }: {
     {net.status === "online" && <p className="menu-note" role="status">ROOM {net.room} · {net.host ? "HOST" : "FLIGHT MEMBER"} · {net.allowLateJoin === false ? "JOINING AFTER LAUNCH DISABLED" : "JOINING AFTER LAUNCH ALLOWED"}</p>}
     <nav className="settings-tabs" aria-label="Settings category">{["flight", "controls", "graphics", "audio", "interface"].map(t => <button key={t} aria-pressed={tab === t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>{t.toUpperCase()}</button>)}</nav>
     {tab === "flight" && <>
+      <label className="menu-row"><span>Weather</span><select value={settings.weather ?? "clear"} onChange={e => set({ weather: e.target.value as WeatherMode })}>{(Object.keys(WEATHER_LABELS) as WeatherMode[]).map(m => <option key={m} value={m}>{WEATHER_LABELS[m]}</option>)}</select></label>
       <label className="menu-row"><span>Daylight</span><select value={settings.daylight} onChange={e => set({ daylight: e.target.value as DaylightMode })}>{(Object.keys(DAYLIGHT_LABELS) as DaylightMode[]).map(m => <option key={m} value={m}>{DAYLIGHT_LABELS[m]}</option>)}</select></label>
       <label className="menu-row"><span>Time / {String(Math.floor(settings.timeOfDay)).padStart(2, "0")}:{String(Math.round(settings.timeOfDay % 1 * 60)).padStart(2, "0")}</span><input type="range" min={0} max={23.75} step={0.25} disabled={settings.daylight !== "fixed"} value={settings.timeOfDay} onChange={e => set({ timeOfDay: Number(e.target.value) })} /></label>
       <p className="menu-note">Choose aircraft and mission in Sortie Setup. Room hosts choose the shared mission in the lobby.</p>
@@ -783,6 +818,17 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
           >
             JOIN ROOM
           </Btn>
+          {/* Watching is always allowed: a spectator never asks the host to
+              admit another aircraft, so it works before and after a launch. */}
+          <Btn
+            disabled={!canConnect}
+            onClick={() => {
+              commit();
+              sim?.joinAsSpectator(name, code);
+            }}
+          >
+            JOIN AS SPECTATOR
+          </Btn>
         </div>
       )}
 
@@ -790,9 +836,14 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
         <>
           <div className="menu-row-btns">
             <Btn primary onClick={() => sim?.leaveRoom()}>LEAVE ROOM</Btn>
+            {/* A spectator can step into the fight, or out of it, at any time. */}
+            {!net.host && <Btn onClick={() => sim?.setSpectating(!net.spectator)}>
+              {net.spectator ? "TAKE A SEAT IN THE COCKPIT" : "SWITCH TO SPECTATOR"}
+            </Btn>}
           </div>
           <div className="menu-world-note">
             Room {net.room} joined — leave to open or join another.
+            {net.spectator && " You are watching this room: no aircraft of yours is in the fight."}
           </div>
         </>
       )}
@@ -810,14 +861,23 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
                   : `Waiting for a wingman to join with code ${net.room}.`}
               </div>
             )}
+            {net.spectator && (
+              <div className="mp-pilot self">
+                <span className="dot online" />
+                <span className="mp-pilot-name">{name.toUpperCase() || "SPECTATOR"}</span>
+                <span className="mp-pilot-air">watching</span>
+                <span className="badge">SPECTATING</span>
+              </div>
+            )}
             {net.pilots.map((p) => (
               <div className="mp-pilot" key={p.id}>
                 <span className={"dot " + (p.linked ? "online" : "connecting")} />
                 <span className="mp-pilot-name">{p.name.toUpperCase()}</span>
                 <span className="mp-pilot-air">
-                  {AIRCRAFT_LIST.find((a) => a.id === p.aircraft)?.name ?? p.aircraft}
+                  {p.spectator ? "watching" : AIRCRAFT_LIST.find((a) => a.id === p.aircraft)?.name ?? p.aircraft}
                 </span>
                 {p.host && <span className="badge">HOST</span>}
+                {p.spectator && !p.host && <span className="badge">SPECTATOR</span>}
               </div>
             ))}
           </div>
@@ -866,8 +926,19 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
               ))}
             </div>
           </div>
-          {(settings.missionMode === "dogfight" || settings.missionMode === "strike") && <MissionBrief mode={settings.missionMode} settings={settings} onSettings={onSettings} disabled={activeOperation} />}
+          {(settings.missionMode === "dogfight" || settings.missionMode === "strike" || settings.missionMode === "campaign") && <MissionBrief mode={settings.missionMode} settings={settings} onSettings={onSettings} disabled={activeOperation} />}
           {activeOperation && <p className="menu-note">Finish the current operation before selecting a different shared mission.</p>}
+          <label className="menu-row">
+            <span>Weather (the whole room feels it)</span>
+            <select
+              value={settings.weather ?? "clear"}
+              onChange={(e) => onSettings({ ...settings, weather: e.target.value as WeatherMode })}
+            >
+              {(Object.keys(WEATHER_LABELS) as WeatherMode[]).map((w) => (
+                <option key={w} value={w}>{WEATHER_LABELS[w]}</option>
+              ))}
+            </select>
+          </label>
           <label className="menu-row">
             <span>Daylight</span>
             <select

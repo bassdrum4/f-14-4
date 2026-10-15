@@ -23,6 +23,7 @@ import {
   receiveEnemyFire,
   retireEnemyBomb,
   setDefenders,
+  spawnBastion,
   spawnConvoy,
   stepEnemyBombs,
   stepEscortDefense,
@@ -184,6 +185,8 @@ export class Dogfight {
   operationSeed = 1;
 
   operationOrigin: { x: number; z: number; heading: number; carrier?: number } | undefined;
+
+  strikeVariant: "convoy" | "bastion" = "convoy";
 
   combatId = 1;
 
@@ -557,8 +560,9 @@ export class Dogfight {
     if (!this.active) this.flaresLeft = this.flaresMax;
   }
 
-  configureOperations(authored: boolean, seed: number, id: number, origin?: { x: number; z: number; heading: number; carrier?: number }): void {
+  configureOperations(authored: boolean, seed: number, id: number, origin?: { x: number; z: number; heading: number; carrier?: number }, variant?: "convoy" | "bastion"): void {
     this.authored = authored; this.operationSeed = seed; if (origin) this.operationOrigin = { ...origin };
+    if (variant) this.strikeVariant = variant;
     if (this.combatId !== id) { this.combatId = id; this.combatRevision = 0; this.receivedRevision = -1; this.fireSerial = this.receivedFire = 0; this.enemyFire = []; this.hitsOut = []; this.carrierHitOut = 0; }
   }
 
@@ -643,8 +647,15 @@ export class Dogfight {
     this.wave = 1;
     this.kills = 0;
     if (!this.mirror) {
-      if (this.authored) { this.operation = Operation.create("convoy", this.combatId, this.operationSeed, this.operationOrigin?.carrier ?? player.catCarrier); this.spawnConvoy(player); }
-      else this.spawnStrikeWave(player);
+      if (this.authored) {
+        if (this.strikeVariant === "bastion") {
+          this.operation = Operation.create("bastion", this.combatId, this.operationSeed, this.operationOrigin?.carrier ?? player.catCarrier);
+          this.spawnBastion(player);
+        } else {
+          this.operation = Operation.create("convoy", this.combatId, this.operationSeed, this.operationOrigin?.carrier ?? player.catCarrier);
+          this.spawnConvoy(player);
+        }
+      } else this.spawnStrikeWave(player);
     }
   }
 
@@ -657,9 +668,15 @@ export class Dogfight {
   beginStrike(player: AircraftState): void {
     this.setAircraft(player);
     if (this.authored) {
-      if ((!this.operation || this.operation.state.kind !== "convoy") && !this.mirror) this.prepareStrike(player);
+      const targetKind = this.strikeVariant === "bastion" ? "bastion" : "convoy";
+      if ((!this.operation || this.operation.state.kind !== targetKind) && !this.mirror) this.prepareStrike(player);
       this.active = true; this.refill(); if (!this.mirror) this.operation?.start();
-      this.banner(player, "STOP THE CONVOY — DISABLE 2 TRANSPORTS · ESCORT & RADAR OPTIONAL");
+      this.banner(
+        player,
+        targetKind === "bastion"
+          ? "OPERATION IRON BASTION — SKIM TERRAIN · DESTROY BUNKER, HANGAR & FUEL DEPOT"
+          : "STOP THE CONVOY — DISABLE 2 TRANSPORTS · ESCORT & RADAR OPTIONAL",
+      );
       return;
     }
     if (!this.mirror && (this.scenario !== "strike" || this.strikeTargets.length === 0)) {
@@ -680,6 +697,37 @@ export class Dogfight {
     this.banner(
       player,
       `STRIKE — WAVE ${this.wave} · ${n} TARGETS ON THE GRID — [R] OPENS THE TARGET POD`,
+    );
+  }
+
+  prepareCampaign(player: AircraftState): void {
+    this.setAircraft(player);
+    this.clear();
+    this.scenario = "strike";
+    this.wave = 1;
+    this.kills = 0;
+    if (!this.mirror) {
+      this.operation = Operation.create("campaign", this.combatId, this.operationSeed, this.operationOrigin?.carrier ?? player.catCarrier);
+      this.spawnBastion(player);
+    }
+  }
+
+  beginCampaign(player: AircraftState): void {
+    this.setAircraft(player);
+    if ((!this.operation || this.operation.state.kind !== "campaign") && !this.mirror) this.prepareCampaign(player);
+    this.active = true;
+    this.refill();
+    if (!this.mirror && this.operation?.state.status === "briefing") {
+      this.operation.start();
+    }
+    const stage = this.operation?.state.campaignStage ?? 1;
+    this.banner(
+      player,
+      stage === 1
+        ? "TASK FORCE ARCHON [STAGE 1/3] — NEUTRALIZE ISLAND BASTION IADS"
+        : stage === 2
+        ? "TASK FORCE ARCHON [STAGE 2/3] — INTERDICT ENEMY SUPPLY CONVOY"
+        : "TASK FORCE ARCHON [STAGE 3/3] — DEFEND CARRIER GROUP & SINK ENEMY FLAGSHIP",
     );
   }
 
@@ -972,6 +1020,24 @@ export class Dogfight {
     const before = this.hull;
     this.hull -= dmg;
     this.damageT = DAMAGE_FLASH;
+    if (player.subsystems && this.hull > 0) {
+      const sub = player.subsystems;
+      const roll = Math.floor(Math.abs(Math.sin(player.time * 43.7 + dmg * 7.1)) * 4);
+      if (roll === 0 && sub.engineL > 0.5) {
+        sub.engineL = Math.max(0.45, sub.engineL - 0.35);
+        this.banner(player, "PORT ENGINE HIT — ASYMMETRIC THRUST · USE RUDDER TRIM");
+      } else if (roll === 1 && sub.engineR > 0.5) {
+        sub.engineR = Math.max(0.45, sub.engineR - 0.35);
+        this.banner(player, "STARBOARD ENGINE HIT — ASYMMETRIC THRUST");
+      } else if (roll === 2 && sub.hydraulics > 0.5) {
+        sub.hydraulics = Math.max(0.45, sub.hydraulics - 0.35);
+        this.banner(player, "HYDRAULIC PRESSURE LOSS — FLIGHT CONTROLS DEGRADED");
+      } else if (!sub.fuelLeak && this.hull <= 75) {
+        sub.fuelLeak = true;
+        sub.avionics = Math.max(0.5, sub.avionics - 0.3);
+        this.banner(player, "FUEL TANK PUNCTURED — LEAKING FUEL · RECOVER ON CARRIER");
+      }
+    }
     if (before > 60 && this.hull <= 60) this.banner(player, "TAKING HITS — HULL 60%");
     if (before > 30 && this.hull <= 30) this.banner(player, "HULL CRITICAL — DISENGAGE");
     if (this.hull <= 0 && !player.result) {
@@ -1005,6 +1071,10 @@ export class Dogfight {
 
     spawnConvoy(player: AircraftState): void {
       spawnConvoy(this, player);
+    }
+
+    spawnBastion(player: AircraftState): void {
+      spawnBastion(this, player);
     }
 
     stepOperation(dt: number, player: AircraftState): void {

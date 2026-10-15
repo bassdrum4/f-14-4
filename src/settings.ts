@@ -28,7 +28,9 @@ export type Action =
   | "missile"
   | "flares"
   | "settings"
-  | "map";
+  | "map"
+  | "spectate"
+  | "ping";
 
 export const ACTION_LABELS: Record<Action, string> = {
   pitchUp: "Pitch up (nose up)",
@@ -55,6 +57,8 @@ export const ACTION_LABELS: Record<Action, string> = {
   flares: "Flares (countermeasures)",
   settings: "Settings (in flight)",
   map: "Tactical map (big / small)",
+  spectate: "Spectator: next view (pilots, bandits, decks, LSO, free)",
+  ping: "Tactical ping / task the flight (spectators & wingmen)",
 };
 
 export const DEFAULT_BINDINGS: Record<Action, string> = {
@@ -82,11 +86,15 @@ export const DEFAULT_BINDINGS: Record<Action, string> = {
   flares: "KeyZ",
   settings: "KeyO",
   map: "KeyM",
+  spectate: "KeyN",
+  ping: "KeyP",
 };
 
 export type DaylightMode = "live" | "fixed" | "cycle";
 
-export type MissionMode = "cruise" | "dogfight" | "strike" | "versus";
+export type WeatherMode = "clear" | "overcast" | "storm";
+
+export type MissionMode = "cruise" | "dogfight" | "strike" | "versus" | "campaign";
 
 /** Where a sortie begins: the boat, or the shore runway. Persisted with the
  *  rest of the gamestate so "continue flying" comes back to the same place. */
@@ -98,11 +106,18 @@ export const DAYLIGHT_LABELS: Record<DaylightMode, string> = {
   cycle: "Fast cycle",
 };
 
+export const WEATHER_LABELS: Record<WeatherMode, string> = {
+  clear: "Clear skies — calm sea",
+  overcast: "Overcast deck — moderate swell & breeze",
+  storm: "Storm squall — heavy swell, rain, lightning & crosswind",
+};
+
 export const MISSION_MODE_LABELS: Record<MissionMode, string> = {
   versus: "Head-to-head — fight other pilots in your room",
   cruise: "Cruise — free flight",
   dogfight: "Aggressor — fleet defense or endless air combat",
-  strike: "Strike — convoy interdiction or endless target practice",
+  strike: "Strike — convoy interdiction, island bastion, or endless practice",
+  campaign: "Theater Campaign — Task Force Archon multi-sortie war",
 };
 
 /** Short chips for the picker: the profile name, without the explanation. */
@@ -111,6 +126,7 @@ export const MISSION_MODE_CHIPS: Record<MissionMode, string> = {
   cruise: "CRUISE",
   dogfight: "AGGRESSOR",
   strike: "STRIKE",
+  campaign: "CAMPAIGN",
 };
 
 /** Minutes of real time for one full day in "cycle" mode (4 minutes). */
@@ -123,8 +139,10 @@ export interface Settings {
   adaptiveResolution: boolean;
   aircraft: AircraftId; // the type the player flies
   missionStyle?: "operation" | "endless";
+  strikeVariant?: "convoy" | "bastion";
   missionMode: MissionMode; // free flight or an aggressor profile
   daylight: DaylightMode;
+  weather?: WeatherMode;
   /** Local clock hour 0..24, used by "fixed" mode. */
   timeOfDay: number;
   minimap: boolean;
@@ -165,7 +183,9 @@ export function defaultSettings(): Settings {
     aircraft: DEFAULT_AIRCRAFT,
     missionMode: "cruise",
     missionStyle: "operation",
+    strikeVariant: "convoy",
     daylight: "fixed",
+    weather: "clear",
     timeOfDay: 9,
     minimap: true,
     hudLadder: true,
@@ -237,14 +257,19 @@ export function loadSettings(): Settings {
       adaptiveResolution: typeof parsed.adaptiveResolution === "boolean" ? parsed.adaptiveResolution : base.adaptiveResolution,
       aircraft: isAircraftId(parsed.aircraft) ? parsed.aircraft : base.aircraft,
       missionMode:
-        parsed.missionMode === "dogfight" || parsed.missionMode === "cruise" || parsed.missionMode === "strike" || parsed.missionMode === "versus"
+        parsed.missionMode === "dogfight" || parsed.missionMode === "cruise" || parsed.missionMode === "strike" || parsed.missionMode === "versus" || parsed.missionMode === "campaign"
           ? parsed.missionMode
           : base.missionMode,
       missionStyle: parsed.missionStyle === "endless" ? "endless" : "operation",
+      strikeVariant: parsed.strikeVariant === "bastion" ? "bastion" : "convoy",
       daylight:
         parsed.daylight === "live" || parsed.daylight === "fixed" || parsed.daylight === "cycle"
           ? parsed.daylight
           : base.daylight,
+      weather:
+        parsed.weather === "clear" || parsed.weather === "overcast" || parsed.weather === "storm"
+          ? parsed.weather
+          : base.weather,
       timeOfDay:
         typeof parsed.timeOfDay === "number" ? clampNum(parsed.timeOfDay, 0, 24) : base.timeOfDay,
       minimap: typeof parsed.minimap === "boolean" ? parsed.minimap : base.minimap,

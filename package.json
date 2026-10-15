@@ -1,7 +1,7 @@
 {
   "name": "f14-tomcat-simulator",
   "private": true,
-  "version": "1.8.1",
+  "version": "1.9.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port ${PORT:-5173}",
@@ -45,7 +45,11 @@
     "test:countermeasures:pvp": "bun scripts/diag-countermeasures-pvp.ts",
     "test:gameplay-edges": "bun scripts/diag-gameplay-edges.ts",
     "test:carrier-motion": "bun scripts/diag-carrier-motion.ts",
-    "test:operations": "bun scripts/diag-operations.ts"
+    "test:operations": "bun scripts/diag-operations.ts",
+    "test:iads": "bun scripts/diag-iads.ts",
+    "test:campaign": "bun scripts/diag-campaign.ts",
+    "test:weather": "bun scripts/diag-weather.ts",
+    "test:spectate": "bun scripts/diag-spectate.ts"
   },
   "dependencies": {
     "peerjs": "^1.5.5",

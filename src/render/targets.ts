@@ -9,7 +9,7 @@
 
 import * as THREE from "three";
 
-export type TargetKind = "hangar" | "tank" | "warehouse" | "ship" | "patrol";
+export type TargetKind = "hangar" | "tank" | "warehouse" | "ship" | "patrol" | "sam" | "radar" | "bunker";
 
 /** Hit radius (m) the combat layer checks a target's position against. */
 export const TARGET_RADIUS: Record<TargetKind, number> = {
@@ -18,6 +18,9 @@ export const TARGET_RADIUS: Record<TargetKind, number> = {
   warehouse: 14,
   ship: 22,
   patrol: 13,
+  sam: 14,
+  radar: 13,
+  bunker: 18,
 };
 
 /** Structural hit points: one direct 500 kg bomb kills anything but a ship. */
@@ -27,6 +30,9 @@ export const TARGET_HP: Record<TargetKind, number> = {
   warehouse: 34,
   ship: 52,
   patrol: 30,
+  sam: 30,
+  radar: 28,
+  bunker: 42,
 };
 
 function mat(color: number, roughness = 0.85, metalness = 0.08): THREE.MeshStandardMaterial {
@@ -149,6 +155,49 @@ function buildPatrol(): THREE.Group {
   return g;
 }
 
+/** A surface-to-air missile battery: revetment base, turret pedestal, twin inclined launch rails. */
+function buildSam(): THREE.Group {
+  const g = new THREE.Group();
+  const base = mat(0x52584c, 0.9, 0.15);
+  const rail = mat(0x747c6e, 0.7, 0.35);
+  const warhead = mat(0xc43c2c, 0.6, 0.3);
+  add(g, new THREE.CylinderGeometry(8.5, 10, 2.2, 12), base, 0, 1.1, 0);
+  add(g, new THREE.BoxGeometry(5, 3.8, 5), base, 0, 3.5, 0);
+  for (const z of [-2.4, 2.4]) {
+    const beam = new THREE.BoxGeometry(10.5, 0.9, 1.1);
+    beam.rotateZ(0.46);
+    add(g, beam, rail, 0.8, 6.2, z);
+    const msl = new THREE.CylinderGeometry(0.42, 0.42, 8.8, 8);
+    msl.rotateZ(Math.PI / 2 + 0.46);
+    add(g, msl, warhead, 1.2, 7.1, z);
+  }
+  return g;
+}
+
+/** An Early Warning / Fire-Control Radar dome: lattice tower with radome and dish. */
+function buildRadar(): THREE.Group {
+  const g = new THREE.Group();
+  const tower = mat(0x636a60, 0.85, 0.25);
+  const dome = mat(0xd8ddd6, 0.65, 0.1);
+  const dish = mat(0x889488, 0.55, 0.4);
+  add(g, new THREE.BoxGeometry(10, 5, 10), tower, 0, 2.5, 0);
+  add(g, new THREE.CylinderGeometry(2.4, 3.6, 12, 8), tower, 0, 11, 0);
+  add(g, new THREE.SphereGeometry(5.2, 14, 10), dome, 0, 19, 0);
+  add(g, new THREE.BoxGeometry(1.4, 4.2, 11), dish, 4.5, 14, 0);
+  return g;
+}
+
+/** A fortified command bunker / runway control complex. */
+function buildBunker(): THREE.Group {
+  const g = new THREE.Group();
+  const concrete = mat(0x5c6058, 0.95, 0.08);
+  const steel = mat(0x3a403c, 0.8, 0.3);
+  add(g, new THREE.BoxGeometry(36, 7.5, 26), concrete, 0, 3.75, 0);
+  add(g, new THREE.BoxGeometry(24, 4.5, 16), concrete, 0, 9.5, 0);
+  add(g, new THREE.CylinderGeometry(1.2, 1.5, 11, 8), steel, -8, 15, -4);
+  return g;
+}
+
 /**
  * Build one target. Land targets sit on their own origin (y = ground), ships
  * float on the sea surface; the caller owns placement and heading.
@@ -165,6 +214,12 @@ export function buildTargetMesh(kind: TargetKind): THREE.Group {
       return buildShip();
     case "patrol":
       return buildPatrol();
+    case "sam":
+      return buildSam();
+    case "radar":
+      return buildRadar();
+    case "bunker":
+      return buildBunker();
   }
 }
 

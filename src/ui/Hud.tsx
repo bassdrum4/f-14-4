@@ -44,6 +44,9 @@ const EMPTY: HudSnapshot = {
   glide: null,
   dfBombsTracking: 0, dfBombTracks: [], dfDesignated: null,
   dfReleased: null, dfLanded: null, pod: false, bigMap: false,
+  weather: "clear", weatherLabel: "CLEAR",
+  spectating: false, spectateTarget: "", spectateKind: "", spectateIndex: 0, spectateCount: 0,
+  pings: [], lsoCall: null, lsoGrade: null,
   remotes: [], netStatus: "idle", netRoom: "", netHost: false, netPilots: 0,
 };
 
@@ -66,6 +69,11 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
         {[...hud.battle.pilots].sort((a,b) => b.kills - a.kills).map(p => <div key={p.id} className={"battle-row" + (p.id === hud.battleSelf ? " self" : "")}><span>{p.name.toUpperCase()}{p.shield ? " ◇" : ""}</span><span>{p.kills} / {p.deaths}</span><span>{p.ready ? p.hp > 0 ? `${p.hp}%` : `${Math.ceil(p.respawnIn)}s` : "LOBBY"}</span></div>)}
         {hud.battle.pilots.find(p => p.id === hud.battleSelf)?.shield && <small>SPAWN SHIELD — weapons unlock after 5 seconds</small>}
         {hud.battle.pilots.find(p => p.id === hud.battleSelf)?.hp === 0 && <small>DOWN — automatic airborne respawn</small>}
+      </div>}
+      {hud.spectating && <div className="spectate-bar">
+        <strong>SPECTATOR</strong>
+        <span>{hud.spectateKind} · {hud.spectateTarget}</span>
+        <small>VIEW {hud.spectateIndex}/{hud.spectateCount} · [N] NEXT VIEW · [C] CAMERA {hud.cameraMode.toUpperCase()} · [P] PING THE ROOM</small>
       </div>}
       {!hud.pod && ladder && <PitchLadder hud={hud} />}
       {!hud.pod && <TargetBoxes sim={sim} gunCross={gunCross} />}
@@ -147,17 +155,17 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
                     .join(" · ")}
             </div>
           )}
-          <div>
+          {!hud.spectating && <div>
             {hud.dfBombs > 0
               ? `LGB ${hud.dfBombs}/${hud.dfBombsMax}${hud.dfBombsAway > 0 ? ` · ${hud.dfBombsAway} AWAY` : ""}${hud.dfBombsTracking > 0 ? ` · ${hud.dfBombsTracking} TRACKING` : ""} · [R] POD`
               : "STORES EMPTY"}
-          </div>
-          {hud.dfMissilesMax > 0 && (
+          </div>}
+          {!hud.spectating && hud.dfMissilesMax > 0 && (
             <div className={hud.dfMissiles > 0 ? "hud-laser" : undefined}>
               MSL {hud.dfMissiles}/{hud.dfMissilesMax} · [E] FIRE · SEEKS NEAREST
             </div>
           )}
-          {hud.dfFlaresMax > 0 && (
+          {!hud.spectating && hud.dfFlaresMax > 0 && (
             <div className={hud.dfFlares > 0 ? "hud-flare" : "hud-flare empty"}>
               FLARE {hud.dfFlares}/{hud.dfFlaresMax} · [Z] DEPLOY — DECOYS INBOUND MISSILES
             </div>
@@ -167,12 +175,19 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
               LASER {hud.dfDesignated.km.toFixed(1)} KM · RELEASE AGAIN TO RE-ENGAGE
             </div>
           )}
-          <div className="hud-cam">[ENTER] RADIO · [M] MAP</div>
+          <div className="hud-cam">[ENTER] RADIO · [M] MAP · [P] PING</div>
           <div className="hud-cam">
-            {hud.aircraftName} · {hud.cameraMode.toUpperCase()} · [C] CAM · {formatClock(hud.localHour)} {daylight === "live" ? "HST" : "LOCAL"}
+            {hud.aircraftName} · {hud.cameraMode.toUpperCase()} · [C] CAM · {hud.weatherLabel} · {formatClock(hud.localHour)} {daylight === "live" ? "HST" : "LOCAL"}
           </div>
         </div>
       </div>
+      {hud.subsystems && <Subsystems subs={hud.subsystems} />}
+      {hud.lsoCall && <div className="hud-paddles">{hud.lsoCall}</div>}
+      {hud.pings.length > 0 && <div className="hud-pings">
+        {hud.pings.slice(-3).map(p => <div key={p.id} className={"hud-ping " + p.kind}>
+          <b>{p.kind.toUpperCase()}</b> {p.from.toUpperCase()} · {p.label} · {p.km.toFixed(1)} KM {Math.round(p.brgDeg)}°
+        </div>)}
+      </div>}
       {hud.stalled && <div className="hud-stall">STALL</div>}
       {hud.catPhase === "ready" && (
         <div className="hud-cat ready">HOLD [SPACE] — CATAPULT LAUNCH</div>
@@ -193,7 +208,16 @@ function OperationPanel({ sim, hud, operation: op }: { sim: Sim | null; hud: Hud
     <strong>{operationTitle(s)} <span>{s.kind === "fleet" ? `FRIENDLY ${hud.carrierMarkers[s.fleetCarrier]?.name ?? "CARRIER"} ${Math.round(s.fleetHull)}%` : s.status === "briefing" ? "BRIEFING" : `${s.stopped}/2 STOPPED`}</span></strong>
     <div>{phaseObjective(s)}</div>
     {timer && !resolved && <small>{s.kind === "convoy" ? "NEXT ARRIVAL" : s.phase === "forming" || s.phase === "counterattack" ? "NEXT LAUNCH" : "ESTIMATED CONTACT"} {timer}</small>}
-    {op.warning && <b className="operation-warning">ESCORT TRACKING — BREAK OR SUPPRESS THE ESCORT</b>}
+    {op.warning && <b className="operation-warning">{s.kind === "bastion" || s.phase === "bastion" ? "THREAT TRACKING — MASK WITH TERRAIN OR BREAK" : "ESCORT TRACKING — BREAK OR SUPPRESS THE ESCORT"}</b>}
+    {(s.kind === "bastion" || (s.kind === "campaign" && s.phase === "bastion")) && <div className="iads-panel">
+      <span className={op.radarOnline ? "on" : "off"}>RADAR {op.radarOnline ? "ONLINE" : "SUPPRESSED"}</span>
+      <span className={op.terrainMasked ? "mask on" : "mask"}>{op.terrainMasked ? "TERRAIN MASKED" : "EXPOSED"}</span>
+      <span className="lock">
+        SAM LOCK
+        <i><b style={{ width: `${Math.round((op.samLockProgress ?? 0) * 100)}%` }} /></i>
+      </span>
+      <small>Kill the radar and the batteries cannot reach as far; stay in the radar shadow and they cannot see you at all.</small>
+    </div>}
     {op.target && !resolved && <div className="operation-bearing">
       <span style={{ display: "inline-block", transform: `rotate(${op.target.bearing - hud.playerHeadingDeg}deg)` }}>▲</span>
       {op.target.label} · {op.target.km.toFixed(1)} KM · {Math.round(op.target.bearing)}°
@@ -206,6 +230,26 @@ function OperationPanel({ sim, hud, operation: op }: { sim: Sim | null; hud: Hud
       {(hud.netStatus !== "online" || hud.netHost) && <button className="world-chip" onClick={() => s.status === "failure" ? sim?.restart() : sim?.nextOperation()}>{s.status === "failure" ? "RETRY OPERATION" : "NEXT OPERATION"}</button>}
     </div>}
     {resolved && recovering && <small>OBJECTIVE SECURED · OPTIONAL RECOVERY · {sim?.phase === "flying" && <button className="world-chip" onClick={() => sim.finishOperation()}>DEBRIEF</button>}</small>}
+  </div>;
+}
+
+/**
+ * The airframe's own condition, as the pilot has to fly it: an engine down on
+ * one side, hydraulics that lag the stick, a fuel tank that is emptying itself.
+ * Nothing is shown while every system is healthy — an always-on panel is noise.
+ */
+function Subsystems({ subs }: { subs: NonNullable<HudSnapshot["subsystems"]> }) {
+  const engine = subs.engineL < 0.999 || subs.engineR < 0.999;
+  const damaged = engine || subs.hydraulics < 0.999 || subs.avionics < 0.999 || subs.fuelLeak;
+  if (!damaged) return null;
+  return <div className="hud-subsystems">
+    <strong>AIRFRAME DAMAGE</strong>
+    {engine && <span className={subs.engineL < 0.999 && subs.engineR < 0.999 ? "warn" : undefined}>
+      ENG L {Math.round(subs.engineL * 100)}% · R {Math.round(subs.engineR * 100)}%{subs.engineL !== subs.engineR ? " — ASYMMETRIC, TRIM IT OUT" : ""}
+    </span>}
+    {subs.hydraulics < 0.999 && <span className="warn">HYDRAULICS {Math.round(subs.hydraulics * 100)}% — CONTROLS LAG</span>}
+    {subs.avionics < 0.999 && <span className="warn">AVIONICS {Math.round(subs.avionics * 100)}%</span>}
+    {subs.fuelLeak && <span className="warn">FUEL LEAK — {Math.round(subs.fuelPct)}% REMAINING · RECOVER</span>}
   </div>;
 }
 
@@ -451,6 +495,21 @@ function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
       ctx.font = "9px ui-monospace, monospace";        ctx.fillText("OPFOR CV", hx + 6, hy - 4);
     }
 
+    // --- room pings: headed diamonds, the tactical tasking layer ---
+    for (const p of hud.pings) {
+      const { x, y } = point(p.x, p.z);
+      if (x < -12 || x > n + 12 || y < -12 || y > n + 12) continue;
+      const alpha = Math.max(0.15, 1 - p.age / 45);
+      const colour = p.kind === "threat" ? "255,86,64" : p.kind === "target" ? "255,204,80" : "120,255,150";
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(Math.PI / 4);
+      ctx.strokeStyle = `rgba(${colour},${alpha.toFixed(2)})`;
+      ctx.lineWidth = 1.6;
+      ctx.strokeRect(-3.4, -3.4, 6.8, 6.8);
+      ctx.restore();
+    }
+
     // --- player: heading-up triangle at the centre ---
     ctx.save();
     ctx.translate(n / 2, n / 2);
@@ -539,6 +598,28 @@ function TargetBoxes({ sim, gunCross }: { sim: Sim | null; gunCross: boolean }) 
         ctx.textAlign = out.x > w * .75 ? "right" : "left";
         ctx.fillText(`${objective.label} ${objective.km.toFixed(1)} KM`, out.x, out.y + 30); ctx.textAlign = "left";
       }
+      // Room pings: a labelled diamond anyone in the flight can task from — a
+      // spectator's threat call or a wingman's waypoint. They age out on their
+      // own, fading as they go.
+      for (const p of hud.pings) {
+        const alpha = Math.max(0, 1 - p.age / 45);
+        if (alpha <= 0.02) continue;
+        sim.projectOffscreen(p.x, p.y + 20, p.z, out, 70);
+        const colour = p.kind === "threat" ? "255,86,64" : p.kind === "target" ? "255,204,80" : "120,255,150";
+        ctx.strokeStyle = `rgba(${colour},${(0.45 + 0.5 * alpha).toFixed(2)})`;
+        ctx.lineWidth = 2;
+        ctx.save();
+        ctx.translate(out.x, out.y);
+        ctx.rotate(Math.PI / 4);
+        ctx.strokeRect(-8, -8, 16, 16);
+        ctx.restore();
+        ctx.fillStyle = `rgba(${colour},${(0.55 + 0.4 * alpha).toFixed(2)})`;
+        ctx.font = "600 11px ui-monospace, monospace";
+        ctx.textAlign = out.x > w * 0.75 ? "right" : "left";
+        ctx.fillText(`${p.label} · ${p.km.toFixed(1)} KM · ${p.from.toUpperCase()}`, out.x, out.y + 26);
+        ctx.textAlign = "left";
+      }
+
       if (!hud.dfActive) return;
 
       // taking hits: a soft red wash over the view

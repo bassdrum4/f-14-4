@@ -43,6 +43,7 @@ function setup(result: SimResult | null, host = true, aircraft: AircraftId = 'to
   (sim.df as any).bombsLeft = 0; (sim.df as any).missilesLeft = 0;
   (sim.df as any).flaresLeft = 0;
   sim.updateJetPose = sim.updateAudio = sim.updateHud = () => {};
+  sim.renderer = { setWind() {}, takeThunder: () => 0 };
   const actions: BattleAction[] = [];
   sim.net = { callsign: 'ALPHA', publishBattle: () => {}, sendBattleMissiles: () => {}, sendBattleAction: (action: BattleAction) => {
     actions.push(action);

@@ -265,6 +265,7 @@ console.log("launch point — the engine writes it down (real stepSim, no WebGL)
   sim.input = { sample: () => ({ pitch: 0, roll: 0, yaw: 0, fire: false }) };
   sim.df = { step: () => {}, refill: () => {} };
   sim.rig = { resetFollow: () => {} };
+  sim.renderer = { setWind() {}, takeThunder: () => 0 };
   sim.updateJetPose = sim.updateAudio = sim.updateHud = () => {};
   sim.state = spawnAircraft("carrier", 2);
   sim.state.time = 60;

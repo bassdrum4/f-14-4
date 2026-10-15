@@ -1,6 +1,6 @@
 import { RemoteWeapons } from "../render/remoteWeapons";
 import { BattleReferee, battleCarrierPair, type BattleAction, type BattleSnapshot, type BattleShot, type BattleMissiles } from "../net/versus";
-import { specFor } from "./aircraft";
+import { specFor, type AircraftId } from "./aircraft";
 import { atmosphere } from "./atmosphere";
 // Sim orchestrator: state machine, fixed-timestep sim, render loop, HUD feed.
 
@@ -19,7 +19,9 @@ import {
   stepAircraft,
   type AircraftState,
   type FlightInput,
+  type LsoGrade,
   type MissionKind,
+  type SubsystemDamage,
 } from "../sim/flight";
 import {
   DEFAULT_SEED,
@@ -28,7 +30,9 @@ import {
   airfield,
   carriers,
   carrierAt,
+  deckAxes,
   setFleetTime,
+  setSeaState,
   fleetVelocityAt,
   headingOfQuat,
   groundAt,
@@ -36,9 +40,11 @@ import {
   setWorldSeed as regenerateTerrain,
   terrainHeight,
   worldSeedForRoom,
+  type CarrierDef,
 } from "../sim/world";
 import type { TerrainPaint } from "../render/scene";
-import { CYCLE_MINUTES_PER_DAY, keyLabel, withLaunchPoint, type LaunchKind, type MissionMode, type Settings } from "../settings";
+import { CYCLE_MINUTES_PER_DAY, keyLabel, withLaunchPoint, type LaunchKind, type MissionMode, type Settings, type WeatherMode } from "../settings";
+import { seaStateFor, weatherPreset, windFor, type WeatherPreset } from "./weather";
 import { HOME_SITE, dayPhase, sunPosition, sunVector, type DayPhase } from "../sim/sun";
 import { Dogfight, type CarrierStatus, type GunCue } from "../sim/dogfight";
 import { ExplosionField } from "../render/effects";
@@ -62,6 +68,8 @@ import {
   type NetStatus,
   type PeerFactory,
   type OperationLaunch,
+  type PingKind,
+  type TacticalPing,
 } from "../net/multiplayer";
 import type { MissionStyle, OperationHud } from "./operations";
 
@@ -187,6 +195,24 @@ export interface HudSnapshot {
   pod: boolean;
   /** The big tactical map is up. */
   bigMap: boolean;
+  /** The theatre's weather and the wind it is blowing right now. */
+  weather: WeatherMode;
+  weatherLabel: string;
+  /** True when the local session is watching the room instead of flying it. */
+  spectating: boolean;
+  /** What the spectator camera is on: label, kind and position in the list. */
+  spectateTarget: string;
+  spectateKind: string;
+  spectateIndex: number;
+  spectateCount: number;
+  /** Inbound tactical pings from the room (spectator/AWACS tasking). */
+  pings: TacticalPingHud[];
+  /** Airframe subsystems: battle damage the pilot has to fly around. */
+  subsystems?: SubsystemDamage;
+  /** Paddles' last call on the approach, if one is being flown. */
+  lsoCall?: string | null;
+  /** The LSO's grade for the last pass (wire or bolter). */
+  lsoGrade?: LsoGrade | null;
   /** Multiplayer: live wingmen, nearest first. */
   remotes: RemoteContact[];
   /** Multiplayer session, condensed for the HUD and the lobby. */
@@ -196,6 +222,44 @@ export interface HudSnapshot {
   netPilots: number;
   battle?: BattleSnapshot;
   battleSelf?: string;
+}
+
+/**
+ * Something a spectator camera can watch: a pilot in the room, a hostile
+ * aircraft the room is streaming, a carrier, or a deck's LSO platform.
+ */
+export interface SpectateTarget {
+  id: string;
+  /** PILOT / BANDIT / CARRIER / LSO — what the camera is riding. */
+  kind: string;
+  label: string;
+  pos: THREE.Vector3;
+  quat: THREE.Quaternion;
+  vel: THREE.Vector3;
+  speed: number;
+  /** The airframe, when the target is an aircraft (drives the HUD's legend). */
+  aircraft?: AircraftId;
+  /** Remote pose flags (gear, flaps, speedbrake), when known. */
+  flags?: number;
+  /** Friendly fleet index, for the deck and LSO views. */
+  carrier?: number;
+  /** True for the opposing boat, which the LSO watches from its own deck. */
+  hostile?: boolean;
+}
+
+/** A room ping as the HUD draws it: where it is, and from whom. */
+export interface TacticalPingHud {
+  id: number;
+  kind: PingKind;
+  from: string;
+  label: string;
+  x: number;
+  y: number;
+  z: number;
+  km: number;
+  brgDeg: number;
+  /** Seconds since it was placed, so the HUD can fade it out. */
+  age: number;
 }
 
 /** A wingman as the HUD sees it. */
@@ -251,6 +315,34 @@ function hawaiiHour(): number {
   return (h % 24) + m / 60;
 }
 
+/**
+ * Dress an airframe for a weather preset: the steady wind, its gust cycle and
+ * the turbulence the pilot will feel. Exported so the weather's effect on the
+ * flight model can be exercised headlessly, with no renderer and no room.
+ */
+export function applyWeatherPresetTo(st: AircraftState, preset: WeatherPreset, seed: number): void {
+  const w = windFor(preset, seed, st.time);
+  st.windX = w.x;
+  st.windZ = w.z;
+  st.turbulence = preset.turbulence;
+}
+
+/**
+ * Where the Landing Signal Officer stands: on the port deck edge, abaft the
+ * ramp, looking up the approach. It is the station the spectator LSO view and
+ * the camera's "on the ball" framing both use.
+ */
+function lsoStation(c: CarrierDef): THREE.Vector3 {
+  const { fwd, right } = deckAxes(c.headingDeg);
+  const along = -c.deckLength / 2 + 34;
+  const across = -c.deckWidth / 2 - 12;
+  return new THREE.Vector3(
+    c.x + fwd[0] * along + right[0] * across,
+    c.deckY + (c.heave ?? 0) + 11,
+    c.z + fwd[1] * along + right[1] * across,
+  );
+}
+
 /** Day of the year, 1..366, so the solar declination tracks the seasons. */
 function dayOfYearNow(): number {
   const now = new Date();
@@ -280,9 +372,15 @@ function defaultHud(): HudSnapshot {
     dfFlares: 30, dfFlaresMax: 30, dfIncoming: null,
     dfBombsTracking: 0, dfBombTracks: [], dfDesignated: null,
     dfReleased: null, dfLanded: null, pod: false, bigMap: false,
+    weather: "clear", weatherLabel: "CLEAR",
+    spectating: false, spectateTarget: "", spectateKind: "", spectateIndex: 0, spectateCount: 0,
+    pings: [], lsoCall: null, lsoGrade: null,
     remotes: [], netStatus: "idle", netRoom: "", netHost: false, netPilots: 0,
   };
 }
+
+/** How long a room ping stays on the glass before it fades away. */
+const PING_TTL = 45;
 
 /** An idle net session, so the HUD has something to read before anyone joins. */
 function idleNetState(): NetState {
@@ -382,6 +480,30 @@ export class Sim {
   private battleRecoveryAt = 0;
   private combatRoster: BattleSnapshot | null = null;
   private netListeners = new Set<(s: NetState) => void>();
+  /**
+   * The theatre's weather. One preset drives the flight model (wind, gusts,
+   * turbulence), the fleet (swell, deck pitch and roll) and the renderer (cloud,
+   * rain, lightning, visibility), so what the pilot feels is what they see.
+   */
+  private weather: WeatherPreset = weatherPreset("clear");
+  /** The weather preset the world is currently dressed for. */
+  private weatherMode: WeatherMode = "clear";
+  /** Tactical pings heard from the room, with their range from the viewer. */
+  private pings: Array<TacticalPing & { km: number; brgDeg: number }> = [];
+  /** Spectator session: which entry of the target list the camera is watching. */
+  private spectateIndex = 0;
+  private spectateId = "";
+  /** The spot the pilot last designated, so a ping can call it out. */
+  private lastDesignation: THREE.Vector3 | null = null;
+  /** The room's last launch, so leaving spectator mode can rejoin the fight. */
+  private lastRoomLaunch: { mission: MissionKind; carrier: number; profile?: OperationLaunch } | null = null;
+  /** Everything the spectator camera may watch, rebuilt once per frame. */
+  private spectateList: SpectateTarget[] = [];
+  /**
+   * The watched aircraft, worn as a stand-in airframe so the HUD builder (and
+   * the radar picture) can be reused verbatim in a spectator session.
+   */
+  private spectateViewer: AircraftState | null = null;
   /** The room radio: newest last, capped so a long session cannot grow it. */
   private chatLog: ChatMsg[] = [];
   private chatListeners = new Set<() => void>();
@@ -399,6 +521,8 @@ export class Sim {
 
   constructor(canvas: HTMLCanvasElement, settings: Settings, peerFactory?: PeerFactory) {
     this.settings = settings;
+    this.weather = weatherPreset(settings.weather);
+    this.weatherMode = this.weather.mode;
     // The launch point is part of the gamestate: start parked on the boat (or
     // runway) the last sortie used, not on whatever the fleet had next.
     this.mission = settings.launchKind;
@@ -422,6 +546,7 @@ export class Sim {
     // runs when the user touches a setting, so the constructor must seed it.
     this.audio.setVolume(settings.volume);
     this.explosions = new ExplosionField(this.renderer.scene, settings.quality);
+    this.applyWeatherWorld();
     this.df = new Dogfight(this.renderer.scene, this.explosions);
     this.df.onCombatFeedback = kind => {
       if (this.phase === "flying") this.audio.combatFeedback(kind);
@@ -449,10 +574,12 @@ export class Sim {
       // only the aircraft are theirs.
       onEnemies: (snap) => { if (this.settings.missionMode !== "versus") this.df.applyRemoteSnapshot(snap, performance.now()); },
       onMode: (mode) => this.applyRoomMode(mode),
+      onWeather: (weather) => this.applyRoomWeather(weather),
       onHit: (id, dmg, epoch) => this.df.applyRemoteHit(id, dmg, this.state, epoch),
       onCarrierHit: (dmg, epoch) => { if (epoch === undefined || epoch === this.df.operationEpoch) this.df.applyRemoteCarrierHit(dmg, this.state); },
       onChat: (msg) => this.addChat(msg),
       onLinkDelay: (id, ms) => this.remoteFleet.setLinkDelay(id, ms),
+      onPing: (ping) => this.receivePing(ping),
       onBattleAction: (sender, action) => this.receiveBattleAction(sender, action),
       onBattleState: (snapshot) => this.applyBattle(snapshot),
       onBattleShot: (sender, shot) => this.receiveBattleShot(sender, shot),
@@ -460,11 +587,80 @@ export class Sim {
     }, peerFactory);
     this.input.attach(canvas);
     window.addEventListener("resize", this.onResize);
-    this.state = spawnAircraft(this.mission, this.spawnCarrier, settings.aircraft, settings.bindings);
+    this.state = this.newState(this.mission, this.spawnCarrier);
+    this.spectateViewer = this.newState("carrier", 0);
     this.launchRemembered = true; // this park is already on file
     this.updateJetPose(1);
     this.updateHud();
     this.raf = requestAnimationFrame(this.loop);
+  }
+
+  /** A freshly spawned airframe, already dressed for the theatre's weather. */
+  private newState(mission: MissionKind, carrier: number): AircraftState {
+    const st = spawnAircraft(mission, carrier, this.settings.aircraft, this.settings.bindings);
+    this.applyWeather(st);
+    return st;
+  }
+
+  /**
+   * Put the theatre's air into an airframe: the steady wind, its gust cycle and
+   * the turbulence the pilot will feel. Called every frame, so the gust builds
+   * and eases like the real thing instead of stepping once at launch.
+   */
+  private applyWeather(st: AircraftState): void {
+    applyWeatherPresetTo(st, this.weather ?? weatherPreset(this.weatherMode), this.worldSeed);
+  }
+
+  /**
+   * Dress the world for the active weather: the sea the fleet rides and the sky,
+   * rain and lightning the renderer draws. The fleet is re-posed on the new sea
+   * state immediately, so a mid-flight change is not a visual bait-and-switch.
+   */
+  private applyWeatherWorld(): void {
+    setSeaState(seaStateFor(this.weather));
+    this.renderer.setWeather(this.weather);
+  }
+
+  /** Adopt a weather setting: air, sea, sky and the airframe already flying. */
+  private adoptWeather(mode: WeatherMode | undefined): void {
+    const preset = weatherPreset(mode);
+    const changed = preset.mode !== this.weatherMode;
+    this.weather = preset;
+    this.weatherMode = preset.mode;
+    this.applyWeatherWorld();
+    if (this.state) {
+      this.applyWeather(this.state);
+      if (changed) this.pushBanner(`WEATHER — ${preset.brief}`);
+    }
+  }
+
+  /**
+   * A room ping: a wingman (or a spectator running the tactical picture) has
+   * called out a spot. Kept locally with its range from us, because the HUD
+   * redraws the marker every frame and must not wait for another packet.
+   */
+  private receivePing(ping: TacticalPing): void {
+    this.pings.push({ ...ping, km: 0, brgDeg: 0 });
+    if (this.pings.length > 12) this.pings.shift();
+    this.refreshPingRanges();
+    this.addChat({ from: ping.from, text: `PING ${ping.kind.toUpperCase()} — ${ping.label}` });
+  }
+
+  /** Recompute every ping's range/bearing from wherever the viewer is now. */
+  private refreshPingRanges(): void {
+    const from = this.viewerPos();
+    for (const p of this.pings) {
+      const dx = p.x - from.x;
+      const dz = p.z - from.z;
+      p.km = Math.hypot(dx, dz) / 1000;
+      p.brgDeg = (Math.atan2(dx, -dz) * 180 / Math.PI + 360) % 360;
+    }
+  }
+
+  /** Where the viewer is: the aircraft, or the spectated target. */
+  private viewerPos(): THREE.Vector3 {
+    const target = this.spectating ? this.spectateList[this.spectateIndex] : null;
+    return target ? target.pos : this.state.pos;
   }
 
   applySettings(s: Settings): void {
@@ -473,6 +669,8 @@ export class Sim {
     const daylightChanged =
       s.daylight !== this.settings.daylight || s.timeOfDay !== this.settings.timeOfDay;
     const modeChanged = s.missionMode !== this.settings.missionMode || s.missionStyle !== this.settings.missionStyle;
+    const variantChanged = (s.strikeVariant ?? "convoy") !== (this.settings.strikeVariant ?? "convoy");
+    const weatherChanged = (s.weather ?? "clear") !== (this.settings.weather ?? "clear");
     const aircraftChanged = s.aircraft !== this.settings.aircraft;
     const launchChanged = s.launchKind !== this.settings.launchKind || s.launchCarrier !== this.settings.launchCarrier;
     const restoreLaunch = launchChanged && this.phase === "menu" && this.netState.status !== "online";
@@ -485,6 +683,13 @@ export class Sim {
     }
     if (resolutionChanged) this.renderer.setAdaptiveResolution(s.adaptiveResolution);
     if (daylightChanged) this.dayHours = this.resolveDayHours(s);
+    // Weather drives the air, the sea and the sky together, so it is adopted in
+    // one step rather than at three separate points in the frame. The host owns
+    // it for the room: wind is a flight-model input, not a display option.
+    if (weatherChanged) {
+      this.adoptWeather(s.weather);
+      this.net.setWeather(this.weatherMode);
+    }
     // Changing airframe: rebuild the mesh and re-park the jet on the new type.
     if (restoreLaunch) {
       this.mission = s.launchKind;
@@ -492,7 +697,7 @@ export class Sim {
     }
     if (aircraftChanged || restoreLaunch) {
       if (aircraftChanged) this.renderer.setAircraft(s.aircraft);
-      this.state = spawnAircraft(this.mission, this.spawnCarrier, s.aircraft, s.bindings);
+      this.state = this.newState(this.mission, this.spawnCarrier);
       this.prevPos.copy(this.state.pos);
       this.prevQuat.copy(this.state.quat);
       this.df.setAircraft(this.state);
@@ -501,14 +706,17 @@ export class Sim {
     }
     // Toggling a mission mode mid-flight starts or clears it; toggling it on
     // the ground arms the launch instead, so nothing starts while parked.
-    if (modeChanged) {
+    if (modeChanged || variantChanged) {
       // A mission profile is the room's profile: tell everyone the moment the
-      // host (the only pilot with these chips) changes it.
+      // host (the only pilot with these chips) changes it. Swapping the strike
+      // variant (convoy <-> fortified island) re-tasks the same sortie in place.
       this.net.setMode(s.missionMode);
       this.net.setMissionStyle(s.missionStyle ?? "operation");
-      this.df.configureOperations(s.missionStyle !== "endless", this.operationSeed, this.operationId, this.operationOrigin);
+      this.df.strikeVariant = s.strikeVariant === "bastion" ? "bastion" : "convoy";
+      this.df.configureOperations(s.missionStyle !== "endless", this.operationSeed, this.operationId, this.operationOrigin, this.df.strikeVariant);
       const flying = this.phase === "flying" || this.phase === "paused";
-      const combat = s.missionMode === "dogfight" || s.missionMode === "strike";
+      const campaign = s.missionMode === "campaign";
+      const combat = s.missionMode === "dogfight" || s.missionMode === "strike" || campaign;
       const strike = s.missionMode === "strike";
       if (s.missionMode === "versus" && flying) {
         this.dfArmed = false;
@@ -516,15 +724,19 @@ export class Sim {
       } else if (combat && flying && !this.state.onGround) {
         this.dfArmed = false;
         if (strike) this.df.beginStrike(this.state);
+        else if (campaign) this.df.beginCampaign(this.state);
         else this.df.begin(this.state);
       } else if (combat && flying) {
         this.dfArmed = true;
-        this.dfArmText = strike
+        this.dfArmText = campaign
+          ? "TASK FORCE ARCHON BRIEFED — LAUNCH TO BEGIN STAGE 1"
+          : strike
           ? "STRIKE TARGETS ON THE GRID — LAUNCH TO ENGAGE"
           : "HOSTILE CARRIER INBOUND — LAUNCH TO INTERCEPT";
         this.state.banner = { text: this.dfArmText, until: Infinity };
         // the carrier / target grid is already out there while we hold on deck
         if (strike) this.df.prepareStrike(this.state);
+        else if (campaign) this.df.prepareCampaign(this.state);
         else this.df.prepare(this.state);
       } else {
         this.dfArmed = false;
@@ -594,10 +806,18 @@ export class Sim {
 
   /** A wingman took off: join the same strip, on the same boat. */
   private followLaunch(mission: MissionKind, carrier: number, profile?: OperationLaunch): void {
+    // A spectator never launches a jet: the room's sortie becomes something to
+    // watch, and it can be joined at any point in the flight.
+    if (this.spectating) {
+      if (profile) { this.operationId = profile.id; this.operationSeed = profile.seed; this.operationOrigin = profile.origin; this.applyRoomStyle(profile.style); }
+      if (this.phase !== "flying") this.beginSpectating();
+      return;
+    }
     // Only a pilot still in the menu comes along — one already flying (or
     // reading the pause menu) is left to finish the sortie they are on.
     if (this.phase !== "menu" && (!profile || profile.id === this.operationId)) return;
     if (profile) { this.operationId = profile.id; this.operationSeed = profile.seed; this.operationOrigin = profile.origin; this.applyRoomStyle(profile.style); }
+    this.lastRoomLaunch = { mission, carrier, profile };
     const boats = carriers().length;
     this.spawnCarrier = ((Math.floor(carrier) % boats) + boats) % boats;
     this.beginMission(mission, this.spawnCarrier);
@@ -614,7 +834,9 @@ export class Sim {
     this.pendingRoom = false;
     this.settingsRequest = false;
     this.breakupHide = false;
-    this.state = spawnAircraft(mission, carrierIndex, this.settings.aircraft, this.settings.bindings);
+    this.state = this.newState(mission, carrierIndex);
+    this.pings = [];
+    this.lastDesignation = null;
     this.battleLife = -1;
     this.battleDeadLife = -1;
     this.battleReadyAt = 0;
@@ -622,27 +844,37 @@ export class Sim {
     // size the racks and hull for this airframe before the fight is armed
     this.df.setAircraft(this.state);
     if (!this.operationOrigin) this.operationOrigin = { x: this.state.pos.x, z: this.state.pos.z, heading: this.state.headingDeg, carrier: this.spawnCarrier };
-    this.df.configureOperations(this.settings.missionStyle !== "endless", this.operationSeed, this.operationId, this.operationOrigin);
+    this.df.strikeVariant = this.settings.strikeVariant === "bastion" ? "bastion" : "convoy";
+    this.df.configureOperations(this.settings.missionStyle !== "endless", this.operationSeed, this.operationId, this.operationOrigin, this.df.strikeVariant);
     this.df.setMirror(this.netState.status === "online" && !this.netState.host && this.settings.missionMode !== "versus", this.state);
     // Mission modes: the bandits / targets are out there from the start, but
     // the fight itself only begins when the jet leaves the deck/runway — the
-    // launch is part of it.
-    const combat = this.settings.missionMode === "dogfight" || this.settings.missionMode === "strike";
+    // launch is part of it. A campaign sortie past its first is a re-launch of
+    // the *same* war: the deck keeps the stage it has already reached.
+    const campaign = this.settings.missionMode === "campaign";
+    const combat = this.settings.missionMode === "dogfight" || this.settings.missionMode === "strike" || campaign;
+    const resumeCampaign = campaign && this.df.operationState?.kind === "campaign" && this.df.operationState.id === this.operationId;
     if (this.settings.missionMode === "versus" && this.netState.status === "online") {
       this.dfArmed = false;
       this.spawnBattleAircraft();
     } else if (combat) {
       const strike = this.settings.missionMode === "strike";
       // the hostile carrier / target grid is there before wheels-up
-      if (strike) this.df.prepareStrike(this.state);
+      if (resumeCampaign) { /* the theatre is already set: keep every stage */ }
+      else if (strike) this.df.prepareStrike(this.state);
+      else if (campaign) this.df.prepareCampaign(this.state);
       else this.df.prepare(this.state);
       this.dfArmed = true;
-      const what = strike ? "STRIKE TARGETS ON THE GRID" : "HOSTILE CARRIER INBOUND";
+      const what = campaign
+        ? `TASK FORCE ARCHON — STAGE ${this.df.operationState?.campaignStage ?? 1}/3`
+        : strike
+        ? "STRIKE TARGETS ON THE GRID"
+        : "HOSTILE CARRIER INBOUND";
       this.dfArmText = this.state.spec.rotorcraft
         ? `${what} — COLLECTIVE UP (${keyLabel(this.settings.bindings.throttleUp)}) TO LIFT OFF`
         : mission === "carrier"
         ? `${what} — FULL THROTTLE (${keyLabel(this.settings.bindings.throttleUp)}) — HOLD ${keyLabel(this.settings.bindings.cat)} — CLIMB (${keyLabel(this.settings.bindings.pitchUp)})`
-        : `${what} — TAKE OFF TO ${strike ? "ENGAGE" : "INTERCEPT"}`;
+        : `${what} — TAKE OFF TO ${campaign ? "CONTINUE THE CAMPAIGN" : strike ? "ENGAGE" : "INTERCEPT"}`;
       this.state.banner = { text: this.dfArmText, until: Infinity };
     } else {
       this.dfArmed = false;
@@ -665,6 +897,187 @@ export class Sim {
     // survives a reload (a fresh pilot's first launch writes nothing new).
     this.rememberLaunch();
     this.updateHud();
+  }
+
+  // -------------------------------------------------------------------------
+  // Spectator mode: watch the room without flying in it
+  // -------------------------------------------------------------------------
+
+  /** True when this session is watching the room rather than flying in it. */
+  get spectating(): boolean {
+    return this.netState.status === "online" && this.netState.spectator === true;
+  }
+
+  /**
+   * Everything the camera can watch, in a stable order: the room's pilots,
+   * then the hostile aircraft the room has streamed, then the opposing boat,
+   * then our own carriers and their LSO platforms. Cheap enough to rebuild once
+   * per frame, and only ever built while spectating.
+   */
+  private spectateTargets(): SpectateTarget[] {
+    const out: SpectateTarget[] = [];
+    for (const id of this.remoteFleet.liveIds()) {
+      const p = this.remoteFleet.pilotState(id);
+      if (!p) continue;
+      out.push({
+        id: `pilot:${id}`, kind: "PILOT", label: p.name.toUpperCase(),
+        pos: p.pos, quat: p.quat, vel: p.vel, speed: p.speed,
+        aircraft: p.aircraft, flags: p.flags,
+      });
+    }
+    const snap = this.df.enemySnapshot();
+    snap.bandits.forEach((b, i) => {
+      out.push({
+        id: `bandit:${b.id}`, kind: "BANDIT",
+        label: `BANDIT ${i + 1}${b.onDeck ? " ON DECK" : ""}`,
+        pos: new THREE.Vector3(b.x, b.y, b.z),
+        quat: new THREE.Quaternion(b.qx, b.qy, b.qz, b.qw),
+        vel: new THREE.Vector3(), speed: 0,
+      });
+    });
+    const foe = this.df.enemyDeck();
+    if (foe) {
+      out.push({
+        id: `foe:${foe.name}`, kind: "CARRIER", label: `${foe.name} (OPFOR)`,
+        pos: new THREE.Vector3(foe.x, foe.deckY, foe.z),
+        quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -(foe.headingDeg * Math.PI) / 180),
+        vel: new THREE.Vector3(), speed: 0, hostile: true,
+      });
+    }
+    carriers().forEach((c, i) => {
+      const yaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -(c.headingDeg * Math.PI) / 180);
+      out.push({
+        id: `carrier:${i}`, kind: "CARRIER", label: c.name,
+        pos: new THREE.Vector3(c.x, c.deckY + (c.heave ?? 0), c.z),
+        quat: yaw, vel: new THREE.Vector3(), speed: 0, carrier: i,
+      });
+      out.push({
+        id: `lso:${i}`, kind: "LSO", label: `LSO ${c.name}`,
+        pos: lsoStation(c), quat: new THREE.Quaternion(), vel: new THREE.Vector3(), speed: 0, carrier: i,
+      });
+    });
+    return out;
+  }
+
+  /**
+   * Step in and out of the fight without leaving the room. Taking a seat back
+   * in the cockpit rejoins the sortie the room is already flying.
+   */
+  setSpectating(on: boolean): void {
+    if (this.netState.status !== "online" || this.netState.host) return;
+    if (on === this.spectating) return;
+    this.net.setSpectator(on);
+    if (on) {
+      if (this.phase === "flying" || this.phase === "paused") this.beginSpectating();
+      else this.pushBanner("SPECTATOR — YOU WILL WATCH THE ROOM'S NEXT LAUNCH");
+      return;
+    }
+    this.spectateList = [];
+    this.spectateId = "";
+    this.renderer.jetGroup.visible = true;
+    const launch = this.lastRoomLaunch;
+    if (launch) this.followLaunch(launch.mission, launch.carrier, launch.profile);
+    else this.quitToMenu();
+  }
+
+  /** Cycle the watched target. A spectator's view source, like camera cycling. */
+  nextSpectateTarget(): void {
+    if (!this.spectating) return;
+    const list = this.spectateList.length ? this.spectateList : (this.spectateList = this.spectateTargets());
+    if (list.length === 0) return;
+    this.spectateIndex = (this.spectateIndex + 1) % list.length;
+    this.spectateId = list[this.spectateIndex].id;
+    const t = list[this.spectateIndex];
+    this.pushBanner(`WATCHING ${t.kind} — ${t.label}`);
+  }
+
+  /** Follow a room's launch with a camera instead of an aircraft. */
+  private beginSpectating(): void {
+    this.endPod();
+    this.crashSeq = null;
+    this.breakupHide = false;
+    this.pendingRoom = false;
+    this.dfArmed = false;
+    this.renderer.jetGroup.visible = false;
+    this.rig.mode = "chase";
+    this.spectateId = "";
+    this.spectateIndex = 0;
+    this.spectateList = this.spectateTargets();
+    this.setPhase("flying");
+    this.last = performance.now() / 1000;
+    this.acc = 0;
+    this.input.clearEdges();
+    this.audio.start();
+    this.audio.resume();
+    this.pushBanner("SPECTATOR — [N] NEXT VIEW · [C] CAMERA · [P] PING THE ROOM");
+    this.updateHud();
+  }
+
+  /**
+   * Per-frame spectator upkeep: rebuild the watch list, keep the camera on a
+   * target that still exists, and let the free camera fly itself around.
+   */
+  private updateSpectate(frameDt: number): void {
+    if (!this.spectating) {
+      if (this.spectateList.length) this.spectateList = [];
+      return;
+    }
+    const list = (this.spectateList = this.spectateTargets());
+    if (list.length === 0) return;
+    // Hold the same aircraft even if the roster re-sorts underneath us.
+    const held = this.spectateId ? list.findIndex(t => t.id === this.spectateId) : -1;
+    this.spectateIndex = held >= 0 ? held : this.spectateIndex % list.length;
+    this.spectateId = list[this.spectateIndex].id;
+    this.mirrorSpectateViewer(list[this.spectateIndex]);
+    const freeCam = this.rig.mode === "free";
+    if (freeCam) {
+      // Free camera: fly it with the stick, boost with the trigger.
+      const inp = this.input.sample(frameDt);
+      this.rig.stepFree(inp.pitch, inp.roll, (inp.throttleUp ? 1 : 0) - (inp.throttleDown ? 1 : 0), frameDt, inp.fire);
+    }
+    this.refreshPingRanges();
+  }
+
+  /**
+   * Wear the watched target as an airframe, so every readout the HUD computes —
+   * airspeed, altitude, vertical speed, radar altitude and the radar picture —
+   * is the watched aircraft's rather than our parked one's.
+   */
+  private mirrorSpectateViewer(t: SpectateTarget): void {
+    const v = this.spectateViewer;
+    if (!v || !t) return;
+    if (t.aircraft && v.spec.id !== t.aircraft) v.spec = specFor(t.aircraft);
+    v.pos.copy(t.pos);
+    v.quat.copy(t.quat);
+    v.vel.copy(t.vel);
+    v.speed = t.speed;
+    v.headingDeg = headingOfQuat(t.quat);
+    v.onGround = false;
+    v.airborne = true;
+    v.stalled = false;
+    v.alpha = 0;
+    v.gLoad = 1;
+    v.result = null;
+    v.banner = null;
+    if (t.flags !== undefined) {
+      v.gearDown = (t.flags & FLAG_GEAR) !== 0;
+      v.flapsDown = (t.flags & FLAG_FLAPS) !== 0;
+      v.speedbrake = (t.flags & FLAG_SPEEDBRAKE) !== 0;
+      v.abLevel = (t.flags & FLAG_AB) !== 0 ? 0.7 : 0;
+    }
+  }
+
+  /** Send a tactical ping to the room (spectators task the flight this way). */
+  ping(kind: PingKind = "threat", label?: string): TacticalPing | null {
+    if (this.netState.status !== "online") return null;
+    const target = this.spectating ? this.spectateList[this.spectateIndex] : null;
+    const spot = this.lastDesignation ?? target?.pos ?? this.state.pos;
+    const text = label ?? (this.lastDesignation
+      ? `${kind.toUpperCase()} ${Math.round(spot.x / 100) / 10},${Math.round(spot.z / 100) / 10} KM GRID`
+      : target ? `${target.kind} ${target.label}` : `${kind.toUpperCase()}`);
+    const ping = this.net.sendPing(kind, spot.x, spot.y, spot.z, text);
+    if (ping) this.receivePing(ping);
+    return ping;
   }
 
   resume(): void {
@@ -754,7 +1167,7 @@ export class Sim {
     this.crashSeq = null;
     this.breakupHide = false;
     if (!(this.netState.status === "online" && this.df.operationState)) this.df.clear();
-    this.state = spawnAircraft(this.mission, this.spawnCarrier, this.settings.aircraft, this.settings.bindings);
+    this.state = this.newState(this.mission, this.spawnCarrier);
     this.rig.resetFollow();
     this.updateJetPose(1);
     this.audio.update(0.05, 0, 0, false, true);
@@ -910,6 +1323,13 @@ export class Sim {
     this.applySettings(next); for (const fn of this.settingsListeners) fn(next);
   }
 
+  /** The host's weather is the room's weather: adopt it and persist it. */
+  private applyRoomWeather(weather: WeatherMode): void {
+    if ((this.settings.weather ?? "clear") === weather) return;
+    const next: Settings = { ...this.settings, weather };
+    this.applySettings(next); for (const fn of this.settingsListeners) fn(next);
+  }
+
   get netSnapshot(): NetState {
     return this.netState;
   }
@@ -930,20 +1350,33 @@ export class Sim {
     this.net.setMissionStyle(this.settings.missionStyle ?? "operation");
   }
 
-  joinRoom(callsign: string, room: string): void {
+  joinRoom(callsign: string, room: string, spectator = false): void {
     this.operationOrigin = undefined;
     this.remoteFleet.clear();
     this.chatLog = [];
     this.battle = { match: 0, pilots: [] };
-    this.net.join(room, callsign, this.settings.aircraft);
+    if (spectator) this.net.spectate(room, callsign, this.settings.aircraft);
+    else this.net.join(room, callsign, this.settings.aircraft);
+  }
+
+  /** Join an existing room with a camera instead of an aircraft. */
+  joinAsSpectator(callsign: string, room: string): void {
+    this.joinRoom(callsign, room, true);
   }
 
   leaveRoom(): void {
+    const wasSpectating = this.spectating;
     this.remoteFleet.clear();
     this.chatLog = [];
     this.net.leave();
     this.battle = { match: 0, pilots: [] };
     this.df.setOpponents([]);
+    this.spectateList = [];
+    this.spectateId = "";
+    this.pings = [];
+    // A spectator has no sortie of their own to come back to: leaving the room
+    // puts the camera away and returns to the board.
+    if (wasSpectating) this.quitToMenu();
   }
 
   setAllowLateJoin(allow: boolean): void { this.net.setAllowLateJoin(allow); }
@@ -1013,7 +1446,8 @@ export class Sim {
   }
   private afterWorldChange(): void {
     this.fleetClock = 0;
-    this.state = spawnAircraft(this.mission, this.spawnCarrier, this.settings.aircraft, this.settings.bindings);
+    setFleetTime(0);
+    this.state = this.newState(this.mission, this.spawnCarrier);
     this.prevPos.copy(this.state.pos);
     this.prevQuat.copy(this.state.quat);
     this.updateJetPose(1);
@@ -1051,12 +1485,15 @@ export class Sim {
 
     if (this.phase === "flying") {
       if (!this.crashSeq) this.handleEdges(); // a dead stick answers nothing
-      if (this.phase === "flying") this.stepSim(frameDt);
+      if (this.phase === "flying") {
+      if (this.spectating) this.stepSpectateRoom(frameDt);
+      else if (!this.crashSeq) this.stepSim(frameDt);
+      }
     } else if (this.phase === "paused") {
       if (this.input.take("pause")) this.resume();
     } else if (this.phase === "result") {
       this.input.take("pause"); // swallow esc while result shows
-      this.updateJetPose(1);
+      if (!this.spectating) this.updateJetPose(1);
       this.updateAudio();
     }
 
@@ -1072,6 +1509,9 @@ export class Sim {
     this.checkOperationPilots(frameDt);
 
     this.advanceDaylight(frameDt);
+    // The room's tactical picture: who can be watched, where the pings are.
+    this.updateSpectate(frameDt);
+    this.advancePings(frameDt);
     // Multiplayer: interpolate the wingmen and hand our own pose to the net
     // layer, which sends it at its own fixed rate rather than per frame.
     const roster = this.battleActive ? this.battle : null;
@@ -1093,6 +1533,28 @@ export class Sim {
     this.updateSun();
     this.renderer.render();
   };
+
+  /**
+   * A spectator's frame: no airframe of our own, so the room's fight is mirrored
+   * (the host owns it) while the camera rides whatever the room is doing. The
+   * HUD is rebuilt from the watched aircraft so the pilot can read the fight.
+   */
+  private stepSpectateRoom(frameDt: number): void {
+    const w = windFor(this.weather, this.worldSeed, this.state.time);
+    this.renderer.setWind(w.x, w.z);
+    this.df.step(frameDt, this.state, false, false);
+    this.updateAudio();
+    this.updateHud();
+  }
+
+  /** Retire pings that have gone stale, and keep their ranges current. */
+  private advancePings(frameDt: number): void {
+    if (this.pings.length === 0) return;
+    const now = performance.now();
+    this.pings = this.pings.filter(p => (now - p.at) / 1000 < PING_TTL);
+    this.refreshPingRanges();
+    void frameDt;
+  }
 
   /** Keep parked/rolling aircraft fixed in their ship frame as the deck moves. */
   private moveFleet(seconds: number): void {
@@ -1152,7 +1614,9 @@ export class Sim {
     if (this.netState.status !== "online" || !this.netState.host || this.df.operationState?.status !== "briefing") return;
     if (!this.remoteFleet.combatTargets().some(p => p.onGround === false)) return;
     this.dfArmed = false;
-    if (this.settings.missionMode === "strike") this.df.beginStrike(this.state); else this.df.begin(this.state);
+    if (this.settings.missionMode === "strike") this.df.beginStrike(this.state);
+    else if (this.settings.missionMode === "campaign") this.df.beginCampaign(this.state);
+    else this.df.begin(this.state);
     this.updateHud();
   }
 
@@ -1176,7 +1640,7 @@ export class Sim {
     const ring = ids.filter((_, i) => i % pair.length === side);
     const ringSlot = Math.max(0, ring.indexOf(this.netState.self));
     const angle = ringSlot * Math.PI * 2 / Math.max(1, ring.length) + (Math.max(0, this.battleLife) % 4) * .3;
-    this.state = spawnAircraft("carrier", carrierIndex, this.settings.aircraft, this.settings.bindings);
+    this.state = this.newState("carrier", carrierIndex);
     const st = this.state;
     st.pos.set(center.x + Math.cos(angle) * 3000, 1600 + slot * 60, center.z + Math.sin(angle) * 3000);
     // Nose on the contested middle rather than on your own boat: both sides
@@ -1454,8 +1918,13 @@ export class Sim {
     if (this.input.take("map")) this.bigMap = !this.bigMap;
     if (this.input.take("camera")) {
       if (this.pod) this.endPod();
-      else this.rig.cycle();
+      // A spectator's camera also cycles onto the LSO platform and a free camera.
+      else this.rig.cycle(this.spectating);
     }
+    // Spectator tools: cycle what the camera is watching, and call a spot out to
+    // the room (the AWACS/tasking role a spectator plays in a campaign).
+    if (this.input.take("spectate")) this.nextSpectateTarget();
+    if (this.input.take("ping")) this.ping("threat");
     // The bomb key opens the target pod; in the pod a click on the world
     // designates the spot and releases a laser-guided weapon at it.
     if (this.input.take("bomb")) {
@@ -1557,6 +2026,10 @@ export class Sim {
   }
 
   private stepSim(frameDt: number): void {
+    // The theatre's air, refreshed every frame: the gust builds and eases on the
+    // weather's own cycle, and the rain rides the same wind.
+    this.applyWeather(this.state);
+    this.renderer.setWind(this.state.windX ?? 0, this.state.windZ ?? 0);
     if (this.crashSeq) {
       // The replay owns the jet now: the fight keeps moving around it, but
       // nothing the pilot touches matters any more.
@@ -1663,12 +2136,15 @@ export class Sim {
       this.mission = landed.groundKind === "runway" ? "airfield" : "carrier";
     }
     this.rememberLaunch();
-    this.state = spawnAircraft(this.mission, this.spawnCarrier, this.settings.aircraft, this.settings.bindings);
+    this.state = this.newState(this.mission, this.spawnCarrier);
     const launchBriefing = this.state.banner?.text ?? "READY FOR LAUNCH";
     this.state.time = landed.time;
     this.state.flightTime = landed.flightTime;
     if (this.battleActive) this.rearmBattleAircraft();
     else this.refillOnRecovery();
+    // A recovery is a new sortie for the same war: the campaign's stage, its
+    // wrecked fortress and its convoy progress all survive the deck cycle,
+    // because the operation itself is never rebuilt on this path.
     this.prevPos.copy(this.state.pos);
     this.prevQuat.copy(this.state.quat);
     this.rig.resetFollow();
@@ -1743,7 +2219,41 @@ export class Sim {
     animateJet(this.renderer.jet, st, alpha, 1 / 60);
   }
 
+  /**
+   * A spectator's camera: locked to the watched target in the normal modes, on
+   * the carrier's LSO platform in the LSO view, and free to fly in free cam.
+   * Our own airframe is not in the scene at all — there is no jet to show.
+   */
+  private updateSpectateCamera(dt: number): void {
+    const target = this.spectateList[this.spectateIndex];
+    this.renderer.jetGroup.visible = false;
+    const mouse = this.input.takeMouse();
+    this.rig.mouse(mouse.dx, mouse.dy);
+    // The LSO view always stands on the deck nearest the action being watched:
+    // the enemy boat when the camera is on a bandit, ours otherwise.
+    const station = this.spectateList
+      .filter(t => t.kind === "LSO" && t.carrier !== undefined && t.hostile !== target?.hostile)
+      .sort((a, b) => a.pos.distanceToSquared(target?.pos ?? this.state.pos) - b.pos.distanceToSquared(target?.pos ?? this.state.pos))[0];
+    const look = target?.pos ?? station?.pos ?? this.state.pos;
+    const lsoPlatform = station
+      ? { x: station.pos.x, y: station.pos.y, z: station.pos.z, lookX: look.x, lookY: look.y, lookZ: look.z }
+      : undefined;
+    this.rig.update(
+      this.renderer.camera,
+      target?.pos ?? this.state.pos,
+      target?.quat ?? this.state.quat,
+      target?.speed ?? 0,
+      dt,
+      false,
+      lsoPlatform,
+    );
+  }
+
   private updateCamera(dt: number): void {
+    if (this.spectating) {
+      this.updateSpectateCamera(dt);
+      return;
+    }
     const st = this.state;
     const alpha = THREE.MathUtils.clamp(this.acc / FIXED_DT, 0, 1);
     const p = this.camP.lerpVectors(this.prevPos, st.pos, alpha);
@@ -1772,7 +2282,34 @@ export class Sim {
 
   private updateAudio(): void {
     const st = this.state;
-    this.audio.update(st.rpm, st.abLevel, st.speed, st.stalled && !st.onGround, this.phase !== "flying");
+    const muted = this.phase !== "flying";
+    // A spectator hears the room rather than a jet of their own: their engine
+    // bed is silent and the wingmen passing by carry the whole picture.
+    if (this.spectating) this.audio.update(0, 0, 0, false, true, this.weather.turbulence, 1);
+    else this.audio.update(st.rpm, st.abLevel, st.speed, st.stalled && !st.onGround, muted, this.weather.turbulence, st.gLoad);
+    // Doppler, as heard: a wingman passing close gets louder and brighter, and
+    // the pitch follows how fast the gap is closing.
+    const near = this.nearestRemotePass();
+    if (near) this.audio.flyby(near.rangeM, near.closure);
+    else this.audio.flyby(1e6, 0);
+    // Thunder arrives a few seconds after the flash, because it has to travel.
+    const km = this.renderer.takeThunder();
+    if (km > 0) this.audio.thunder(km);
+  }
+
+  /** The nearest other aircraft, and how fast its gap to us is closing. */
+  private nearestRemotePass(): { rangeM: number; closure: number } | null {
+    const from = this.viewerPos();
+    let best: { rangeM: number; closure: number } | null = null;
+    for (const id of this.remoteFleet.liveIds()) {
+      const p = this.remoteFleet.pilotState(id);
+      if (!p) continue;
+      const rangeM = from.distanceTo(p.pos);
+      if (best && rangeM >= best.rangeM) continue;
+      const to = p.pos.clone().sub(from);
+      best = { rangeM, closure: to.lengthSq() > 1 ? -p.vel.dot(to.normalize()) : 0 };
+    }
+    return best;
   }
 
   /**
@@ -1798,6 +2335,12 @@ export class Sim {
   }
 
   private updateHud(): void {
+    // A spectator's HUD is the watched aircraft's HUD: swap the airframe under
+    // the builder and every readout (including the radar picture and the
+    // objective bearing) comes off the jet the camera is riding.
+    const own = this.state;
+    const watching = this.spectating ? this.spectateViewer : null;
+    if (watching) this.state = watching;
     const st = this.state;
     const fwd = this.hudFwd.set(0, 0, -1).applyQuaternion(st.quat);
     const right = this.hudRight.set(1, 0, 0).applyQuaternion(st.quat);
@@ -1894,8 +2437,34 @@ export class Sim {
       battle: this.battleActive ? this.battle : undefined,
       battleSelf: this.netState.self,
       operation: this.df.operationHud?.(st),
+      weather: this.weatherMode,
+      weatherLabel: this.weather.label,
+      spectating: watching !== null,
+      spectateKind: watching ? (this.spectateList[this.spectateIndex]?.kind ?? "") : "",
+      spectateTarget: watching ? (this.spectateList[this.spectateIndex]?.label ?? "") : "",
+      spectateIndex: this.spectateList.length ? this.spectateIndex + 1 : 0,
+      spectateCount: this.spectateList.length,
+      pings: this.pingHud(),
+      subsystems: st.subsystems,
+      lsoCall: st.lsoCall ?? null,
+      lsoGrade: st.lsoGrade ?? null,
       ...this.dfHud(),
     };
+    if (watching) {
+      const target = this.spectateList[this.spectateIndex];
+      this.hud = {
+        ...this.hud,
+        aircraftName: `SPECTATING ${target?.kind ?? "ROOM"} · ${target?.label ?? ""}`.trim(),
+        // Stores and flares belong to the pilot flying, not to the watcher.
+        dfBombs: 0, dfBombsMax: 0, dfBombsAway: 0, dfBombsTracking: 0, dfBombTracks: [],
+        dfMissiles: 0, dfMissilesMax: 0, dfFlares: 0, dfFlaresMax: 0,
+        dfDesignated: null, dfReleased: null, dfLanded: null,
+        subsystems: undefined, lsoCall: null, lsoGrade: null,
+      };
+      this.state = own;
+    } else {
+      this.state = own;
+    }
     // React re-renders at most ~20 Hz; the pitch-ladder canvas redraws
     // every frame from the latest snapshot regardless.
     const nowMs = performance.now();
@@ -1903,6 +2472,17 @@ export class Sim {
       this.lastHudNotify = nowMs;
       for (const fn of this.hudListeners) fn(this.hud);
     }
+  }
+
+  /** Room pings, with range, bearing and age, ready for the HUD to draw. */
+  private pingHud(): TacticalPingHud[] {
+    if (this.pings.length === 0) return [];
+    const now = performance.now();
+    return this.pings.map(p => ({
+      id: p.id, kind: p.kind, from: p.from, label: p.label,
+      x: p.x, y: p.y, z: p.z, km: p.km, brgDeg: p.brgDeg,
+      age: (now - p.at) / 1000,
+    }));
   }
 
   private groundRef(st: AircraftState): number {

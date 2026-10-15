@@ -98,7 +98,7 @@ for (const craft of AIRCRAFT_LIST) {
     state: spawnAircraft('carrier', 0, craft.id), settings: { ...defaultSettings(), aircraft: craft.id },
     phase: 'flying', netState: { status: 'idle' }, poseOut: {}, acc: 0, crashSeq: null, dfArmed: false,
     prevPos: new Vector3(), prevQuat: new Quaternion(), fleetClock: 0,
-    input: { sample: () => idle }, renderer: { updateFleet() {} },
+    input: { sample: () => idle }, renderer: { updateFleet() {}, setWind() {}, takeThunder: () => 0 },
     df: new Dogfight(scene, new ExplosionField(scene, 'low')),
     updateJetPose() {}, updateAudio() {}, updateHud() {},
   });

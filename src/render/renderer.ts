@@ -18,10 +18,12 @@ import { buildAircraft, type TomcatMesh } from "./geometry";
 import { isSharedMaterial, updateAirLights, updateShipLights } from "./lights";
 import { ScaleCues } from "./scale";
 import { makeEnvironmentSample, sampleEnvironment, type EnvironmentSample } from "./environment";
+import { WeatherFx } from "./weather";
 import { DEFAULT_AIRCRAFT, type AircraftId } from "../sim/aircraft";
 import { carriers } from "../sim/world";
 import type { Quality } from "../settings";
 import type { SunPosition } from "../sim/sun";
+import type { WeatherPreset } from "../sim/weather";
 
 export class WorldRenderer {
   renderer: THREE.WebGLRenderer;
@@ -51,6 +53,21 @@ export class WorldRenderer {
   private dark = 0;
   /** In-world altitude cues: cloud decks, the jet's ground shadow, the masts. */
   private scaleCues: ScaleCues;
+  /** Rain, lightning and the visibility they bring. Null until the sim sets it. */
+  private weatherFx: WeatherFx;
+  private weather: WeatherPreset | null = null;
+  private wind = new THREE.Vector3();
+  /** Where the scene is being drawn around, for effects that follow the view. */
+  private focus = new THREE.Vector3();
+  private lastRenderAt = 0;
+  // Fleet swell scratch: one quaternion per rotation axis, reused per frame.
+  private swellY = new THREE.Quaternion();
+  private swellPitch = new THREE.Quaternion();
+  private swellRoll = new THREE.Quaternion();
+  private swellAxisY = new THREE.Vector3(0, 1, 0);
+  private swellAxisZ = new THREE.Vector3(0, 0, 1);
+  private swellAxisX = new THREE.Vector3(1, 0, 0);
+  private overcast = new THREE.Color(0x8e98a4);
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -119,6 +136,30 @@ export class WorldRenderer {
     this.jetGroup = this.jet.group;
     this.scene.add(this.jetGroup);
     this.scaleCues = new ScaleCues(this.scene);
+    this.weatherFx = new WeatherFx(this.scene, quality);
+  }
+
+  /**
+   * Follow the theatre's weather: cloud cover, rain, lightning and visibility.
+   * Called whenever the setting changes (and on the first frame), so the look
+   * of the world and the state the flight model uses never drift apart.
+   */
+  setWeather(preset: WeatherPreset): void {
+    this.weather = preset;
+    this.weatherFx.setPreset(preset);
+  }
+
+  /** Wind the rain rides. Cheap enough to set every frame. */
+  setWind(x: number, z: number): void {
+    this.wind.set(x, 0, z);
+  }
+
+  /**
+   * Distance to the strike that just fired, in km (0 when there was none), so
+   * the audio engine can delay the thunder by the speed of sound.
+   */
+  takeThunder(): number {
+    return this.weatherFx.takeStrike();
   }
 
   /**
@@ -140,6 +181,25 @@ export class WorldRenderer {
   applyDaylight(sun: SunPosition, sunDir: THREE.Vector3, focus: THREE.Vector3): void {
     const env = sampleEnvironment(sun, this.env);
     this.sunDir.copy(sunDir).normalize();
+    this.focus.copy(focus);
+    // Weather sits on top of the daylight palette: cloud cover greys and
+    // flattens it, rain closes the horizon in, and a lightning stroke lifts
+    // the whole scene for a fraction of a second.
+    const w = this.weather;
+    if (w) {
+      const cover = w.cloudCover;
+      const flash = this.weatherFx.flashLevel;
+      env.sunIntensity *= w.sunScale * (1 + flash);
+      env.hemiIntensity *= (1 - 0.3 * cover) * (1 + flash * 1.6);
+      env.zenith.lerp(this.overcast, cover * 0.8);
+      env.horizon.lerp(this.overcast, cover * 0.6);
+      env.fogColor.lerp(this.overcast, cover * 0.5);
+      env.glow *= 1 - 0.7 * cover;
+      env.fogNear *= w.fogScale;
+      env.fogFar *= w.fogScale;
+      env.ambient += cover * 0.06 + flash * 0.5;
+      env.starsVisible = env.starsVisible && cover < 0.9 && flash === 0;
+    }
 
     // Keep the sun light outside the world but pointed at the aircraft, so the
     // shadow camera stays tight and the shadows land under the jet.
@@ -216,7 +276,14 @@ export class WorldRenderer {
     this.fleetMeshes.forEach((ship, i) => {
       const c = carriers()[i];
       ship.position.set(c.x, 0, c.z);
-      ship.rotation.y = (90 - c.headingDeg) * Math.PI / 180;
+      // Yaw, then pitch about the ship's own beam and roll about its keel: the
+      // hull rides the swell the physics used (see sim/world.deckSurfaceY).
+      this.swellY.setFromAxisAngle(this.swellAxisY, (90 - c.headingDeg) * Math.PI / 180);
+      const pitch = ((c.pitchDeg ?? 0) * Math.PI) / 180;
+      const roll = ((c.rollDeg ?? 0) * Math.PI) / 180;
+      ship.quaternion.copy(this.swellY);
+      if (pitch !== 0) ship.quaternion.multiply(this.swellPitch.setFromAxisAngle(this.swellAxisZ, pitch));
+      if (roll !== 0) ship.quaternion.multiply(this.swellRoll.setFromAxisAngle(this.swellAxisX, roll));
       ship.updateMatrix();
       ship.updateMatrixWorld(true);
     });
@@ -239,6 +306,7 @@ export class WorldRenderer {
     this.basePixelRatio = pr;
     this.resolutionBudget.reset();
     this.renderer.setPixelRatio(pr);
+    this.weatherFx.setQuality(q);
     this.resize();
     if (geometryChanged && this.terrainPaint) this.applyWorld(this.terrainPaint);
   }
@@ -268,6 +336,7 @@ export class WorldRenderer {
 
   /** Release GPU resources (world, cues, airframe, renderer). */
   dispose(): void {
+    this.weatherFx.dispose();
     this.scaleCues.dispose();
     disposeTree(this.scene);
     this.sun.shadow.dispose();
@@ -288,6 +357,11 @@ export class WorldRenderer {
     // grow into the range where float32 UV precision starts to quantise and
     // the swell stutters on a long flight.
     if (waves) waves.offset.set((t * 0.006) % 1, (t * 0.0025) % 1);
+    // Rain and lightning follow the view; the sea state they came with is
+    // already on the hulls.
+    const dt = this.lastRenderAt > 0 ? Math.min(0.05, (t - this.lastRenderAt)) : 1 / 60;
+    this.lastRenderAt = t;
+    this.weatherFx.update(dt, this.focus, this.wind);
     // Lights blink on wall-clock time, not sim time, so a paused night scene
     // still reads as a living one.
     updateAirLights(this.dark, t);

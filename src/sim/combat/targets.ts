@@ -5,6 +5,7 @@ import { TARGET_HP, TARGET_RADIUS, buildTargetMesh, wreckTarget } from "../../re
 import type { TargetKind } from "../../render/targets";
 import type { AircraftState } from "../flight";
 import { groundAt } from "../world";
+import { isFortressPrimary } from "../operations";
 import type { StrikeTarget } from "./types";
 import { BOMB_HP, CV_HP, CV_NAME, HIT_FLASH, MAX_CLAIMED_CV_HIT, WAVE_RESPAWN } from "./tuning";
 import { TMP, disposeSubtree, hash } from "./scratch";
@@ -23,7 +24,7 @@ export function damageCarrier(ctx: Dogfight, at: THREE.Vector3, player: Aircraft
   // A wingman's hit goes to the host as well: the host owns the hull, and the
   // snapshot it sends back settles the damage a packet later.
   if (ctx.mirror) ctx.carrierHitOut += dmg;
-  if (!ctx.mirror && ctx.operation?.state.kind === "fleet") {
+  if (!ctx.mirror && (ctx.operation?.state.kind === "fleet" || ctx.operation?.state.kind === "campaign")) {
     const before = ctx.operation.state.suppressed; ctx.operation.damageDeck(dmg);
     if (!before && ctx.operation.state.suppressed) { ctx.roleQueue = []; ctx.banner(player, "FLIGHT DECK DISABLED — NO FURTHER LAUNCHES"); }
   }
@@ -83,11 +84,20 @@ export function damageTarget(ctx: Dogfight, t: StrikeTarget, dmg: number, player
   t.wreckT = 0;
   t.smokeT = 0.6;
   ctx.kills++;
-  if (ctx.operation && t.role !== "cargo") ctx.operation.state.optional++;
+  if (ctx.operation && t.role !== "cargo" && !isFortressPrimary(t.role)) ctx.operation.state.optional++;
   wreckTarget(t.mesh);
   TMP.set(t.pos.x, t.pos.y + 7, t.pos.z);
-  ctx.blasts.spawn(TMP, "ground", 1.35);
+  ctx.blasts.spawn(TMP, "ground", t.role === "fuel" ? 2.4 : 1.35);
   ctx.flash(TMP);
+  if (t.role === "fuel") {
+    for (const other of ctx.strikeTargets) {
+      if (other !== t && !other.dead && !other.arrived && other.pos.distanceTo(t.pos) < 165) {
+        ctx.damageTarget(other, 16, player);
+      }
+    }
+    ctx.banner(player, "FUEL DEPOT DETONATION — SECONDARY CHAIN REACTION");
+    return;
+  }
   const left = ctx.strikeTargets.reduce((n, x) => n + (x.dead ? 0 : 1), 0);
   ctx.banner(
     player,

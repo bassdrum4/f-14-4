@@ -3,7 +3,7 @@
 
 import { BOMB_ARM_TIME as BOMB_ARM, advanceBomb } from "../bombTrajectory";
 import * as THREE from "three";
-import { convoyRoute } from "../operations";
+import { convoyRoute, isFortressPrimary } from "../operations";
 import type { OperationHud } from "../operations";
 import { validEnemyFire } from "../combatSnapshot";
 import type { EnemyFire } from "../combatSnapshot";
@@ -18,22 +18,81 @@ import type { Dogfight } from "./core";
 export function operationHud(ctx: Dogfight, player: AircraftState): OperationHud | undefined {
   const state = ctx.operation?.state; if (!state) return undefined;
   const cargo = ctx.strikeTargets.filter(t => t.role === "cargo" && !t.dead && !t.disabled && !t.arrived);
+  const bastion = ctx.strikeTargets.filter(t => isFortressPrimary(t.role) && !t.dead && !t.disabled);
   const threat = ctx.bandits.filter(b => !b.retreat && (b.role === "scout" || b.role === "bomber")).sort((a, b) => a.pos.distanceToSquared(player.pos) - b.pos.distanceToSquared(player.pos))[0];
-  const target = state.kind === "convoy" ? cargo.sort((a, b) => a.pos.distanceToSquared(player.pos) - b.pos.distanceToSquared(player.pos))[0] : threat;
-  const cvPoint = state.kind === "fleet" && !target && ctx.cv ? new THREE.Vector3(ctx.cv.def.x, ctx.cv.def.deckY + 30, ctx.cv.def.z) : undefined;
+  const isConvoyPhase = state.kind === "convoy" || (state.kind === "campaign" && state.phase === "convoy");
+  const isBastionPhase = state.kind === "bastion" || (state.kind === "campaign" && state.phase === "bastion");
+  const target = isConvoyPhase
+    ? cargo.sort((a, b) => a.pos.distanceToSquared(player.pos) - b.pos.distanceToSquared(player.pos))[0]
+    : isBastionPhase
+    ? bastion.sort((a, b) => a.pos.distanceToSquared(player.pos) - b.pos.distanceToSquared(player.pos))[0]
+    : threat;
+  const cvPoint = (state.kind === "fleet" || (state.kind === "campaign" && !isConvoyPhase && !isBastionPhase)) && !target && ctx.cv ? new THREE.Vector3(ctx.cv.def.x, ctx.cv.def.deckY + 30, ctx.cv.def.z) : undefined;
   const pos = target?.pos ?? cvPoint; const vel = new THREE.Vector3();
   if (target && "quat" in target) vel.set(0, 0, -target.speed).applyQuaternion(target.quat);
   else if (target) vel.set(Math.sin(target.headingDeg * Math.PI / 180) * target.speed, 0, -Math.cos(target.headingDeg * Math.PI / 180) * target.speed);
   let eta: number | null = null;
-  if (state.kind === "convoy" && cargo.length) eta = Math.min(...cargo.map(t => ((t.route?.length ?? 0) - (t.progress ?? 0)) / Math.max(t.speed, .1)));
+  if (isConvoyPhase && cargo.length) eta = Math.min(...cargo.map(t => ((t.route?.length ?? 0) - (t.progress ?? 0)) / Math.max(t.speed, .1)));
   else if (state.phase === "forming") eta = Math.max(0, (state.scoutStopped ? 60 : 15) - state.phaseTime);
   else if (state.phase === "counterattack") eta = Math.max(0, 60 - state.phaseTime);
   else if (ctx.enemyBombs.length) { const c = carriers()[state.fleetCarrier] ?? carriers()[0]; eta = Math.min(...ctx.enemyBombs.map(b => b.pos.distanceTo(new THREE.Vector3(c.x, c.deckY, c.z)) / Math.max(b.vel.length(), 1))); }
   else if (threat) { const c = carriers()[state.fleetCarrier] ?? carriers()[0]; eta = Math.max(0, (Math.hypot(threat.pos.x - c.x, threat.pos.z - c.z) - (threat.role === "scout" ? 3000 : 1000)) / Math.max(threat.speed, 120)); }
-  return { state: { ...state }, eta, warning: ctx.defenseWarning || ctx.strikeTargets.some(t => (t.tracking ?? 0) > 0 && t.pos.distanceTo(player.pos) < 2200), ...ctx.missionStats,
+  const radarOnline = ctx.strikeTargets.some(t => t.role === "radar" && !t.dead && !t.arrived);
+  const sams = ctx.strikeTargets.filter(t => (t.role === "sam" || t.role === "aaa") && !t.dead && !t.arrived);
+  let terrainMasked = false;
+  let samLockProgress = 0;
+  for (const s of sams) {
+    const dist = s.pos.distanceTo(player.pos);
+    if (dist < 6200 && !player.onGround) {
+      if (terrainBlocks(s.pos.clone().add(new THREE.Vector3(0, 14, 0)), player.pos)) terrainMasked = true;
+      if ((s.tracking ?? 0) > 0) samLockProgress = Math.max(samLockProgress, Math.min(1, (s.tracking ?? 0) / (radarOnline ? 2.4 : 4.8)));
+    }
+  }
+  return { state: { ...state }, eta, warning: ctx.defenseWarning || ctx.strikeTargets.some(t => (t.tracking ?? 0) > 0 && t.pos.distanceTo(player.pos) < 5500),
+    terrainMasked, radarOnline, samLockProgress, ...ctx.missionStats,
     target: pos ? { x: pos.x, y: pos.y + (target && "quat" in target ? 0 : 10), z: pos.z, label: target?.role?.toUpperCase() ?? (cvPoint ? "FLIGHT DECK" : "OBJECTIVE"), km: pos.distanceTo(player.pos) / 1000,
       altitudeFt: pos.y * 3.28084, closureKt: player.vel.clone().sub(vel).dot(pos.clone().sub(player.pos).normalize()) * 1.94384,
       bearing: (Math.atan2(pos.x - player.pos.x, -(pos.z - player.pos.z)) * 180 / Math.PI + 360) % 360 } : null };
+}
+
+export function spawnBastion(ctx: Dogfight, player: AircraftState): void {
+  const ox = ctx.operationOrigin?.x ?? player.pos.x;
+  const oz = ctx.operationOrigin?.z ?? player.pos.z;
+  let site: THREE.Vector3 | null = null;
+  let bestD = Infinity;
+  for (let i = 0; i < 96; i++) {
+    const ang = ((ctx.operationSeed * 37 + i * 19) % 360) * Math.PI / 180;
+    const dist = 4500 + ((ctx.operationSeed * 13 + i * 43) % 9000);
+    const x = ox + Math.sin(ang) * dist;
+    const z = oz - Math.cos(ang) * dist;
+    if (Math.abs(x) > 25000 || Math.abs(z) > 25000) continue;
+    const g = groundAt(x, z);
+    if (g.kind !== "terrain" || g.y < 22 || g.y > 460) continue;
+    const d = Math.hypot(x - ox, z - oz);
+    if (d < bestD) { bestD = d; site = new THREE.Vector3(x, g.y, z); }
+  }
+  if (!site) {
+    // Fallback to hub island ridge near airfield
+    const gx = -1800 + 1600, gz = 2400 - 1100;
+    site = new THREE.Vector3(gx, Math.max(30, groundAt(gx, gz).y), gz);
+  }
+  const layout: Array<{ kind: "bunker" | "hangar" | "tank" | "radar" | "sam" | "warehouse"; role: "bunker" | "hangar" | "fuel" | "radar" | "sam" | "aaa"; dx: number; dz: number; ammo: number }> = [
+    { kind: "bunker", role: "bunker", dx: 0, dz: 0, ammo: 0 },
+    { kind: "hangar", role: "hangar", dx: -95, dz: 40, ammo: 0 },
+    { kind: "tank", role: "fuel", dx: 85, dz: -35, ammo: 0 },
+    { kind: "radar", role: "radar", dx: -30, dz: -110, ammo: 0 },
+    { kind: "sam", role: "sam", dx: 135, dz: 95, ammo: 6 },
+    { kind: "sam", role: "sam", dx: -145, dz: -85, ammo: 6 },
+    { kind: "warehouse", role: "aaa", dx: 40, dz: 120, ammo: 64 },
+  ];
+  for (const item of layout) {
+    const tx = site.x + item.dx;
+    const tz = site.z + item.dz;
+    const ty = Math.max(6, groundAt(tx, tz).y);
+    ctx.spawnTarget(item.kind, tx, ty, tz, 0, false);
+    const t = ctx.strikeTargets[ctx.strikeTargets.length - 1];
+    Object.assign(t, { role: item.role, route: null, progress: 0, speed: 0, ammo: item.ammo, tracking: 0, cooldown: 0, disabled: false, arrived: false });
+  }
 }
 
 export function spawnConvoy(ctx: Dogfight, player: AircraftState): void {
@@ -52,10 +111,25 @@ export function spawnConvoy(ctx: Dogfight, player: AircraftState): void {
 
 export function stepOperation(ctx: Dogfight, dt: number, player: AircraftState): void {
   const op = ctx.operation!; const before = op.state.status;
-  const phase = op.advance(dt, { stopped: ctx.strikeTargets.filter(t => t.role === "cargo" && (t.dead || t.disabled)).length,
+  const isBastionPhase = op.state.kind === "bastion" || (op.state.kind === "campaign" && op.state.phase === "bastion");
+  const stoppedCount = isBastionPhase
+    ? ctx.strikeTargets.filter(t => isFortressPrimary(t.role) && (t.dead || t.disabled)).length
+    : ctx.strikeTargets.filter(t => t.role === "cargo" && (t.dead || t.disabled)).length;
+  const phase = op.advance(dt, { stopped: stoppedCount,
     arrived: ctx.strikeTargets.filter(t => t.role === "cargo" && t.arrived).length,
     scouts: ctx.bandits.filter(b => b.role === "scout").length, attackers: ctx.bandits.filter(b => b.role !== "scout").length + ctx.enemyBombs.length, queued: ctx.roleQueue.length });
-  if (phase === "strike" || phase === "final") {
+  if (phase === "convoy") {
+    ctx.clearTargets();
+    ctx.scenario = "strike";
+    ctx.spawnConvoy(player);
+    ctx.banner(player, "STAGE 2: STOP THE CONVOY — INTERDICT ENEMY SUPPLY SHIPS");
+  } else if (phase === "scout") {
+    ctx.clearTargets();
+    ctx.scenario = "dogfight";
+    if (!ctx.cv && !ctx.mirror) ctx.spawnEnemyCarrier(player);
+    ctx.wave = 1; ctx.roleQueue = ["scout"]; ctx.launchTimer = 1;
+    ctx.banner(player, "STAGE 3: FLEET DEFENSE — OPFOR CARRIER STRIKE INBOUND");
+  } else if (phase === "strike" || phase === "final") {
     ctx.wave = phase === "strike" ? 2 : 3; ctx.roleQueue = ["bomber", "bomber", "escort"]; ctx.launchTimer = 1;
     ctx.banner(player, phase === "final" ? "FINAL STRIKE — SPLIT BOMBERS INBOUND" : "BOMBER STRIKE — INTERCEPT THE BOMBERS FIRST");
   } else if (phase === "forming") ctx.banner(player, op.state.scoutStopped ? "SCOUT STOPPED — 60 SECONDS TO PREPARE" : "SCOUT REPORTED — STRIKE FORMING IN 15 SECONDS");
@@ -119,15 +193,32 @@ export function stepEscortDefense(ctx: Dogfight, dt: number, player: AircraftSta
   ctx.defenseWarning = false;
   const radar = ctx.strikeTargets.some(t => t.role === "radar" && !t.dead && !t.arrived);
   for (const t of ctx.strikeTargets) {
-    if (t.role !== "escort" || t.dead || t.arrived || (t.ammo ?? 0) <= 0 || ctx.mirror) continue;
+    if ((t.role !== "escort" && t.role !== "aaa" && t.role !== "sam") || t.dead || t.arrived || (t.ammo ?? 0) <= 0 || ctx.mirror) continue;
     t.cooldown = Math.max(0, (t.cooldown ?? 0) - dt);
+    const origin = t.pos.clone().add(new THREE.Vector3(0, 12, 0));
     const pilot = ctx.nearestDefender(player, t.pos), distance = t.pos.distanceTo(pilot.pos);
-    if (distance > 2200 || pilot.onGround || pilot.result || terrainBlocks(t.pos.clone().add(new THREE.Vector3(0, 12, 0)), pilot.pos)) { t.tracking = 0; continue; }
+    const maxRange = t.role === "sam" ? (radar ? 5800 : 3400) : 2200;
+    if (distance > maxRange || pilot.onGround || pilot.result || terrainBlocks(origin, pilot.pos)) { t.tracking = 0; continue; }
     if (t.cooldown > 0) continue;
     ctx.defenseWarning = true; t.tracking = (t.tracking ?? 0) + dt;
+    if (t.role === "sam") {
+      if (t.tracking < (radar ? 2.4 : 4.8)) continue;
+      t.ammo = Math.max(0, (t.ammo ?? 0) - 1); t.tracking = 0; t.cooldown = 10;
+      const aim = pilot.pos.clone().add(new THREE.Vector3(0, 40, 0)).sub(origin).normalize().multiplyScalar(220);
+      if (ctx.putHostileRound(origin, aim, ctx.operation.state.elapsed * 13 + t.id)) {
+        // The round hunts whoever the battery locked: a wingman if one is closer
+        // than we are, otherwise the local jet. An unknown id means "the local
+        // pilot", which is exactly what the seeker assumes by default.
+        const targetId = ctx.defenders.find(p => p.pos === pilot.pos)?.id ?? ctx.localPilot;
+        if (targetId) ctx.missiles[ctx.missiles.length - 1].targetPilot = targetId;
+        ctx.enemyFire.push({ combatId: ctx.combatId, seq: ++ctx.fireSerial, weapon: "missile", pos: origin.toArray(), vel: aim.toArray(), ...(targetId ? { target: targetId } : {}) });
+        ctx.banner(player, "SAM LAUNCH — BREAK AND DEPLOY FLARES OR DIVE BEHIND TERRAIN");
+      }
+      ctx.threatT = THREAT_HOLD;
+      continue;
+    }
     if (t.tracking < (radar ? 3 : 6)) continue;
-    t.ammo = (t.ammo ?? 0) - 6; t.tracking = 0; t.cooldown = 5;
-    const origin = t.pos.clone().add(new THREE.Vector3(0, 12, 0));
+    t.ammo = Math.max(0, (t.ammo ?? 0) - 6); t.tracking = 0; t.cooldown = 5;
     for (let i = 0; i < 6; i++) {
       const aim = pilot.pos.clone().addScaledVector(pilot.vel, distance / MUZZLE_V).sub(origin).normalize();
       ctx.scatter(aim, .05, ctx.operation.state.elapsed * 7 + i); ctx.spawnTracer(origin, aim, true, null);

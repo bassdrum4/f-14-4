@@ -77,13 +77,13 @@ export function disposeSubtree(node: THREE.Object3D): void {
 }
 
 /**
- * True when terrain rises above the straight line between two points. Three
- * samples along the line are enough to catch ridges without slowing every
- * burst decision down. Exported for the headless dogfight checks.
+ * True when terrain rises above the straight line between two points. Eight
+ * samples along the line catch ridges and canyon walls reliably for both radar
+ * terrain-masking and gunnery checks. Exported for the headless dogfight checks.
  */
 export function terrainBlocks(a: THREE.Vector3, b: THREE.Vector3): boolean {
-  for (let i = 1; i <= 3; i++) {
-    const t = i / 4;
+  for (let i = 1; i <= 8; i++) {
+    const t = i / 9;
     const x = a.x + (b.x - a.x) * t;
     const y = a.y + (b.y - a.y) * t;
     const z = a.z + (b.z - a.z) * t;

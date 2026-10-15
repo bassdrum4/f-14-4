@@ -328,6 +328,49 @@ export class RemoteFleet {
     return { id: best.id, name: best.name, km: bestD / 1000, brgDeg: (brg + 360) % 360 };
   }
 
+  /** Live pose of a specific remote pilot for spectator camera & telemetry. */
+  pilotState(id: string): {
+    id: string;
+    name: string;
+    aircraft: AircraftId;
+    pos: THREE.Vector3;
+    quat: THREE.Quaternion;
+    vel: THREE.Vector3;
+    speed: number;
+    sweepT: number;
+    flags: number;
+  } | null {
+    const r = this.remotes.get(id);
+    if (!r || !r.buf.length || performance.now() - r.lastAt > GONE_MS) return null;
+    const p = r.buf[r.buf.length - 1].p;
+    return {
+      id: r.id,
+      name: r.name,
+      aircraft: r.aircraft,
+      pos: r.mesh.group.position.clone(),
+      quat: r.mesh.group.quaternion.clone(),
+      vel: new THREE.Vector3(p.vx, p.vy, p.vz),
+      speed: p.speed,
+      sweepT: p.sweepT,
+      flags: p.flags,
+    };
+  }
+
+  /** Ordered list of live remote pilot ids. */
+  liveIds(): string[] {
+    const now = performance.now();
+    return [...this.remotes.values()]
+      .filter((r) => r.buf.length > 0 && now - r.lastAt <= GONE_MS)
+      .map((r) => r.id);
+  }
+
+  /** Hide a single remote's mesh (e.g. when a spectator is inside its cockpit). */
+  setPilotVisible(id: string | null): void {
+    for (const r of this.remotes.values()) {
+      if (r.id === id) r.mesh.group.visible = false;
+    }
+  }
+
   /** Place every remote at the present moment and drive its mesh. Once a frame. */
   update(nowMs: number): void {
     // The presented clock rides real time between corrections; clamp the step so

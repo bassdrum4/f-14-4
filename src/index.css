@@ -746,3 +746,47 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 @media (max-width: 850px) { .operation-panel { top: 95px; width: 56vw; font-size: 9px; padding: 8px; } .operation-panel strong { flex-direction: column; gap: 0; } }
 
 .operation-radio-update { display: block; margin-top: 6px; padding-top: 5px; border-top: 1px solid rgba(150,200,230,.15); font-size: 10px; line-height: 1.5; }
+
+/* ---------------------------------------------------------------------------
+   Theatre systems: weather, air defence, airframe damage, LSO and spectators.
+   One block, so the new instrumentation reads as part of the same HUD.
+--------------------------------------------------------------------------- */
+
+/* IADS readout: radar state, terrain masking and the SAM lock bar. */
+.iads-panel { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(150,200,230,.15); font-size: 10px; letter-spacing: .08em; }
+.iads-panel span { padding: 1px 6px; border: 1px solid rgba(150,200,230,.35); color: #a9c8d6; }
+.iads-panel span.on { border-color: #ff8165; color: #ff8165; }
+.iads-panel span.off { border-color: rgba(146,239,173,.6); color: #92efad; }
+.iads-panel span.mask.on { border-color: #92efad; color: #92efad; }
+.iads-panel span.lock { display: flex; gap: 6px; align-items: center; border: none; padding: 0; }
+.iads-panel span.lock i { display: inline-block; width: 68px; height: 5px; background: rgba(150,200,230,.2); }
+.iads-panel span.lock i b { display: block; height: 100%; background: #ff8165; }
+.iads-panel small { flex-basis: 100%; color: #7d93a5; font-size: 10px; letter-spacing: .04em; }
+
+/* Airframe damage panel (only shown once something is actually broken). */
+.hud-subsystems { position: absolute; left: max(14px, 1.6vw); top: 42%; display: flex; flex-direction: column; gap: 3px; padding: 7px 10px; background: rgba(6,14,20,.55); border-left: 2px solid #ff8165; font-size: 10px; letter-spacing: .08em; color: #ffd7c8; }
+.hud-subsystems strong { color: #ff8165; font-size: 10px; letter-spacing: .14em; }
+.hud-subsystems .warn { color: #ffb0a0; }
+
+/* Paddles, live in the groove. */
+.hud-paddles { position: absolute; bottom: 17%; left: 50%; transform: translateX(-50%); padding: 5px 16px; background: rgba(6,14,20,.6); border: 1px solid rgba(146,239,173,.45); color: #b8ffd0; font-size: 12px; letter-spacing: .16em; }
+
+/* Room pings, listed as well as drawn. */
+.hud-pings { position: absolute; right: max(14px, 1.6vw); bottom: 26%; display: flex; flex-direction: column; gap: 3px; align-items: flex-end; font-size: 10px; letter-spacing: .06em; color: #cfe3ee; }
+.hud-ping { padding: 3px 8px; background: rgba(6,14,20,.55); border-left: 2px solid #78ff96; }
+.hud-ping.threat { border-color: #ff563c; }
+.hud-ping.target { border-color: #ffcc50; }
+.hud-ping b { color: #9debdc; }
+
+/* Spectator strip: who the camera is riding, and what the keys do. */
+.spectate-bar { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 20px; background: rgba(4,14,22,.82); border-left: 3px solid #4fd2ff; font-size: 11px; letter-spacing: .12em; color: #d7ecff; }
+.spectate-bar strong { color: #4fd2ff; letter-spacing: .3em; font-size: 11px; }
+.spectate-bar small { color: #8fb2c4; font-size: 10px; letter-spacing: .06em; }
+
+/* LSO grade card on the results screen. */
+.lso-card { margin: 6px 0 16px; padding: 12px 0; border-top: 1px solid rgba(150,200,230,.18); border-bottom: 1px solid rgba(150,200,230,.18); }
+.lso-grade-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.lso-grade { font-size: 30px; letter-spacing: .1em; }
+.lso-grade.good { color: #92efad; }
+.lso-grade.fair { color: var(--hud-amber); }
+.lso-grade.poor { color: #ff8165; }

@@ -9,7 +9,7 @@
 
 import * as THREE from "three";
 
-export type CameraMode = "cockpit" | "chase" | "action" | "pod";
+export type CameraMode = "cockpit" | "chase" | "action" | "pod" | "lso" | "free";
 
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 const ORIGIN = new THREE.Vector3();
@@ -54,12 +54,24 @@ export class CameraRig {
   private podPos = new THREE.Vector3();
   private podDir = new THREE.Vector3();
   private podLook = new THREE.Vector3();
+  /** Free spectator camera position and orientation. */
+  freePos = new THREE.Vector3(10000, 380, 2200);
+  freeYaw = 0;
+  freePitch = -0.15;
 
-  cycle(): void {
+  cycle(spectator = false): void {
     // The pod is a temporary view, not part of the loop: leave it first, then
-    // step through chase / cockpit / action.
+    // step through chase / cockpit / action (plus LSO / free for spectators).
     if (this.mode === "pod") this.mode = "chase";
-    else this.mode = this.mode === "chase" ? "cockpit" : this.mode === "cockpit" ? "action" : "chase";
+    else if (spectator) {
+      this.mode =
+        this.mode === "chase" ? "cockpit" :
+        this.mode === "cockpit" ? "action" :
+        this.mode === "action" ? "lso" :
+        this.mode === "lso" ? "free" : "chase";
+    } else {
+      this.mode = this.mode === "chase" ? "cockpit" : this.mode === "cockpit" ? "action" : "chase";
+    }
     if (this.mode !== "chase") {
       this.yaw = 0;
       this.pitch = 0;
@@ -109,6 +121,10 @@ export class CameraRig {
         return "TARGET POD";
       case "action":
         return "ACTION";
+      case "lso":
+        return "LSO PLATFORM";
+      case "free":
+        return "FREE CAM";
       default:
         return "CHASE";
     }
@@ -122,9 +138,28 @@ export class CameraRig {
       this.podPitch = THREE.MathUtils.clamp(this.podPitch - dy * POD_SLEW, -1.5, 0.5);
       return;
     }
+    if (this.mode === "free") {
+      this.freeYaw -= dx * 0.004;
+      this.freePitch = THREE.MathUtils.clamp(this.freePitch - dy * 0.004, -1.45, 1.45);
+      return;
+    }
     const limit = this.mode === "cockpit" ? 1.5 : 2.6;
     this.yaw = THREE.MathUtils.clamp(this.yaw - dx * 0.004, -limit, limit);
     this.pitch = THREE.MathUtils.clamp(this.pitch - dy * 0.004, -1.2, 1.2);
+  }
+
+  /** Step free camera position along its view direction. */
+  stepFree(forward: number, strafe: number, vertical: number, dt: number, boost = false): void {
+    const speed = boost ? 900 : 280;
+    const cp = Math.cos(this.freePitch);
+    const fx = Math.sin(this.freeYaw) * cp;
+    const fy = Math.sin(this.freePitch);
+    const fz = -Math.cos(this.freeYaw) * cp;
+    const rx = Math.cos(this.freeYaw);
+    const rz = Math.sin(this.freeYaw);
+    this.freePos.x += (fx * forward + rx * strafe) * speed * dt;
+    this.freePos.y = Math.max(8, this.freePos.y + (fy * forward + vertical) * speed * dt);
+    this.freePos.z += (fz * forward + rz * strafe) * speed * dt;
   }
 
   /**
@@ -142,7 +177,25 @@ export class CameraRig {
     speed: number,
     dt: number,
     cinematic = false,
+    lsoPlatform?: { x: number; y: number; z: number; lookX: number; lookY: number; lookZ: number },
   ): void {
+    if (this.mode === "free") {
+      camera.position.copy(this.freePos);
+      const cp = Math.cos(this.freePitch);
+      this.podDir.set(Math.sin(this.freeYaw) * cp, Math.sin(this.freePitch), -Math.cos(this.freeYaw) * cp);
+      camera.up.set(0, 1, 0);
+      camera.lookAt(this.podLook.copy(this.freePos).add(this.podDir));
+      return;
+    }
+    if (this.mode === "lso" && lsoPlatform) {
+      camera.position.set(lsoPlatform.x, lsoPlatform.y, lsoPlatform.z);
+      camera.up.set(0, 1, 0);
+      camera.lookAt(lsoPlatform.lookX, lsoPlatform.lookY, lsoPlatform.lookZ);
+      this.tmpEuler.set(this.pitch * 0.5, this.yaw * 0.5, 0, "YXZ");
+      camera.rotateY(this.tmpEuler.y);
+      camera.rotateX(this.tmpEuler.x);
+      return;
+    }
     if (this.mode === "pod") {
       // Sensor head under the nose, sight line from the pod's own gimbal.
       camera.position.copy(this.podPos.copy(POD_OFFSET).applyQuaternion(quat).add(pos));

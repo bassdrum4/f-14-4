@@ -61,9 +61,21 @@ import { DEFAULT_AIRCRAFT, isAircraftId } from "../sim/aircraft";
 import type { MissionKind } from "../sim/flight";
 import { setLinkDelayMs, type RemotePose } from "../render/remoteJets";
 import type { CarrierStatus, EnemySnapshot } from "../sim/dogfight";
-import type { MissionMode } from "../settings";
+import type { MissionMode, WeatherMode } from "../settings";
 
 export type NetStatus = "idle" | "connecting" | "online" | "error";
+
+export type PingKind = "threat" | "waypoint" | "target";
+export interface TacticalPing {
+  id: number;
+  from: string;
+  kind: PingKind;
+  x: number;
+  y: number;
+  z: number;
+  label: string;
+  at: number; // local performance.now()
+}
 
 /** A pilot on the roster, as the UI sees them. */
 export interface NetPilot {
@@ -71,6 +83,7 @@ export interface NetPilot {
   name: string;
   aircraft: AircraftId;
   host: boolean;
+  spectator?: boolean;
   /** True once we have a live data link to them. */
   linked: boolean;
 }
@@ -82,6 +95,8 @@ export interface NetState {
   self: string;
   /** We opened this room. */
   host: boolean;
+  /** True when we joined as a spectator (or switched to spectating). */
+  spectator?: boolean;
   pilots: NetPilot[];
   /** Packets sent per second, averaged over the last second. */
   hz: number;
@@ -110,6 +125,8 @@ export interface NetHandlers {
   /** A wingman started a sortie; everyone still in the lobby is invited along. */
   onLaunch?: (mission: MissionKind, carrier: number, profile?: OperationLaunch) => void;
   onMissionStyle?: (style: MissionStyle) => void;
+  /** The room's weather changed — one squall, felt by everyone in it. */
+  onWeather?: (weather: WeatherMode) => void;
   onCombat?: (frame: SharedCombat) => void;
   onEnemyFire?: (shot: EnemyFire) => void;
   /** The room's fight, streamed by the host. */
@@ -129,6 +146,7 @@ export interface NetHandlers {
   onBattleState?: (snapshot: BattleSnapshot) => void;
   onBattleShot?: (sender: string, shot: BattleShot) => void;
   onBattleMissiles?: (sender: string, snapshot: BattleMissiles) => void;
+  onPing?: (ping: TacticalPing) => void;
 }
 
 /**
@@ -349,21 +367,22 @@ interface RosterEntry {
   name: string;
   aircraft: AircraftId;
   host: boolean;
+  spectator?: boolean;
 }
 
 interface RoomLaunch { mission: MissionKind; carrier: number; profile?: OperationLaunch }
 
 type Control =
-  | { t: "hello"; name: string; aircraft: AircraftId; mode: MissionMode; owner?: string }
-  | { t: "roster"; peers: RosterEntry[]; mode: MissionMode; style?: MissionStyle; allowLateJoin?: boolean; launch?: RoomLaunch | null }
+  | { t: "hello"; name: string; aircraft: AircraftId; mode: MissionMode; owner?: string; spectator?: boolean }
+  | { t: "roster"; peers: RosterEntry[]; mode: MissionMode; style?: MissionStyle; weather?: WeatherMode; allowLateJoin?: boolean; launch?: RoomLaunch | null }
   | { t: "combat"; frame: SharedCombat }
   | { t: "enemyFire"; shots: EnemyFire[] }
   | { t: "roomPolicy"; allowLateJoin: boolean; launch: RoomLaunch | null }
   | { t: "reject"; reason: "started" }
   | { t: "join"; peer: RosterEntry }
   | { t: "bye"; id: string }
-  | { t: "name"; name: string; aircraft: AircraftId }
-  | { t: "mode"; mode: MissionMode; style?: MissionStyle }
+  | { t: "name"; name: string; aircraft: AircraftId; spectator?: boolean }
+  | { t: "mode"; mode: MissionMode; style?: MissionStyle; weather?: WeatherMode }
   | { t: "fleet"; seconds: number }
   | { t: "host" }
   | { t: "hit"; id: number; dmg: number; combatId?: number }
@@ -373,7 +392,8 @@ type Control =
   | { t: "battleShot"; shot: BattleShot }
   | { t: "battleMissiles"; snapshot: BattleMissiles }
   | { t: "launch"; mission: MissionKind; carrier: number; profile?: OperationLaunch }
-  | { t: "chat"; from: string; text: string };
+  | { t: "chat"; from: string; text: string }
+  | { t: "ping"; id: number; kind: PingKind; x: number; y: number; z: number; label: string };
 
 // ---------------------------------------------------------------------------
 // Tunables
@@ -530,9 +550,11 @@ export class Multiplayer {
   private selfId = "";
   private name = "PILOT";
   private aircraft: AircraftId = DEFAULT_AIRCRAFT;
+  private spectator = false;
   /** The room's mission profile. The host owns it; everyone else follows. */
   private mode: MissionMode = "cruise";
   private missionStyle: MissionStyle = "operation";
+  private weather: WeatherMode = "clear";
   private combatWire: string | null = null;
   private combatSent = new WeakMap<DataConnection, string>();
   private allowLateJoin = true;
@@ -627,12 +649,14 @@ export class Multiplayer {
       room: this.room,
       self: this.selfId,
       host: this.host,
+      spectator: this.spectator,
       pilots: [...this.pilots.values()]
         .map((p) => ({
           id: p.owner ?? p.id,
           name: p.name,
           aircraft: p.aircraft,
           host: p.host,
+          spectator: p.spectator === true,
           linked: this.conns.has(p.id) && this.conns.get(p.id)!.open,
         }))
         .sort((a, b) => a.name.localeCompare(b.name)),
@@ -667,19 +691,25 @@ export class Multiplayer {
 
   /** Open a room. The name/aircraft are announced to whoever joins later. */
   open(room: string, name: string, aircraft: AircraftId): void {
-    this.start(room, name, aircraft, true);
+    this.start(room, name, aircraft, true, false);
   }
 
   /** Join an existing room by code. */
-  join(room: string, name: string, aircraft: AircraftId): void {
-    this.start(room, name, aircraft, false);
+  join(room: string, name: string, aircraft: AircraftId, spectator = false): void {
+    this.start(room, name, aircraft, false, spectator);
   }
 
-  private start(room: string, name: string, aircraft: AircraftId, asHost: boolean): void {
+  /** Join an existing room as a spectator (allowed before or after launch). */
+  spectate(room: string, name: string, aircraft: AircraftId = DEFAULT_AIRCRAFT): void {
+    this.start(room, name, aircraft, false, true);
+  }
+
+  private start(room: string, name: string, aircraft: AircraftId, asHost: boolean, spectator = false): void {
     this.stopSession();
     this.room = sanitizeRoom(room);
     this.name = sanitizeName(name);
     this.aircraft = aircraft;
+    this.spectator = !asHost && spectator;
     this.host = asHost;
     this.error = undefined;
     this.enemy = null;
@@ -784,6 +814,7 @@ export class Multiplayer {
       this.peer = null;
     }
     this.host = false;
+    this.spectator = false;
     this.selfId = "";
     this.hostAuthority = null;
     this.redialPending = false;
@@ -876,7 +907,11 @@ export class Multiplayer {
    */
   private maybePromote(): void {
     if (this.host || this.hostDuty || this.status !== "online") return;
-    const candidates = [this.selfId, ...this.pilots.keys()].sort();
+    const activePilots = [
+      ...(this.spectator ? [] : [this.selfId]),
+      ...[...this.pilots.values()].filter(p => !p.spectator).map(p => p.id),
+    ].sort();
+    const candidates = activePilots.length > 0 ? activePilots : [this.selfId, ...this.pilots.keys()].sort();
     if (candidates[0] !== this.selfId) return;
     let peer: Peer;
     try {
@@ -993,6 +1028,7 @@ export class Multiplayer {
         aircraft: this.aircraft,
         mode: this.mode,
         owner: this.selfId,
+        spectator: this.spectator,
       } satisfies Control);
       if (known) this.adopt(conn.peer, known);
       this.emit();
@@ -1036,7 +1072,8 @@ export class Multiplayer {
   private onControl(conn: DataConnection, msg: Control): void {
     switch (msg.t) {
       case "hello": {
-        if (this.host && this.roomLaunch && !this.allowLateJoin && !this.admitted.has(conn.peer)) {
+        const isSpec = msg.spectator === true && !this.isHostConn(conn);
+        if (this.host && this.roomLaunch && !this.allowLateJoin && !isSpec && !this.admitted.has(conn.peer)) {
           this.send(conn, { t: "reject", reason: "started" } satisfies Control);
           // Let the rejection reach the receiver before closing the channel.
           window.setTimeout(() => { if (this.conns.get(conn.peer) === conn) this.drop(conn.peer, false); }, 250);
@@ -1053,6 +1090,7 @@ export class Multiplayer {
           // host — then force-launch the room, rewrite its mission profile and
           // fabricate its head-to-head scoreboard.
           host: this.isHostConn(conn),
+          spectator: isSpec,
         };
         const known = this.pilots.has(conn.peer);
         if (!this.adopt(conn.peer, entry)) break;
@@ -1062,11 +1100,12 @@ export class Multiplayer {
           // The room's mission profile rides the roster: a pilot joining an
           // attack room flies the attack, not whatever they last flew solo.
           const roster: RosterEntry[] = [
-            { id: this.rosterId(), owner: this.selfId, name: this.name, aircraft: this.aircraft, host: true },
+            { id: this.rosterId(), owner: this.selfId, name: this.name, aircraft: this.aircraft, host: true, spectator: this.spectator },
             ...this.pilots.values(),
           ].filter((p) => p.id !== conn.peer);
-          this.send(conn, { t: "roster", peers: roster, mode: this.mode, style: this.missionStyle, allowLateJoin: this.allowLateJoin, launch: this.roomLaunch } satisfies Control);
+          this.send(conn, { t: "roster", peers: roster, mode: this.mode, style: this.missionStyle, weather: this.weather, allowLateJoin: this.allowLateJoin, launch: this.roomLaunch } satisfies Control);
           if (this.combatWire) conn.send(this.combatWire);
+          if (this.battleCache) conn.send(this.battleCache);
           for (const other of this.conns.values()) {
             if (other === conn || !other.open) continue;
             this.send(other, { t: "join", peer: entry } satisfies Control);
@@ -1087,6 +1126,7 @@ export class Multiplayer {
         if (!this.isHostConn(conn) || !Array.isArray(msg.peers)) break;
         this.adoptMode(msg.mode);
         this.adoptMissionStyle(msg.style);
+        this.adoptWeather(msg.weather);
         this.adoptRoomPolicy(msg.allowLateJoin, msg.launch);
         for (const entry of msg.peers) {
           if (!entry || typeof entry.id !== "string" || entry.id === this.selfId) continue;
@@ -1108,7 +1148,7 @@ export class Multiplayer {
         if (this.isHostConn(conn)) { this.adoptRoomPolicy(msg.allowLateJoin, msg.launch); this.emit(); }
         break;
       case "combat":
-        if (this.isHostConn(conn) && (this.mode === "strike" || this.mode === "dogfight") && validSharedCombat(msg.frame) && msg.frame.scenario === (this.mode === "strike" ? "strike" : "dogfight") && !!msg.frame.operation === (this.missionStyle === "operation") && (!this.roomLaunch?.profile || this.roomLaunch.profile.id === msg.frame.id)) this.handlers.onCombat?.(msg.frame);
+        if (this.isHostConn(conn) && (this.mode === "strike" || this.mode === "dogfight" || this.mode === "campaign") && validSharedCombat(msg.frame) && (!this.roomLaunch?.profile || this.roomLaunch.profile.id === msg.frame.id)) this.handlers.onCombat?.(msg.frame);
         break;
       case "enemyFire":
         if (this.isHostConn(conn) && Array.isArray(msg.shots) && msg.shots.length <= 32) for (const shot of msg.shots) {
@@ -1135,7 +1175,11 @@ export class Multiplayer {
         break;
       }
       case "host": {
-        const candidate = [this.selfId, ...this.pilots.keys()].sort()[0];
+        const activePilots = [
+          ...(this.spectator ? [] : [this.selfId]),
+          ...[...this.pilots.values()].filter(p => !p.spectator).map(p => p.id),
+        ].sort();
+        const candidate = (activePilots.length > 0 ? activePilots : [this.selfId, ...this.pilots.keys()].sort())[0];
         const liveHost = [...this.pilots.values()].some(p => p.host && this.conns.get(p.id)?.open);
         if (!this.host && !liveHost && conn.peer === candidate) {
           // Record who now speaks for the room, so their launch/mode/battle
@@ -1162,7 +1206,7 @@ export class Multiplayer {
         if (this.isHostConn(conn) && Number.isFinite(msg.seconds) && msg.seconds >= 0) this.handlers.onFleetClock?.(msg.seconds);
         break;
       case "mode":
-        if (this.isHostConn(conn)) { this.adoptMode(msg.mode); this.adoptMissionStyle(msg.style); }
+        if (this.isHostConn(conn)) { this.adoptMode(msg.mode); this.adoptMissionStyle(msg.style); this.adoptWeather(msg.weather); }
         break;
       case "battleShot": {
         const shot = msg.shot;
@@ -1255,10 +1299,34 @@ export class Multiplayer {
           const p = this.pilots.get(conn.peer)!;
           p.name = sanitizeName(msg.name);
           p.aircraft = sanitizeAircraft(msg.aircraft);
-          this.handlers.onPilot?.(p.owner ?? conn.peer, p.name, p.aircraft);
+          if (typeof msg.spectator === "boolean" && !p.host) p.spectator = msg.spectator;
+          if (p.spectator) this.handlers.onPilotLeave?.(p.owner ?? conn.peer);
+          else this.handlers.onPilot?.(p.owner ?? conn.peer, p.name, p.aircraft);
           this.emit();
         }
         break;
+      case "ping": {
+        if (
+          (this.pilots.has(conn.peer) || this.isHostConn(conn)) &&
+          Number.isSafeInteger(msg.id) &&
+          (msg.kind === "threat" || msg.kind === "waypoint" || msg.kind === "target") &&
+          [msg.x, msg.y, msg.z].every(v => Number.isFinite(v) && Math.abs(v) <= 1e6) &&
+          typeof msg.label === "string"
+        ) {
+          const sender = this.pilots.get(conn.peer)?.name ?? "SPECTATOR";
+          this.handlers.onPing?.({
+            id: msg.id,
+            from: sender,
+            kind: msg.kind,
+            x: msg.x,
+            y: msg.y,
+            z: msg.z,
+            label: sanitizeName(msg.label || msg.kind.toUpperCase()),
+            at: performance.now(),
+          });
+        }
+        break;
+      }
       default:
         break;
     }
@@ -1271,7 +1339,7 @@ export class Multiplayer {
    */
   private adoptMode(mode: MissionMode | undefined): void {
     if (!mode || this.host) return;
-    if (mode !== "cruise" && mode !== "dogfight" && mode !== "strike" && mode !== "versus") return;
+    if (mode !== "cruise" && mode !== "dogfight" && mode !== "strike" && mode !== "versus" && mode !== "campaign") return;
     if (mode === this.mode) return;
     this.mode = mode;
     this.handlers.onMode?.(mode);
@@ -1293,11 +1361,16 @@ export class Multiplayer {
     // reach this, so a peer that kept announcing pilots used to grow the map
     // without bound; the new ones stop at the ceiling.
     if (!prev && this.pilots.size >= MAX_PILOTS) return false;
-    const next: RosterEntry = { ...entry, id };
+    const next: RosterEntry = { ...entry, id, spectator: entry.spectator === true };
     this.pilots.set(id, next);
+    // Spectators do not spawn an aircraft mesh in RemoteFleet.
+    if (next.spectator) {
+      if (prev && !prev.spectator) this.handlers.onPilotLeave?.(prev.owner ?? id);
+      return true;
+    }
     // The renderer only needs to hear about a pilot it has not built a mesh
     // for yet, or one whose callsign/airframe actually changed.
-    const changed = !prev || prev.name !== next.name || prev.aircraft !== next.aircraft || prev.owner !== next.owner;
+    const changed = !prev || prev.spectator || prev.name !== next.name || prev.aircraft !== next.aircraft || prev.owner !== next.owner;
     if (prev && prev.owner !== next.owner) this.handlers.onPilotLeave?.(prev.owner ?? id);
     if (changed) this.handlers.onPilot?.(next.owner ?? id, next.name, next.aircraft);
     return true;
@@ -1384,14 +1457,32 @@ export class Multiplayer {
   setMode(mode: MissionMode): void {
     if (mode === this.mode) return;
     this.mode = mode; this.combatWire = null;
-    this.sendAll(JSON.stringify({ t: "mode", mode, style: this.missionStyle } satisfies Control));
+    this.sendAll(JSON.stringify({ t: "mode", mode, style: this.missionStyle, weather: this.weather } satisfies Control));
+  }
+
+  /**
+   * The room's weather. The host owns it like the mission profile: wind is a
+   * flight-model input, so a room flying one campaign has to fly one squall.
+   */
+  setWeather(weather: WeatherMode): void {
+    if (weather === this.weather || !this.host) return;
+    this.weather = weather;
+    this.sendAll(JSON.stringify({ t: "mode", mode: this.mode, style: this.missionStyle, weather } satisfies Control));
+  }
+
+  private adoptWeather(weather: WeatherMode | undefined): void {
+    if (this.host) return;
+    if (weather !== "clear" && weather !== "overcast" && weather !== "storm") return;
+    if (weather === this.weather) return;
+    this.weather = weather;
+    this.handlers.onWeather?.(weather);
   }
 
   setMissionStyle(style: MissionStyle): void {
     if (style === this.missionStyle || !this.host) return;
     this.missionStyle = style; this.combatWire = null;
     if (this.roomLaunch?.profile) this.roomLaunch.profile.style = style;
-    this.sendAll(JSON.stringify({ t: "mode", mode: this.mode, style } satisfies Control));
+    this.sendAll(JSON.stringify({ t: "mode", mode: this.mode, style, weather: this.weather } satisfies Control));
   }
   private adoptMissionStyle(style: MissionStyle | undefined): void {
     if (this.host || (style !== "operation" && style !== "endless") || style === this.missionStyle) return;
@@ -1530,7 +1621,7 @@ export class Multiplayer {
   /** Change our callsign; the roster is updated in place. */
   setName(name: string): void {
     this.name = sanitizeName(name);
-    const msg = JSON.stringify({ t: "name", name: this.name, aircraft: this.aircraft } satisfies Control);
+    const msg = JSON.stringify({ t: "name", name: this.name, aircraft: this.aircraft, spectator: this.spectator } satisfies Control);
     for (const conn of this.conns.values()) {
       if (conn.open) {
         try {
@@ -1548,14 +1639,22 @@ export class Multiplayer {
     this.setName(this.name);
   }
 
-  /**
-   * Called every frame with the local aircraft's state. The pose is recorded and
-   * then pushed at once if the wire has been quiet for the floor (see
-   * flushPose): the network rate still does not follow the display refresh rate,
-   * but it no longer waits for the heartbeat either, which is the difference
-   * between a wingman drawn where he is and one drawn a tick behind.
-   */
+  setSpectator(spectator: boolean): void {
+    if (this.host || this.spectator === spectator) return;
+    this.spectator = spectator;
+    this.setName(this.name);
+  }
+
+  sendPing(kind: PingKind, x: number, y: number, z: number, label: string): TacticalPing | null {
+    if (!this.online) return null;
+    const id = Math.floor(Math.random() * 1e9) + 1;
+    const cleanLabel = sanitizeName(label || kind.toUpperCase());
+    this.sendAll(JSON.stringify({ t: "ping", id, kind, x, y, z, label: cleanLabel } satisfies Control));
+    return { id, from: this.name, kind, x, y, z, label: cleanLabel, at: performance.now() };
+  }
+
   publish(pose: RemotePose): void {
+    if (this.spectator) return; // spectators never broadcast an aircraft pose
     const p = this.pose;
     p.x = pose.x; p.y = pose.y; p.z = pose.z;
     p.qx = pose.qx; p.qy = pose.qy; p.qz = pose.qz; p.qw = pose.qw;
@@ -1613,7 +1712,7 @@ export class Multiplayer {
     this.flushBattleMissiles();
     this.flushFleetClock();
     this.flushCombat();
-    if (this.status !== "online" || this.conns.size === 0) return;
+    if (this.status !== "online" || this.conns.size === 0 || this.spectator) return;
     // A hidden tab is throttled to ~1 Hz by the browser; zeroing velocity makes
     // the wingman hold position instead of extrapolating off into the sunset.
     if (this.hidden) {

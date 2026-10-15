@@ -86,7 +86,7 @@ await check('Renderer teardown releases world GPU resources exactly once', () =>
   scene.add(new Mesh(geo, mat), new Mesh(geo, mat));
   let geometries = 0, materials = 0; geo.addEventListener('dispose', () => geometries++); mat.addEventListener('dispose', () => materials++);
   const renderer: any = Object.create(WorldRenderer.prototype);
-  Object.assign(renderer, { scene, sun: new DirectionalLight(), scaleCues: { dispose() {} }, renderer: { dispose() {} } });
+  Object.assign(renderer, { scene, sun: new DirectionalLight(), scaleCues: { dispose() {} }, weatherFx: { dispose() {} }, renderer: { dispose() {} } });
   renderer.dispose(); assert.equal(geometries, 1); assert.equal(materials, 1);
 });
 const data = new Map<string, string>();

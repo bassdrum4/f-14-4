@@ -2,25 +2,42 @@ import { EXTENT, terrainHeight, ARCHIPELAGO } from "./world";
 
 export type MissionStyle = "operation" | "endless";
 export type EnemyRole = "fighter" | "scout" | "bomber" | "escort";
-export type TargetRole = "cargo" | "escort" | "radar" | "practice";
-export type OperationPhase = "convoy" | "scout" | "forming" | "strike" | "counterattack" | "final";
+export type TargetRole = "cargo" | "escort" | "radar" | "practice" | "sam" | "aaa" | "bunker" | "fuel" | "hangar";
+export type OperationPhase = "convoy" | "bastion" | "scout" | "forming" | "strike" | "counterattack" | "final";
 export interface OperationState {
-  version: 1; id: number; seed: number; kind: "convoy" | "fleet";
+  version: 1; id: number; seed: number; kind: "convoy" | "fleet" | "bastion" | "campaign";
   status: "briefing" | "active" | "success" | "failure";
   phase: OperationPhase; elapsed: number; phaseTime: number;
   fleetCarrier: number; fleetHull: number; stopped: number; arrived: number;
   scoutStopped: boolean; scoutReported: boolean; suppressed: boolean; deckDamage: number;
   optional: number; reason: string;
+  campaignStage?: number; // 1 = Bastion IADS, 2 = Convoy Interdiction, 3 = Fleet Climax
 }
 export interface OperationMetrics { stopped: number; arrived: number; scouts: number; attackers: number; queued: number }
+
+/**
+ * The three fortress objectives of Operation Iron Bastion. Command bunker,
+ * hardened hangars and the fuel depot are what the operation is won on; the
+ * radar, the SAM batteries and the AAA site defend them and score nothing.
+ */
+export const PRIMARY_FORTRESS_ROLES: readonly TargetRole[] = ["bunker", "hangar", "fuel"];
+
+/** Is this target of the fortress, or one of its defences? */
+export function isFortressPrimary(role: TargetRole | undefined): boolean {
+  return role === "bunker" || role === "hangar" || role === "fuel";
+}
 
 /** Objective transitions are independent of aircraft, rendering and HUD text. */
 export class Operation {
   constructor(public state: OperationState) {}
   static create(kind: OperationState["kind"], id: number, seed: number, fleetCarrier: number): Operation {
-    return new Operation({ version: 1, id, seed, kind, status: "briefing", phase: kind === "convoy" ? "convoy" : "scout",
+    const initialPhase: OperationPhase =
+      kind === "convoy" ? "convoy" :
+      kind === "bastion" || kind === "campaign" ? "bastion" : "scout";
+    return new Operation({ version: 1, id, seed, kind, status: "briefing", phase: initialPhase,
       elapsed: 0, phaseTime: 0, fleetCarrier, fleetHull: 100, stopped: 0, arrived: 0,
-      scoutStopped: false, scoutReported: false, suppressed: false, deckDamage: 0, optional: 0, reason: "" });
+      scoutStopped: false, scoutReported: false, suppressed: false, deckDamage: 0, optional: 0, reason: "",
+      ...(kind === "campaign" ? { campaignStage: 1 } : {}) });
   }
   start(): void { if (this.state.status === "briefing") this.state.status = "active"; }
   finish(success: boolean, reason: string): void {
@@ -41,9 +58,11 @@ export class Operation {
   /** Returns a phase change so combat can spot the corresponding launch queue. */
   advance(dt: number, m: OperationMetrics): OperationPhase | null {
     const s = this.state;
-    if (s.kind === "convoy") {
+    if (s.kind === "convoy" || (s.kind === "campaign" && s.phase === "convoy")) {
       if (s.stopped < 3 && m.stopped === 3) s.optional++;
       s.stopped = m.stopped; s.arrived = m.arrived;
+    } else if (s.kind === "bastion" || (s.kind === "campaign" && s.phase === "bastion")) {
+      s.stopped = m.stopped;
     }
     if (s.status !== "active") return null;
     s.elapsed += dt; s.phaseTime += dt;
@@ -51,6 +70,44 @@ export class Operation {
       if (s.stopped >= 2) this.finish(true, "At least two transports stopped before unloading.");
       else if (s.arrived >= 2) this.finish(false, "Two transports reached the unloading line.");
       return null;
+    }
+    if (s.kind === "bastion") {
+      if (s.stopped >= 3) this.finish(true, "Island airbase command, hangars and fuel depot destroyed.");
+      else if (s.fleetHull <= 0) this.finish(false, "The friendly carrier was disabled.");
+      return null;
+    }
+    if (s.kind === "campaign") {
+      if (s.fleetHull <= 0) { this.finish(false, "Task Force Archon flagship was disabled."); return null; }
+      const before = s.phase;
+      if (s.phase === "bastion" && s.stopped >= 3) {
+        s.campaignStage = 2;
+        s.stopped = 0; s.arrived = 0;
+        this.phase("convoy");
+        return "convoy";
+      }
+      if (s.phase === "convoy") {
+        if (s.arrived >= 2) { this.finish(false, "Enemy supply convoy reinforced the archipelago."); return null; }
+        if (s.stopped >= 2) {
+          s.campaignStage = 3;
+          this.phase("scout");
+          return "scout";
+        }
+        return null;
+      }
+      // Stage 3 uses the Fleet Defense sequence
+      if (s.suppressed && m.attackers === 0 && m.queued === 0 && s.phase !== "scout") {
+        this.finish(true, "Task Force Archon victorious — island bastion, convoy and opposing fleet defeated.");
+        return null;
+      }
+      if (s.phase === "scout" && m.scouts === 0 && m.queued === 0) {
+        s.scoutStopped = !s.scoutReported; this.phase("forming");
+      } else if (s.phase === "forming" && s.phaseTime >= (s.scoutStopped ? 45 : 15)) this.phase("strike");
+      else if (s.phase === "strike" && m.attackers === 0 && m.queued === 0) this.phase("counterattack");
+      else if (s.phase === "counterattack" && s.phaseTime >= 50) this.phase("final");
+      else if (s.phase === "final" && m.attackers === 0 && m.queued === 0) {
+        this.finish(true, "Task Force Archon victorious — all enemy strikes repelled and archipelago secured.");
+      }
+      return s.phase !== before ? s.phase : null;
     }
     if (s.fleetHull <= 0) { this.finish(false, "The friendly carrier was disabled."); return null; }
     if (s.suppressed && m.attackers === 0 && m.queued === 0 && s.phase !== "scout") {
@@ -103,15 +160,25 @@ export function convoyRoute(x: number, z: number, seed: number): ConvoyRoute | n
   return best;
 }
 
-export function operationTitle(s: OperationState): string { return s.kind === "convoy" ? "STOP THE CONVOY" : "FLEET DEFENSE"; }
+export function operationTitle(s: OperationState): string {
+  if (s.kind === "campaign") return `TASK FORCE ARCHON · STAGE ${s.campaignStage ?? 1}/3`;
+  if (s.kind === "bastion") return "OPERATION IRON BASTION";
+  return s.kind === "convoy" ? "STOP THE CONVOY" : "FLEET DEFENSE";
+}
 export interface OperationHud {
   state: OperationState; eta: number | null; warning: boolean;
+  terrainMasked?: boolean; radarOnline?: boolean; samLockProgress?: number;
   target: { x: number; y: number; z: number; label: string; km: number; altitudeFt: number; closureKt: number; bearing: number } | null;
   storesUsed: number; recoveryBonus: number; recoveryWire: number; kills: number;
 }
 export function phaseObjective(s: OperationState): string {
-  if (s.status === "briefing") return s.kind === "convoy" ? "Stop 2 of 3 transports. Escort and radar are optional." : "Protect your carrier. Intercept scouts, then bombers.";
+  if (s.status === "briefing") {
+    if (s.kind === "bastion") return "Fly low using terrain masking. Destroy 3 primary fortress targets (Bunker, Hangar, Fuel).";
+    if (s.kind === "campaign") return "Stage 1: Neutralize Island Bastion IADS · Stage 2: Stop Supply Convoy · Stage 3: Defeat Enemy Carrier Strike.";
+    return s.kind === "convoy" ? "Stop 2 of 3 transports. Escort and radar are optional." : "Protect your carrier. Intercept scouts, then bombers.";
+  }
   if (s.status === "success" || s.status === "failure") return s.reason;
-  if (s.kind === "convoy") return `TRANSPORTS STOPPED ${s.stopped}/2 · ARRIVED ${s.arrived}/3`;
-  return ({ scout: "INTERCEPT THE SCOUT — PREVENT ITS REPORT", forming: "PREPARE FOR THE STRIKE — REARM OR MOVE TO INTERCEPT", strike: "INTERCEPT BOMBERS — ESCORT IS SECONDARY", counterattack: "COUNTERATTACK THE FLIGHT DECK OR REARM", final: "FINAL STRIKE — INTERCEPT SPLIT BOMBERS", convoy: "" })[s.phase];
+  if (s.kind === "convoy" || (s.kind === "campaign" && s.phase === "convoy")) return `TRANSPORTS STOPPED ${s.stopped}/2 · ARRIVED ${s.arrived}/3`;
+  if (s.kind === "bastion" || (s.kind === "campaign" && s.phase === "bastion")) return `FORTRESS OBJECTIVES DESTROYED ${s.stopped}/3 — USE TERRAIN MASKING AGAINST SAMs`;
+  return ({ scout: "INTERCEPT THE SCOUT — PREVENT ITS REPORT", forming: "PREPARE FOR THE STRIKE — REARM OR MOVE TO INTERCEPT", strike: "INTERCEPT BOMBERS — ESCORT IS SECONDARY", counterattack: "COUNTERATTACK THE FLIGHT DECK OR REARM", final: "FINAL STRIKE — INTERCEPT SPLIT BOMBERS", convoy: "", bastion: "" })[s.phase];
 }
