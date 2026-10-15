@@ -45,7 +45,8 @@
     "test:countermeasures:pvp": "bun scripts/diag-countermeasures-pvp.ts",
     "test:gameplay-edges": "bun scripts/diag-gameplay-edges.ts",
     "test:carrier-motion": "bun scripts/diag-carrier-motion.ts",
-    "test:operations": "bun scripts/diag-operations.ts"
+    "test:operations": "bun scripts/diag-operations.ts",
+    "test:operation-transition": "bun scripts/diag-operation-transition.ts"
   },
   "dependencies": {
     "peerjs": "^1.5.5",
