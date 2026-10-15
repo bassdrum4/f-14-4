@@ -54,9 +54,11 @@ const {
   dismissOnboarding,
   setCallsign,
   applyGamestate,
+  profileOf,
 } = await import("../src/accounts");
 const { sanitizeName } = await import("../src/net/multiplayer");
-const { loadSettings, saveSettings } = await import("../src/settings");
+const { defaultSettings, loadSettings, saveSettings } = await import("../src/settings");
+type Settings = import("../src/settings").Settings;
 
 /** The raw accounts blob, whatever key the store chose. */
 function rawAccounts(): string {
@@ -124,7 +126,29 @@ check("the store holds no password field", !raw.includes("password") && !raw.inc
   check("the merge persists to storage", JSON.parse(mem.getItem("f14sim.settings.v1") ?? "{}").aircraft === "hornet");
 }
 
-// --- 6. onboarding can be dismissed -------------------------------------------
+// --- 6. every mission profile the board offers survives the trip --------------
+
+// A profile that comes home must not quietly drop the mission the pilot picked:
+// the campaign and the two strikers used to be rejected by this merge, so a
+// fetched gamestate reset the board to its first mission.
+{
+  for (const mode of ["cruise", "dogfight", "strike", "versus", "campaign"] as const) {
+    const shipped = profileOf({ ...defaultSettings(), missionMode: mode });
+    const back = applyGamestate(defaultSettings(), shipped);
+    check(`the ${mode} mission survives a cloud round-trip`, back.missionMode === mode, back.missionMode);
+  }
+  const bastion: Settings = { ...defaultSettings(), missionMode: "strike", strikeVariant: "bastion", weather: "storm" };
+  const restored = applyGamestate(defaultSettings(), profileOf(bastion));
+  check("the picked strike variant comes home", restored.strikeVariant === "bastion", String(restored.strikeVariant));
+  check("the picked weather comes home", restored.weather === "storm", String(restored.weather));
+  // and an unknown mode in a stored profile is still refused
+  const junk = applyGamestate({ ...defaultSettings(), missionMode: "campaign" }, { ...profileOf(bastion), missionMode: "nonsense" as never });
+  check("an unknown mission in a profile is ignored", junk.missionMode === "campaign", junk.missionMode);
+  check("an unknown weather in a profile is ignored",
+    applyGamestate(defaultSettings(), { ...profileOf(bastion), weather: "hail" }).weather === defaultSettings().weather);
+}
+
+// --- 7. onboarding can be dismissed -------------------------------------------
 
 dismissOnboarding();
 check("dismissing the first-run card is remembered", onboardingSeen());

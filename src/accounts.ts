@@ -12,7 +12,15 @@
 // time of day, sensitivity, keybinds and aircraft all come home. It is
 // informal by design — no passwords, no security boundary.
 
-import { DEFAULT_BINDINGS, saveSettings, type Settings } from "./settings";
+import {
+  DEFAULT_BINDINGS,
+  MISSION_MODE_LABELS,
+  WEATHER_LABELS,
+  saveSettings,
+  type MissionMode,
+  type Settings,
+  type WeatherMode,
+} from "./settings";
 import { isAircraftId } from "./sim/aircraft";
 import { fetchGamestate, saveGamestate, type GamestateProfile } from "./gamestate";
 
@@ -179,6 +187,8 @@ export function profileOf(s: Settings): GamestateProfile {
     bindings: { ...s.bindings },
     launchKind: s.launchKind,
     launchCarrier: s.launchCarrier,
+    strikeVariant: s.strikeVariant ?? "convoy",
+    weather: s.weather ?? "clear",
   };
 }
 
@@ -192,8 +202,14 @@ export function applyGamestate(current: Settings, profile: GamestateProfile): Se
   if (isAircraftId(profile.aircraft)) {
     next.aircraft = profile.aircraft;
   }
-  if (profile.missionMode === "dogfight" || profile.missionMode === "cruise" || profile.missionMode === "strike" || profile.missionMode === "versus") {
-    next.missionMode = profile.missionMode;
+  // Validated against the label records rather than a hand-kept list, so a mode
+  // or weather added to the picker cannot be quietly dropped here — the
+  // campaign used to be missing from this list, and a fetched profile reset the
+  // pilot to the first mission on the board instead of restoring their war.
+  if (isMissionMode(profile.missionMode)) next.missionMode = profile.missionMode;
+  if (isWeatherMode(profile.weather)) next.weather = profile.weather;
+  if (profile.strikeVariant === "convoy" || profile.strikeVariant === "bastion") {
+    next.strikeVariant = profile.strikeVariant;
   }
   if (profile.missionStyle === "operation" || profile.missionStyle === "endless") next.missionStyle = profile.missionStyle;
   if (profile.daylight === "live" || profile.daylight === "fixed" || profile.daylight === "cycle") {
@@ -226,6 +242,14 @@ export function applyGamestate(current: Settings, profile: GamestateProfile): Se
   }
   saveSettings(next);
   return next;
+}
+
+/** A mode or weather the shipper understands — i.e. one the board offers. */
+function isMissionMode(v: unknown): v is MissionMode {
+  return typeof v === "string" && Object.prototype.hasOwnProperty.call(MISSION_MODE_LABELS, v);
+}
+function isWeatherMode(v: unknown): v is WeatherMode {
+  return typeof v === "string" && Object.prototype.hasOwnProperty.call(WEATHER_LABELS, v);
 }
 
 /** Clamp anything a fetched profile hands us into the local range. */

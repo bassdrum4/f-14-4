@@ -40,6 +40,10 @@ export interface GamestateProfile {
   missionStyle?: "operation" | "endless";
   launchKind?: "carrier" | "airfield";
   launchCarrier?: number;
+  /** The picked mission profile: Iron Bastion or the convoy, and the weather
+   *  the theatre was flying. Optional: older profiles simply have no opinion. */
+  strikeVariant?: "convoy" | "bastion";
+  weather?: string;
 }
 
 /** Result of a cloud fetch. `found:false` simply means "no profile yet". */

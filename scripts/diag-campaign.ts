@@ -24,6 +24,8 @@ import { spawnAircraft } from "../src/sim/flight";
 import { Operation, operationTitle, phaseObjective } from "../src/sim/operations";
 import { validSharedCombat } from "../src/sim/combatSnapshot";
 import { carriers, setWorldSeed, DEFAULT_SEED } from "../src/sim/world";
+import { Sim } from "../src/sim/engine";
+import { defaultSettings } from "../src/settings";
 
 let failures = 0;
 function test(name: string, run: () => void) {
@@ -211,6 +213,81 @@ test("the campaign cannot be won by clearing every enemy in the air", () => {
   assert.equal(df.operationState!.status, "active");
   assert.equal(df.operationState!.campaignStage, 1);
   df.dispose();
+});
+
+/**
+ * The engine's launch path, with the rendering and audio it does not need: a
+ * campaign is re-launched from the menu or the deck, not from inside a sortie.
+ */
+function engineFor(mode: "campaign" | "strike") {
+  const df: any = new Dogfight(new Scene(), new ExplosionField(new Scene(), "low"));
+  const player = spawnAircraft("carrier", 0);
+  const sim: any = Object.create(Sim.prototype);
+  Object.assign(sim, {
+    settings: { ...defaultSettings(), missionMode: mode, missionStyle: "operation" },
+    df, state: player, mission: "carrier", spawnCarrier: 0, phase: "menu",
+    operationId: 1000, operationSeed: 7, operationOrigin: undefined,
+    netState: { status: "idle" }, pings: [], lastDesignation: null, allPilotsDown: 0,
+    combatSentAt: -Infinity, operationDebrief: false, recoveryPending: false,
+    launchRemembered: false, crashSeq: null, pendingRoom: false, settingsRequest: false,
+    breakupHide: false, battleLife: -1, battleDeadLife: -1, battleReadyAt: 0, battleRecoveryLife: -1,
+    prevPos: player.pos.clone(), prevQuat: player.quat.clone(),
+    rig: { resetFollow() {} },
+    input: { take: () => false, clearEdges() {}, applySettings() {} },
+    audio: { setVolume() {}, resume() {}, dispose() {}, combatFeedback() {}, start() {} },
+    renderer: { setAircraft() {}, setAdaptiveResolution() {}, applyQuality() {} },
+    net: { setAircraft() {}, setMode() {}, setMissionStyle() {}, setWeather() {}, dispose() {} },
+    remoteFleet: { clear() {}, setLinkDelay() {}, dispose() {} },
+    battle: { match: 0, pilots: [] }, chatLog: [],
+    updateHud() {}, updateJetPose() {}, endPod() {}, updateAudio() {}, newState: () => player,
+    setPhase(p: string) { sim.phase = p; },
+  });
+  return { sim, df, player, d: df as any };
+}
+
+test("re-launching a campaign sortie keeps its stage, its wrecks and its operation", () => {
+  const { sim, df, player, d } = engineFor("campaign");
+  sim.applySettings(sim.settings);
+  sim.startMission("carrier");
+  // Fly stage 1 out and let the operation hand over to the convoy.
+  player.onGround = false; player.airborne = true; player.catPhase = "idle"; player.pos.y = 3000; player.speed = 200;
+  df.beginCampaign(player);
+  for (const t of d.strikeTargets) if (t.role === "bunker" || t.role === "hangar" || t.role === "fuel") d.damageTarget(t, 400, player);
+  df.step(1 / 60, player, false);
+  const stage = df.operationState!.campaignStage;
+  const id = df.operationState!.id;
+  assert.equal(stage, 2, "stage 1 handed over to the convoy");
+  // Land, rearm and launch again: the same war, not a fresh one.
+  sim.startMission("carrier");
+  assert.equal(df.operationState!.campaignStage, stage, "the launch kept the stage");
+  assert.equal(df.operationState!.id, id, "and the operation it belongs to");
+  assert.equal(sim.operationId, id, "the sim is flying that operation, not a new one");
+  assert.equal(df.operationState!.status, "active", "and it is still the live war");
+  df.dispose();
+  void df;
+});
+
+test("a non-campaign sortie, and a dead campaign, still start a fresh operation", () => {
+  // Strike is re-tasked from scratch on every launch: the convoy goes back out.
+  const strike = engineFor("strike");
+  strike.sim.applySettings(strike.sim.settings);
+  strike.sim.startMission("carrier");
+  const firstId = strike.df.operationState!.id;
+  strike.sim.startMission("carrier");
+  assert.notEqual(strike.df.operationState!.id, firstId, "a strike relaunch is a new operation");
+  strike.df.dispose();
+  // A campaign the flagship has already lost is over: the next launch is stage 1.
+  const lost = engineFor("campaign");
+  lost.sim.applySettings(lost.sim.settings);
+  lost.sim.startMission("carrier");
+  lost.df.operation!.state.campaignStage = 3;
+  lost.df.operation!.start();
+  lost.df.operation!.damageFleet(120);
+  assert.equal(lost.df.operationState!.status, "failure");
+  lost.sim.startMission("carrier");
+  assert.equal(lost.df.operationState!.campaignStage, 1, "a lost campaign restarts at stage 1");
+  assert.equal(lost.df.operationState!.status, "briefing");
+  lost.df.dispose();
 });
 
 if (failures) process.exit(1);

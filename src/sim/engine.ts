@@ -772,11 +772,31 @@ export class Sim {
     return this.dayHours;
   }
 
+  /**
+   * Claim the attempt the next sortie flies under, and report whether it is a
+   * continuation of the one already under way.
+   *
+   * A campaign is one war across its stages, so re-launching it — after a trap,
+   * a recovery or a rearm — has to keep the attempt it is already flying.
+   * Minting a new id here rebuilds the theatre, and the pilot finds themselves
+   * back on stage 1 with the island intact: the campaign turns into a retry
+   * loop. Every other sortie, and any campaign that has already ended, is a
+   * fresh attempt under a new id (see beginMission).
+   */
+  private mintAttempt(): boolean {
+    const s = this.df.operationState;
+    const continuing = this.settings.missionMode === "campaign" && s?.kind === "campaign"
+      && (s.status === "briefing" || s.status === "active");
+    if (continuing) { this.operationId = s.id; return true; }
+    this.operationId = Math.max(Date.now(), this.operationId + 1);
+    return false;
+  }
+
   startMission(mission: MissionKind): void {
     // Always the pilot's own boat: the launch point follows where they last
     // flew from (see rememberRecovery), so a sortie picks up where it left off
     // instead of hopping to the next ship in the fleet.
-    this.operationId = Math.max(Date.now(), this.operationId + 1); this.operationOrigin = undefined;
+    if (!this.mintAttempt()) this.operationOrigin = undefined;
     this.beginMission(mission, this.spawnCarrier);
   }
 
@@ -794,7 +814,7 @@ export class Sim {
       this.battle = { match: this.battleReferee.match, pilots: [] };
       this.battleTickAt = 0;
     }
-    this.operationId = Math.max(Date.now(), this.operationId + 1);
+    this.mintAttempt();
     if (!this.operationOrigin) { const spawn = spawnAircraft(mission, this.spawnCarrier, this.settings.aircraft, this.settings.bindings); this.operationOrigin = { x: spawn.pos.x, z: spawn.pos.z, heading: spawn.headingDeg, carrier: this.spawnCarrier }; }
     this.net.launch(mission, this.spawnCarrier, { id: this.operationId, seed: this.operationSeed, style: this.settings.missionStyle ?? "operation", origin: this.operationOrigin });
     this.beginMission(mission, this.spawnCarrier);
