@@ -611,7 +611,7 @@ export class Dogfight {
       this.active = true; this.refill();
       if (!this.mirror && this.operation?.state.status === "briefing") {
         this.operation.start(); this.wave = 1; this.roleQueue = ["scout"]; this.launchTimer = 1;
-        this.banner(player, "FLEET DEFENSE — INTERCEPT SCOUT · THEN PROTECT THE CARRIER FROM BOMBERS");
+        this.banner(player, "FLEET DEFENSE — INTERCEPT SCOUT, THEN THE BOMBERS");
       }
       return;
     }
@@ -674,7 +674,7 @@ export class Dogfight {
       this.banner(
         player,
         targetKind === "bastion"
-          ? "OPERATION IRON BASTION — SKIM TERRAIN · DESTROY BUNKER, HANGAR & FUEL DEPOT"
+          ? "OPERATION IRON BASTION — MASK TERRAIN · HIT BUNKER, HANGAR, FUEL"
           : "STOP THE CONVOY — DISABLE 2 TRANSPORTS · ESCORT & RADAR OPTIONAL",
       );
       return;
@@ -1025,7 +1025,7 @@ export class Dogfight {
       const roll = Math.floor(Math.abs(Math.sin(player.time * 43.7 + dmg * 7.1)) * 4);
       if (roll === 0 && sub.engineL > 0.5) {
         sub.engineL = Math.max(0.45, sub.engineL - 0.35);
-        this.banner(player, "PORT ENGINE HIT — ASYMMETRIC THRUST · USE RUDDER TRIM");
+        this.banner(player, "PORT ENGINE HIT — TRIM THE ASYMMETRY");
       } else if (roll === 1 && sub.engineR > 0.5) {
         sub.engineR = Math.max(0.45, sub.engineR - 0.35);
         this.banner(player, "STARBOARD ENGINE HIT — ASYMMETRIC THRUST");
@@ -1035,7 +1035,7 @@ export class Dogfight {
       } else if (!sub.fuelLeak && this.hull <= 75) {
         sub.fuelLeak = true;
         sub.avionics = Math.max(0.5, sub.avionics - 0.3);
-        this.banner(player, "FUEL TANK PUNCTURED — LEAKING FUEL · RECOVER ON CARRIER");
+        this.banner(player, "FUEL LEAK — RECOVER ON CARRIER");
       }
     }
     if (before > 60 && this.hull <= 60) this.banner(player, "TAKING HITS — HULL 60%");

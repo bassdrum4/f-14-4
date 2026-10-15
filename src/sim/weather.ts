@@ -54,7 +54,7 @@ export const WEATHER: Record<WeatherMode, WeatherPreset> = {
     rain: 0,
     fogScale: 1,
     lightning: 0,
-    brief: "Clear skies, calm sea. Ideal for a first launch and a first trap.",
+    brief: "Clear skies, calm sea.",
   },
   overcast: {
     mode: "overcast",
@@ -72,7 +72,7 @@ export const WEATHER: Record<WeatherMode, WeatherPreset> = {
     rain: 0,
     fogScale: 0.7,
     lightning: 0,
-    brief: "A low overcast and a moderate swell. The deck moves under you, and the crosswind is real.",
+    brief: "Low overcast, moderate swell, real crosswind.",
   },
   storm: {
     mode: "storm",
@@ -90,7 +90,7 @@ export const WEATHER: Record<WeatherMode, WeatherPreset> = {
     rain: 1,
     fogScale: 0.28,
     lightning: 6,
-    brief: "A squall line over the task force: heavy swell, driving rain, lightning and a hard crosswind.",
+    brief: "Squall line: heavy swell, driving rain, lightning, hard crosswind.",
   },
 };
 

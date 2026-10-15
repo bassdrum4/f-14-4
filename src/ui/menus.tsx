@@ -193,9 +193,9 @@ function AccountPanel({
     <div className="menu-screen">
       <h3 className="menu-h3">PILOT</h3>
       <p className="menu-note">
-        Your callsign is who the flight sees on the roster and the lobby.
+        Your callsign is what the roster and the lobby show.
         {cloud
-          ? " The gamestate — gamemode, time of day, sensitivity, keybinds, aircraft — is saved to the cloud under it, so any machine can fetch it back."
+          ? " Your gamestate — gamemode, time of day, sensitivity, keybinds, aircraft — is saved under it, so any machine can fetch it back."
           : " Cloud gamestate is not wired up on this build; settings live in this browser."}
       </p>
 
@@ -413,7 +413,7 @@ function PauseMenu({ sim, settings, onSettings }: {
     <div className="ui-root pause-bg">
       <div className="menu-panel small">
         <h2 className="menu-h2">{net.status === "online" ? "FLIGHT MENU" : "PAUSED"}</h2>
-        {net.status === "online" && <p className="menu-note" role="status">Your aircraft is paused. The room keeps flying and your aircraft can still take damage.</p>}
+        {net.status === "online" && <p className="menu-note" role="status">Paused. The room keeps flying and you can still be hit.</p>}
         {screen === "main" && (
           <>
             <div className="menu-buttons">
@@ -540,13 +540,13 @@ function MissionBrief({ mode, settings, onSettings, disabled = false }: {
     </div>}
     <strong>{!authored ? "ENDLESS WAVES" : mode === "campaign" ? "TASK FORCE ARCHON" : mode === "strike" ? (bastion ? "OPERATION IRON BASTION" : "STOP THE CONVOY") : "FLEET DEFENSE"}</strong>
     <p className="menu-note">{!authored ? "Practice against repeating waves. Recover to repair and rearm." : mode === "campaign"
-      ? "Stage 1 neutralizes the island bastion's air defences under terrain masking. Stage 2 stops the reinforcement convoy. Stage 3 defends the group against the opposing carrier. Stages, wrecks and hull damage carry across sorties — land, rearm and go again."
+      ? "Three ordered stages: island bastion, reinforcement convoy, opposing fleet. Stage, wrecks and hull damage carry across sorties."
       : mode === "strike"
       ? bastion
-        ? "A fortified island airbase: command bunker, hardened hangars and a fuel depot, defended by radar-cued SAM batteries and AAA. Fly the radar shadow, kill the radar, then crater the fortifications. The fuel depot chains into everything around it."
-        : "Disable 2 of 3 transports before they unload. Damaging cargo slows it; clearing the escort or radar makes later passes safer. Arrival clock starts on takeoff."
-      : "Intercept the scout, then two escorted bomber attacks. Protect your carrier; bomb the hostile flight deck between attacks to prevent launches."}</p>
-    {authored && <p className="menu-note">Guns and normal bombing controls work. Recovery repairs and rearms without resetting the operation — in the campaign that is how a sortie is flown.</p>}
+        ? "Bunker, hardened hangars and fuel depot, behind radar-cued SAMs and AAA. Kill the radar, then crater the fortifications."
+        : "Stop 2 of 3 transports before they unload. Clearing the escort or radar makes later passes safer."
+      : "Intercept the scout, then two escorted bomber attacks. Bomb the hostile flight deck to stop launches."}</p>
+    {authored && <p className="menu-note">{mode === "campaign" ? "Recovery repairs and rearms without resetting the operation, so a campaign sortie continues where it left off." : "Recovery repairs and rearms without resetting the operation."}</p>}
   </div>;
 }
 
@@ -927,7 +927,7 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
             </div>
           </div>
           {(settings.missionMode === "dogfight" || settings.missionMode === "strike" || settings.missionMode === "campaign") && <MissionBrief mode={settings.missionMode} settings={settings} onSettings={onSettings} disabled={activeOperation} />}
-          {activeOperation && <p className="menu-note">Finish the current operation before selecting a different shared mission.</p>}
+          {activeOperation && <p className="menu-note">Finish the current operation first.</p>}
           <label className="menu-row">
             <span>Weather (the whole room feels it)</span>
             <select

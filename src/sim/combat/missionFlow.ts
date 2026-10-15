@@ -133,7 +133,7 @@ export function stepOperation(ctx: Dogfight, dt: number, player: AircraftState):
     ctx.wave = phase === "strike" ? 2 : 3; ctx.roleQueue = ["bomber", "bomber", "escort"]; ctx.launchTimer = 1;
     ctx.banner(player, phase === "final" ? "FINAL STRIKE — SPLIT BOMBERS INBOUND" : "BOMBER STRIKE — INTERCEPT THE BOMBERS FIRST");
   } else if (phase === "forming") ctx.banner(player, op.state.scoutStopped ? "SCOUT STOPPED — 60 SECONDS TO PREPARE" : "SCOUT REPORTED — STRIKE FORMING IN 15 SECONDS");
-  else if (phase === "counterattack") ctx.banner(player, "COUNTERATTACK WINDOW — 60 SECONDS · BOMB THE FLIGHT DECK OR REARM");
+  else if (phase === "counterattack") ctx.banner(player, "COUNTERATTACK — 60s · BOMB THE DECK OR REARM");
   if (op.state.suppressed) ctx.roleQueue = [];
   if (before !== op.state.status) {
     ctx.roleQueue = []; ctx.launchQueued = 0;
@@ -165,7 +165,7 @@ export function stepRoleAircraft(ctx: Dogfight, b: Bandit, dt: number, player: A
   if (!b.retreat && b.role === "bomber" && dist < 3200 && (b.bombs ?? 0) > 0) {
     b.bombs = 0; b.retreat = true;
     ctx.createEnemyBomb(ctx.nextId++, b.pos.clone().add(new THREE.Vector3(0, -2, 0)), new THREE.Vector3(0, 0, -b.speed).applyQuaternion(b.quat));
-    ctx.banner(player, "BOMBER RELEASE — GUIDED BOMB INBOUND TO YOUR CARRIER");
+    ctx.banner(player, "BOMBER RELEASE — GUIDED BOMB INBOUND");
   }
   if (b.retreat && (b.pos.distanceTo(approach) < 900 || b.sortieTime > 300)) { ctx.removeBandit(b); return; }
   FWD.set(0, 0, -1).applyQuaternion(b.quat); DESIRED.copy(approach).sub(b.pos).normalize();
@@ -212,7 +212,7 @@ export function stepEscortDefense(ctx: Dogfight, dt: number, player: AircraftSta
         const targetId = ctx.defenders.find(p => p.pos === pilot.pos)?.id ?? ctx.localPilot;
         if (targetId) ctx.missiles[ctx.missiles.length - 1].targetPilot = targetId;
         ctx.enemyFire.push({ combatId: ctx.combatId, seq: ++ctx.fireSerial, weapon: "missile", pos: origin.toArray(), vel: aim.toArray(), ...(targetId ? { target: targetId } : {}) });
-        ctx.banner(player, "SAM LAUNCH — BREAK AND DEPLOY FLARES OR DIVE BEHIND TERRAIN");
+        ctx.banner(player, "SAM LAUNCH — BREAK · FLARES OR TERRAIN");
       }
       ctx.threatT = THREAT_HOLD;
       continue;

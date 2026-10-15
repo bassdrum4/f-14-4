@@ -208,7 +208,7 @@ function OperationPanel({ sim, hud, operation: op }: { sim: Sim | null; hud: Hud
     <strong>{operationTitle(s)} <span>{s.kind === "fleet" ? `FRIENDLY ${hud.carrierMarkers[s.fleetCarrier]?.name ?? "CARRIER"} ${Math.round(s.fleetHull)}%` : s.status === "briefing" ? "BRIEFING" : `${s.stopped}/2 STOPPED`}</span></strong>
     <div>{phaseObjective(s)}</div>
     {timer && !resolved && <small>{s.kind === "convoy" ? "NEXT ARRIVAL" : s.phase === "forming" || s.phase === "counterattack" ? "NEXT LAUNCH" : "ESTIMATED CONTACT"} {timer}</small>}
-    {op.warning && <b className="operation-warning">{s.kind === "bastion" || s.phase === "bastion" ? "THREAT TRACKING — MASK WITH TERRAIN OR BREAK" : "ESCORT TRACKING — BREAK OR SUPPRESS THE ESCORT"}</b>}
+    {op.warning && <b className="operation-warning">{s.kind === "bastion" || s.phase === "bastion" ? "THREAT TRACKING — MASK OR BREAK" : "ESCORT TRACKING — BREAK OR SUPPRESS"}</b>}
     {(s.kind === "bastion" || (s.kind === "campaign" && s.phase === "bastion")) && <div className="iads-panel">
       <span className={op.radarOnline ? "on" : "off"}>RADAR {op.radarOnline ? "ONLINE" : "SUPPRESSED"}</span>
       <span className={op.terrainMasked ? "mask on" : "mask"}>{op.terrainMasked ? "TERRAIN MASKED" : "EXPOSED"}</span>
@@ -216,7 +216,6 @@ function OperationPanel({ sim, hud, operation: op }: { sim: Sim | null; hud: Hud
         SAM LOCK
         <i><b style={{ width: `${Math.round((op.samLockProgress ?? 0) * 100)}%` }} /></i>
       </span>
-      <small>Kill the radar and the batteries cannot reach as far; stay in the radar shadow and they cannot see you at all.</small>
     </div>}
     {op.target && !resolved && <div className="operation-bearing">
       <span style={{ display: "inline-block", transform: `rotate(${op.target.bearing - hud.playerHeadingDeg}deg)` }}>▲</span>

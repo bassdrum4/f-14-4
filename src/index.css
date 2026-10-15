@@ -761,7 +761,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .iads-panel span.lock { display: flex; gap: 6px; align-items: center; border: none; padding: 0; }
 .iads-panel span.lock i { display: inline-block; width: 68px; height: 5px; background: rgba(150,200,230,.2); }
 .iads-panel span.lock i b { display: block; height: 100%; background: #ff8165; }
-.iads-panel small { flex-basis: 100%; color: #7d93a5; font-size: 10px; letter-spacing: .04em; }
 
 /* Airframe damage panel (only shown once something is actually broken). */
 .hud-subsystems { position: absolute; left: max(14px, 1.6vw); top: 42%; display: flex; flex-direction: column; gap: 3px; padding: 7px 10px; background: rgba(6,14,20,.55); border-left: 2px solid #ff8165; font-size: 10px; letter-spacing: .08em; color: #ffd7c8; }
