@@ -8,48 +8,32 @@ timeline, recovered intermediate build, and remaining history gaps.
 
 ## 1.9.0 — 2026-10-15
 
-- Add **Operation Iron Bastion**, the island-IADS strike. A fortified airbase's
-  command bunker, hardened hangars and fuel depot are the three primaries;
-  radar-cued SAM batteries and an AAA curtain defend them and score nothing.
-  Terrain masks the radar picture — the HUD says when it does and the batteries
-  lose the lock — and killing the radar both shortens their reach and slows
-  their lock. The fuel depot detonates and chains into what is stored beside
-  it, and a locking battery puts a guided round in the air at the pilot.
-- Add the **Task Force Archon** theatre campaign: three ordered stages (island
-  bastion, reinforcement convoy, opposing fleet) that cannot be won by clearing
-  the map. Each stage hands over to the next, and a recovery carries the stage,
-  the wrecks and the hull damage into the next sortie — that is what makes it a
-  campaign. Losing the flagship fails it outright at any stage.
-- Add theatre **weather**: Clear, Overcast and Storm are a look and a feel at
-  once — wind, gusting and turbulence for the flight model, heave and deck
-  pitch/roll for the fleet, cloud, rain, lightning, thunder and visibility for
-  the renderer, and a rolling deck that carries a parked aircraft with it. It is
-  a pure function of the preset and the world seed, so every pilot in a room
-  flies the same squall without a packet crossing the wire, and the host's
-  weather is the room's weather.
-- Add **airframe battle damage**: an engine can be lost on one side, hydraulics
-  and avionics degrade and a tank can start leaking. The jet flies it as
-  asymmetric yaw and lagging controls, and a damage-control readout lists what
-  is broken — staying dark while the airframe is whole.
-- Add **LSO grades**: Paddles calls the pass live in the groove, and every
-  recovery is graded from slope and lineup (OK, (OK) or no grade) with the deck
-  report on the results card.
-- Add **spectator mode**: watch a room that has already launched without asking
-  the host to admit another aircraft, ride a pilot, a bandit, a deck or the LSO
-  platform, or fly a free camera. A spectator's HUD is the watched aircraft's,
-  broadcasts no pose of its own and never claims the room when the host leaves.
-  Pilots can switch in and out of the seat in the lobby.
-- Add **tactical pings** (`P`): headed, timed markers that cross the room as
-  threat, target or join calls, drawn on the tactical map and listed on the HUD.
-- Add immersion audio on top of the engine bed: airframe buffet that rises with
-  turbulence and stall, a G-strain squeeze that ducks the high frequencies under
-  load, a flyby whoosh whose pitch tracks a wingman's closing rate, and thunder
-  delayed by strike distance.
+- Add Operation Iron Bastion: the island strike becomes a defended airbase with
+  a command bunker, hardened hangars and a fuel depot inside a radar-cued SAM
+  belt and an AAA curtain. Terrain masks the radar picture, and destroying the
+  radar shortens battery reach and slows lock. The fuel depot chains into its
+  neighbours, and a locking battery fires a guided round at the pilot.
+- Add the Task Force Archon campaign: three ordered stages (island bastion,
+  reinforcement convoy, opposing fleet) that cannot be won by clearing the map.
+  A recovery carries the stage, the wrecks and the hull damage into the next
+  sortie; losing the flagship fails it at any stage.
+- Add weather (Clear, Overcast, Storm) as flight model, sea and renderer at
+  once: wind, gusting and turbulence, fleet heave and deck pitch/roll, cloud,
+  rain, lightning, thunder and visibility. It derives from the preset and the
+  world seed, so a room agrees on the squall without a packet, and the host's
+  preset is the room's.
+- Add airframe battle damage — one-sided engine loss, degrading hydraulics and
+  avionics, a leaking tank — flown as asymmetric yaw and lagging controls and
+  listed on a damage-control readout. Add LSO grades with live Paddles calls and
+  slope/lineup grading on the results card.
+- Add spectator mode: watch or ride a pilot, bandit, deck, LSO platform or free
+  camera without admission, broadcasting no pose and never claiming the room,
+  and switch back into a seat from the lobby. Add tactical pings (P), and
+  engine-bed immersion audio: turbulence buffet, G-strain, flyby and thunder.
 - Add setup and lobby controls for weather, the Strike variant and the campaign,
-  a spectator entry in the roster, and the two new bindings (N for views, P for
-  pings). Add `test:iads`, `test:campaign`, `test:weather` and `test:spectate`,
-  exercise the new HUD in a browser, and regenerate both standalone builds.
-  Tests stay local and off GitHub Actions.
+  and the two new bindings (N, P). Add `test:iads`, `test:campaign`,
+  `test:weather` and `test:spectate`, and regenerate both standalone builds.
+  Keep tests local and off GitHub Actions.
 
 ## 1.8.1 — 2026-10-13
 

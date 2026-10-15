@@ -155,30 +155,16 @@ Controls, Graphics, Audio and Interface tabs.
   progress. Retry keeps the seed/layout but changes the attempt ID to reject
   old packets. Next Operation changes the seed. Recovery repairs and rearms
   without resetting objectives. See [mission rules](docs/MISSION-UPDATE.md).
-- **Operation Iron Bastion** is the island strike: a command bunker, hardened
-  hangars and a fuel depot inside a radar-cued SAM belt and an AAA curtain.
-  Terrain masks the radar picture (the HUD says when, and the batteries lose the
-  lock) and killing the radar shortens their reach and slows their lock. The
-  depot chains into what is stored beside it, and a locking battery puts a
-  guided round in the air at the pilot.
-- **Task Force Archon** is the three-stage theatre campaign — island bastion,
-  then a reinforcement convoy, then the opposing fleet. The stages are stepped
-  in order, so clearing the map does not win it, and a recovery carries the
-  stage, the wrecks and the hull damage into the next sortie. Losing the
-  flagship fails it outright at any stage.
-- **Weather** is a look and a feel at once: wind, gusting and turbulence for the
-  flight model, heave and deck pitch/roll for the fleet, cloud, rain, lightning,
-  thunder and visibility for the renderer. It is a pure function of the preset
-  and the world seed, so a room flies the same squall without a packet, and the
-  host's weather is the room's weather.
-- Battle damage is flown, not just listed: an engine can be lost on one side,
-  hydraulics and avionics degrade, and a punctured tank runs dry and takes the
-  engines with it. **Paddles** calls the approach live, and every recovery is
-  graded from slope and lineup with the deck report on the results card.
-- A pilot can enter the room as a **spectator**, watch without asking the host
-  to admit another aircraft, ride a pilot, bandit, deck or the LSO platform, and
-  switch back into a seat from the lobby. **P** pings a headed, timed marker
-  that crosses the room as a threat, target or join call.
+- **Operation Iron Bastion** is the island strike: a bunker, hardened hangars
+  and a fuel depot inside a radar-cued SAM belt and an AAA curtain. Terrain
+  masks the radar, and destroying it shortens battery reach and slows lock.
+- **Task Force Archon** is a three-stage campaign — island bastion, reinforcement
+  convoy, opposing fleet — stepped in order, so clearing the map does not win it.
+  A recovery carries the stage, the wrecks and the hull damage to the next sortie.
+- **Weather** (Clear, Overcast, Storm) drives the flight model, the sea and the
+  renderer from the preset and the world seed, so a room agrees without a packet.
+  Damage is flown as asymmetric yaw, lagging controls and a leaking tank,
+  Paddles calls and grades every pass, and a **spectator** can watch the room.
 - In flight, **O** opens settings without leaving the cockpit, **M** throws up
   the tactical map (the minimap, scaled to fill the view), **P** pings the
   current threat, target or join call, and a spectator moves to its next view
