@@ -108,6 +108,15 @@ const YD_BETA = 2.2; // sideslip feedback (drives rudder to kill beta)
 const CN_R = 2.5; // yaw damping per unit (w * b / 2V)
 const CN_BETA = -0.12; // weathercock stability per rad (sign: beta>0 -> nose right)
 const SWEEP_ROLL_LOSS = 0.35;
+// Pedals. A keyboard pilot steers with the rudder: hold A/D and the nose (and
+// the flight path) should come round; release and it should fly straight on the
+// new heading. A bare rudder moment does neither — it leaves a sideslip that
+// the weathercock and the yaw damper unwind, so the nose snaps back the moment
+// the key comes up. So the pedal asks for a COORDINATED turn: a yaw rate that
+// the flight path follows. The rate is capped by a lateral-acceleration budget,
+// so a held pedal is an honest turn, not a skid, and it fades with speed.
+const RUD_YAW_RATE = 0.35; // rad/s (~20 deg/s) at full pedal, low speed
+const RUD_TURN_G = 1.6; // g: lateral-acceleration budget for the coordination
 
 // Gear contact geometry (body coords, meters)
 const WHEEL_BOTTOM_Y = -2.03; // all tyre bottoms share one body-frame height
@@ -979,6 +988,13 @@ export function stepAircraft(st: AircraftState, inp: FlightInput, dt: number): v
       (CL_BETA * beta -
         spec.clAil * rollAuth * hydAuth * inp.roll -
         spec.clP * ((st.omega.z * bM) / (2 * Math.max(V, 30))));
+    // --- pedals: a coordinated turn, not a bare sideslip ---
+    // The pedal commands a yaw RATE; the deflection that holds it is
+    // feed-forward from the same constants the airframe uses, so the nose comes
+    // round at the asked-for rate instead of wallowing into a slip.
+    const rudRateMax = Math.min(RUD_YAW_RATE, (RUD_TURN_G * GRAVITY) / Math.max(V, 60));
+    const rudRate = clamp(inp.yaw, -1, 1) * rudRateMax; // + = nose right
+    const rudFF = clamp((rudRate * CN_R * bM) / (spec.cnRud * 2 * Math.max(V, 30)), -1, 1);
     // Yaw damper: drives the rudder to kill sideslip and yaw rate, which
     // tames the swept wing's lightly damped dutch roll. Positive = nose right.
     const yawDamper = clamp(
@@ -991,8 +1007,13 @@ export function stepAircraft(st: AircraftState, inp: FlightInput, dt: number): v
     M.y +=
       qSb *
       (CN_BETA * beta -
-        spec.cnRud * (inp.yaw + yawDamper) -
+        spec.cnRud * (rudFF + yawDamper) -
         CN_R * ((st.omega.y * bM) / (2 * Math.max(V, 30))));
+    // Turn coordination: while the pedal is held the flight path curves with
+    // the nose (the centripetal force along the wing, bounded by the g budget
+    // above), so sideslip never builds and there is nothing left for the
+    // weathercock to snap back on release.
+    if (Math.abs(rudRate) > 1e-4) F.x += spec.mass * V * rudRate;
 
     // stall buffet (deterministic)
     st.stalled = alpha > spec.alphaStall * 0.92 || alpha < -spec.alphaStall * 0.92;

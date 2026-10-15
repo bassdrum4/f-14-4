@@ -48,6 +48,11 @@ export class CameraRig {
   private cockpitQ = new THREE.Quaternion();
   private cockpitReady = false;
   private tmpEuler = new THREE.Euler();
+  /**
+   * The view the pod was opened from, so closing it returns the pilot where
+   * they were instead of always dropping them into chase.
+   */
+  private podReturn: CameraMode = "chase";
   /** Pod line of sight, in world yaw/pitch (gimbal-stabilised). */
   private podYaw = 0;
   private podPitch = 0;
@@ -104,13 +109,19 @@ export class CameraRig {
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(aircraftQuat);
     this.podYaw = Math.atan2(fwd.x, -fwd.z);
     this.podPitch = Math.asin(THREE.MathUtils.clamp(fwd.y, -1, 1));
+    // Remember where the pilot was looking; the pod is a detour, not a camera
+    // change, so leaving it must put them back on cockpit / chase / action.
+    if (this.mode !== "pod") this.podReturn = this.mode;
     this.mode = "pod";
   }
 
   exitPod(): void {
-    if (this.mode === "pod") this.mode = "chase";
+    if (this.mode === "pod") this.mode = this.podReturn === "pod" ? "chase" : this.podReturn;
     this.yaw = 0;
     this.pitch = 0;
+    // A restored view snaps to its mark rather than gliding in from the pod.
+    this.cockpitReady = false;
+    this.smoothedReady = false;
   }
 
   label(): string {

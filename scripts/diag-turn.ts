@@ -53,6 +53,11 @@ function bankDeg(st: AircraftState): number {
   return -Math.asin(clamp(right.y, -1, 1)) * RAD; // + = right bank
 }
 
+function headingDeg(st: AircraftState): number {
+  const fwd = new Vector3(0, 0, -1).applyQuaternion(st.quat);
+  return Math.atan2(fwd.x, -fwd.z) * RAD;
+}
+
 /** The keyboard path: press ramps at 3.6/s, release recentres at 2x, then expo. */
 class Axis {
   v = 0;
@@ -226,6 +231,30 @@ class Pilot {
   const rms = Math.sqrt(rates.reduce((a, b) => a + (b - mean) * (b - mean), 0) / rates.length);
   check("full aft stick departs (alpha past stall)", maxAlpha > 0.26 && stalled > 0, `max alpha ${(maxAlpha * RAD).toFixed(1)} deg, ${stalled} frames stalled`);
   check("buffet shake stays bounded (<60 deg/s rms)", rms < 60, `roll rms ${rms.toFixed(1)} deg/s`);
+}
+
+// --- 6. the pedals steer: hold turns, release holds the heading --------------
+// A keyboard pilot flies the rudder as a steering control. A bare yaw moment
+// only leaves sideslip, which the weathercock and the yaw damper unwind — so
+// the nose swung back the other way the instant the key came up. The pedal now
+// asks for a coordinated turn: the nose comes round and the heading stays put
+// when it is released.
+{
+  const st = airborne(205, 3000);
+  for (let i = 0; i < 2 / DT; i++) stepAircraft(st, idle(), DT);
+  const axis = new Axis();
+  const before = headingDeg(st);
+  for (let i = 0; i < 1 / DT; i++) stepAircraft(st, { ...idle(), yaw: axis.move(1, DT) }, DT);
+  const atRelease = headingDeg(st);
+  check("holding the pedal turns the nose", Math.abs(atRelease - before) > 2, `${before.toFixed(1)} -> ${atRelease.toFixed(1)}`);
+  for (let i = 0; i < 4 / DT; i++) stepAircraft(st, { ...idle(), yaw: axis.move(0, DT) }, DT);
+  const settled = headingDeg(st);
+  check(
+    "releasing the pedal holds the new heading",
+    Math.abs(settled - atRelease) < 2.5,
+    `release ${atRelease.toFixed(1)} -> settled ${settled.toFixed(1)}`,
+  );
+  check("the pedal does not leave a residual bank", Math.abs(bankDeg(st)) < 3, `bank ${bankDeg(st).toFixed(1)}`);
 }
 
 console.log(failures === 0 ? "\nALL TURN HANDLING CHECKS PASSED" : `\n${failures} FAILURES`);

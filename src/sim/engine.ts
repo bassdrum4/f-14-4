@@ -1503,19 +1503,7 @@ export class Sim {
     if (online || this.phase === "flying") this.moveFleet(this.fleetClock + (online ? elapsed : frameDt));
     if (online && this.netState.host) this.net.publishFleetClock(this.fleetClock);
 
-    if (this.phase === "flying") {
-      if (!this.crashSeq) this.handleEdges(); // a dead stick answers nothing
-      if (this.phase === "flying") {
-      if (this.spectating) this.stepSpectateRoom(frameDt);
-      else if (!this.crashSeq) this.stepSim(frameDt);
-      }
-    } else if (this.phase === "paused") {
-      if (this.input.take("pause")) this.resume();
-    } else if (this.phase === "result") {
-      this.input.take("pause"); // swallow esc while result shows
-      if (!this.spectating) this.updateJetPose(1);
-      this.updateAudio();
-    }
+    this.advanceFrame(frameDt);
 
     // Ordnance effects run on frame time, not sim steps, so a fireball keeps
     // evolving while the wreck replay plays out — but freezes on pause.
@@ -1553,6 +1541,30 @@ export class Sim {
     this.updateSun();
     this.renderer.render();
   };
+
+  /**
+   * The per-frame phase dispatch, split out of the render loop so a headless
+   * harness can drive it. stepSim owns the crash replay — its own crashSeq
+   * branch advances the wreck and hands over to the result screen — so it has
+   * to run in every flying frame. Gating it on !crashSeq once froze the replay:
+   * the wreck never fell, the result menu never came up, and the only way out
+   * was to quit. handleEdges is what stays gated; a dead stick answers nothing.
+   */
+  private advanceFrame(frameDt: number): void {
+    if (this.phase === "flying") {
+      if (!this.crashSeq) this.handleEdges();
+      if (this.phase === "flying") {
+        if (this.spectating) this.stepSpectateRoom(frameDt);
+        else this.stepSim(frameDt);
+      }
+    } else if (this.phase === "paused") {
+      if (this.input.take("pause")) this.resume();
+    } else if (this.phase === "result") {
+      this.input.take("pause"); // swallow esc while result shows
+      if (!this.spectating) this.updateJetPose(1);
+      this.updateAudio();
+    }
+  }
 
   /**
    * A spectator's frame: no airframe of our own, so the room's fight is mirrored

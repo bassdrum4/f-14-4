@@ -7,7 +7,7 @@
 // Usage: bun scripts/diag-camera.ts   (or: bun run test:camera)
 
 import { Euler, PerspectiveCamera, Quaternion, Vector3 } from "three";
-import { CameraRig, ROLL_FOLLOW } from "../src/render/cameras";
+import { CameraRig, ROLL_FOLLOW, type CameraMode } from "../src/render/cameras";
 
 let failures = 0;
 function check(name: string, cond: boolean, extra = ""): void {
@@ -172,6 +172,33 @@ check(
     Math.abs(ndc.x) < 0.5 && Math.abs(ndc.y) < 0.9,
     `ndc ${ndc.x.toFixed(2)}, ${ndc.y.toFixed(2)}`,
   );
+}
+
+// --- 5. the target pod is a detour: leaving it restores the prior view ------ //
+// The pod is opened to bomb and closed again; it must not silently be a camera
+// change, or a pilot who was in the cockpit is dropped into chase every time.
+{
+  // Read through a function so TypeScript does not keep the assigned literal
+  // narrowed across the rig's own mode changes.
+  const modeNow = (): CameraMode => rig.mode;
+  for (const from of ["chase", "cockpit", "action"] as const) {
+    rig.mode = from;
+    rig.enterPod(new Quaternion());
+    check(`the pod opens from ${from}`, rig.isPod);
+    check(`${from}: entering the pod keeps its own view`, modeNow() === "pod", modeNow());
+    rig.exitPod();
+    check(`closing the pod returns to ${from}`, modeNow() === from, modeNow());
+  }
+  // A second entry from inside the pod must not overwrite the return view.
+  rig.mode = "cockpit";
+  rig.enterPod(new Quaternion());
+  rig.enterPod(new Quaternion());
+  rig.exitPod();
+  check("re-entering the pod keeps the original return view", modeNow() === "cockpit", modeNow());
+  // And closing a pod that was never opened leaves the view alone.
+  rig.mode = "action";
+  rig.exitPod();
+  check("closing a closed pod changes nothing", modeNow() === "action", modeNow());
 }
 
 if (failures > 0) {

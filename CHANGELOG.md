@@ -6,6 +6,22 @@ arrived in large exports with stale 1.0.0 metadata; see
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md) for the surviving
 timeline, recovered intermediate build, and remaining history gaps.
 
+## 1.9.1 — 2026-10-15
+
+- Fix the fatal crash: a solo death froze the wreck in the air with no result
+  screen, because the frame loop skipped the sim (which owns the crash replay)
+  whenever the replay flag was set. The wreck now falls out to the result menu
+  and the stick stays dead through it.
+- Give the target pod back its entry view. Closing the pod (R) dropped the
+  pilot into chase whatever camera they were on; it now restores cockpit,
+  chase or action.
+- Make the pedal steer. A held rudder left a sideslip the weathercock and yaw
+  damper unwound, so the nose snapped back the other way the moment it was
+  released. The pedal now commands a coordinated turn — the nose and the flight
+  path come round together and the heading holds on release.
+- Add `test:crash`, the pod-view checks in `test:camera` and the pedal
+  hold/release checks in `test:turn`, and regenerate both standalone builds.
+
 ## 1.9.0 — 2026-10-15
 
 - Add Operation Iron Bastion: the island strike becomes a defended airbase with

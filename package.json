@@ -1,7 +1,7 @@
 {
   "name": "f14-tomcat-simulator",
   "private": true,
-  "version": "1.9.0",
+  "version": "1.9.1",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port ${PORT:-5173}",
@@ -49,7 +49,8 @@
     "test:iads": "bun scripts/diag-iads.ts",
     "test:campaign": "bun scripts/diag-campaign.ts",
     "test:weather": "bun scripts/diag-weather.ts",
-    "test:spectate": "bun scripts/diag-spectate.ts"
+    "test:spectate": "bun scripts/diag-spectate.ts",
+    "test:crash": "bun scripts/diag-crash.ts"
   },
   "dependencies": {
     "peerjs": "^1.5.5",
