@@ -177,7 +177,7 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
           )}
           <div className="hud-cam">[ENTER] RADIO · [M] MAP · [P] PING</div>
           <div className="hud-cam">
-            {hud.aircraftName} · {hud.cameraMode.toUpperCase()} · [C] CAM · {hud.weatherLabel} · {formatClock(hud.localHour)} {daylight === "live" ? "HST" : "LOCAL"}
+            {hud.aircraftName} · {hud.cameraMode.toUpperCase()} · {hud.weatherLabel} · {formatClock(hud.localHour)} {daylight === "live" ? "HST" : "LOCAL"}
           </div>
         </div>
       </div>
@@ -244,11 +244,11 @@ function Subsystems({ subs }: { subs: NonNullable<HudSnapshot["subsystems"]> }) 
   return <div className="hud-subsystems">
     <strong>AIRFRAME DAMAGE</strong>
     {engine && <span className={subs.engineL < 0.999 && subs.engineR < 0.999 ? "warn" : undefined}>
-      ENG L {Math.round(subs.engineL * 100)}% · R {Math.round(subs.engineR * 100)}%{subs.engineL !== subs.engineR ? " — ASYMMETRIC, TRIM IT OUT" : ""}
+      ENG L {Math.round(subs.engineL * 100)}% · R {Math.round(subs.engineR * 100)}%
     </span>}
-    {subs.hydraulics < 0.999 && <span className="warn">HYDRAULICS {Math.round(subs.hydraulics * 100)}% — CONTROLS LAG</span>}
+    {subs.hydraulics < 0.999 && <span className="warn">HYDRAULICS {Math.round(subs.hydraulics * 100)}%</span>}
     {subs.avionics < 0.999 && <span className="warn">AVIONICS {Math.round(subs.avionics * 100)}%</span>}
-    {subs.fuelLeak && <span className="warn">FUEL LEAK — {Math.round(subs.fuelPct)}% REMAINING · RECOVER</span>}
+    {subs.fuelLeak && <span className="warn">FUEL LEAK {Math.round(subs.fuelPct)}%</span>}
   </div>;
 }
 

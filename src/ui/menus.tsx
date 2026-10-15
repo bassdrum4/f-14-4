@@ -195,7 +195,7 @@ function AccountPanel({
       <p className="menu-note">
         Your callsign is what the roster and the lobby show.
         {cloud
-          ? " Your gamestate — gamemode, time of day, sensitivity, keybinds, aircraft — is saved under it, so any machine can fetch it back."
+          ? " Saved under it: gamemode, time, sensitivity, keybinds, aircraft."
           : " Cloud gamestate is not wired up on this build; settings live in this browser."}
       </p>
 
@@ -338,9 +338,9 @@ function MainMenu({ sim, settings, onSettings, openMultiplayer, onOpenedMultipla
               sim?.leaveRoom();
               if (settings.missionMode === "versus") onSettings({ ...settings, missionMode: "cruise" });
               setScreen("solo");
-            }}><span className="dispatch-number">01</span><span><strong>FLY SOLO</strong><small>Pick your aircraft. Make your own run.</small></span><b aria-hidden="true">↗</b></button>
+            }}><span className="dispatch-number">01</span><span><strong>FLY SOLO</strong><small>Pick your aircraft.</small></span><b aria-hidden="true">↗</b></button>
             <button className="dispatch-action" onClick={() => chooseRoom(false)}><span className="dispatch-number">02</span><span><strong>FLY TOGETHER</strong><small>{net.status === "online" ? `Room ${net.room} · ${net.pilots.length} linked` : "Open a room. Bring a wingman."}</small></span><b aria-hidden="true">↗</b></button>
-            <button className="dispatch-action" onClick={() => chooseRoom(true)}><span className="dispatch-number">03</span><span><strong>HEAD-TO-HEAD</strong><small>Live pilots. Guns and missiles. Settle it in the air.</small></span><b aria-hidden="true">↗</b></button>
+            <button className="dispatch-action" onClick={() => chooseRoom(true)}><span className="dispatch-number">03</span><span><strong>HEAD-TO-HEAD</strong><small>Live pilots, guns and missiles.</small></span><b aria-hidden="true">↗</b></button>
           </div>
           <nav className="dispatch-nav" aria-label="Flight tools">
             <button onClick={() => setScreen("settings")}>SETTINGS</button>
@@ -393,7 +393,7 @@ function FlightSetup({ sim, settings, onSettings, onBack, gate }: {
     {(mode === "strike" || mode === "dogfight" || mode === "campaign") && <MissionBrief mode={mode} settings={settings} onSettings={onSettings} />}
     <p className="menu-note">{MISSION_MODE_LABELS[mode]}</p>
     <label className="menu-row"><span>Weather</span><select value={settings.weather ?? "clear"} onChange={e => onSettings({ ...settings, weather: e.target.value as WeatherMode })}>{(Object.keys(WEATHER_LABELS) as WeatherMode[]).map(w => <option key={w} value={w}>{WEATHER_LABELS[w]}</option>)}</select></label>
-    <p className="menu-note">Home deck · {homeCarrier(settings)}. Land on another boat and that becomes home.</p>
+    <p className="menu-note">Home deck: {homeCarrier(settings)} — land on another boat and it becomes home.</p>
     <div className="menu-buttons"><Btn primary onClick={() => gate(() => launch("carrier"))}>{craft.rotorcraft ? "LIFT OFF — CARRIER" : "CAT SHOT — CARRIER"}</Btn><Btn onClick={() => gate(() => launch("airfield"))}>TAKEOFF — RUNWAY</Btn><Btn onClick={onBack}>BACK</Btn></div>
   </div>;
 }
@@ -540,13 +540,13 @@ function MissionBrief({ mode, settings, onSettings, disabled = false }: {
     </div>}
     <strong>{!authored ? "ENDLESS WAVES" : mode === "campaign" ? "TASK FORCE ARCHON" : mode === "strike" ? (bastion ? "OPERATION IRON BASTION" : "STOP THE CONVOY") : "FLEET DEFENSE"}</strong>
     <p className="menu-note">{!authored ? "Practice against repeating waves. Recover to repair and rearm." : mode === "campaign"
-      ? "Three ordered stages: island bastion, reinforcement convoy, opposing fleet. Stage, wrecks and hull damage carry across sorties."
+      ? "Three ordered stages: island bastion, convoy, opposing fleet. Stage, wrecks and damage carry across sorties."
       : mode === "strike"
       ? bastion
-        ? "Bunker, hardened hangars and fuel depot, behind radar-cued SAMs and AAA. Kill the radar, then crater the fortifications."
-        : "Stop 2 of 3 transports before they unload. Clearing the escort or radar makes later passes safer."
-      : "Intercept the scout, then two escorted bomber attacks. Bomb the hostile flight deck to stop launches."}</p>
-    {authored && <p className="menu-note">{mode === "campaign" ? "Recovery repairs and rearms without resetting the operation, so a campaign sortie continues where it left off." : "Recovery repairs and rearms without resetting the operation."}</p>}
+        ? "Bunker, hangars and fuel depot, behind radar-cued SAMs and AAA."
+        : "Stop 2 of 3 transports before they unload."
+      : "Scout, then two escorted bomber attacks. Bomb the flight deck to stop launches."}</p>
+    {authored && <p className="menu-note">{mode === "campaign" ? "Recovery rearms without resetting the operation, so the war continues." : "Recovery rearms without resetting the operation."}</p>}
   </div>;
 }
 
@@ -567,12 +567,12 @@ function OperationDebrief({ sim }: { sim: Sim }) {
     <h2 className="result-title">{s.status === "success" ? "OBJECTIVE SECURED" : s.status === "failure" ? "OPERATION FAILED" : "OPERATION STATUS"}</h2>
     <p className="result-detail">{phaseObjective(s)}</p>
     <div className="operation-stats">
-      {(s.kind === "bastion" || (s.kind === "campaign" && s.phase === "bastion")) ? <p>Fortress objectives destroyed {s.stopped}/3 · radar {op.radarOnline ? "still up" : "suppressed"} · optional targets {s.optional}</p>
-        : s.kind === "convoy" ? <p>Transports stopped {s.stopped}/3 · arrived {s.arrived}/3 · optional targets {s.optional}</p>
-        : <p>Friendly carrier {Math.round(s.fleetHull)}% · scout {s.scoutStopped ? "intercepted" : s.scoutReported ? "reported" : "pending"} · launches {s.suppressed ? "suppressed" : "active"}</p>}
-      {s.kind === "campaign" && <p>Stage {(s.campaignStage ?? 1)}/3 — {phaseObjective(s)}</p>}
-      <p>{Math.floor(s.elapsed / 60)}m {Math.floor(s.elapsed % 60)}s · shared kills {op.kills} · your ordnance released {op.storesUsed} · weather {hud.weatherLabel}</p>
-      <p>Recovery bonus {op.recoveryBonus ? `+${op.recoveryBonus} (${op.recoveryBonus === 150 ? `wire ${op.recoveryWire}` : "surface recovery"})` : "not yet earned"}</p>
+      {(s.kind === "bastion" || (s.kind === "campaign" && s.phase === "bastion")) ? <p>Fortress {s.stopped}/3 · radar {op.radarOnline ? "up" : "down"} · optional {s.optional}</p>
+        : s.kind === "convoy" ? <p>Stopped {s.stopped}/3 · arrived {s.arrived}/3 · optional {s.optional}</p>
+        : <p>Carrier {Math.round(s.fleetHull)}% · scout {s.scoutStopped ? "stopped" : s.scoutReported ? "reported" : "pending"} · launches {s.suppressed ? "suppressed" : "active"}</p>}
+      {s.kind === "campaign" && <p>Stage {(s.campaignStage ?? 1)}/3</p>}
+      <p>{Math.floor(s.elapsed / 60)}m {Math.floor(s.elapsed % 60)}s · kills {op.kills} · ordnance {op.storesUsed} · {hud.weatherLabel}</p>
+      {op.recoveryBonus > 0 && <p>Recovery +{op.recoveryBonus}{op.recoveryBonus === 150 ? ` · wire ${op.recoveryWire}` : ""}</p>}
     </div>
     <div className="menu-buttons">
       {(!hud.resultKind && s.status !== "failure") && <Btn primary onClick={() => sim.recoverOperation()}>{resolved ? "RECOVER FOR BONUS" : "RESUME OPERATION"}</Btn>}
@@ -598,10 +598,10 @@ function SettingsPanel({ sim = null, settings, onSettings, onBack }: {
       <label className="menu-row"><span>Weather</span><select value={settings.weather ?? "clear"} onChange={e => set({ weather: e.target.value as WeatherMode })}>{(Object.keys(WEATHER_LABELS) as WeatherMode[]).map(m => <option key={m} value={m}>{WEATHER_LABELS[m]}</option>)}</select></label>
       <label className="menu-row"><span>Daylight</span><select value={settings.daylight} onChange={e => set({ daylight: e.target.value as DaylightMode })}>{(Object.keys(DAYLIGHT_LABELS) as DaylightMode[]).map(m => <option key={m} value={m}>{DAYLIGHT_LABELS[m]}</option>)}</select></label>
       <label className="menu-row"><span>Time / {String(Math.floor(settings.timeOfDay)).padStart(2, "0")}:{String(Math.round(settings.timeOfDay % 1 * 60)).padStart(2, "0")}</span><input type="range" min={0} max={23.75} step={0.25} disabled={settings.daylight !== "fixed"} value={settings.timeOfDay} onChange={e => set({ timeOfDay: Number(e.target.value) })} /></label>
-      <p className="menu-note">Choose aircraft and mission in Sortie Setup. Room hosts choose the shared mission in the lobby.</p>
+      <p className="menu-note">Aircraft and mission are set in Sortie Setup; room hosts pick the shared mission.</p>
     </>}
     {tab === "controls" && <><label className="menu-row"><span>Sensitivity / {settings.sensitivity.toFixed(2)}</span><input type="range" min={0.4} max={3} step={0.05} value={settings.sensitivity} onChange={e => set({ sensitivity: Number(e.target.value) })} /></label><ControlsPanel settings={settings} onSettings={onSettings} onBack={onBack} /></>}
-    {tab === "graphics" && <><label className="menu-row"><span>World detail</span><select value={settings.quality} onChange={e => set({ quality: e.target.value as Quality })}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><label className="menu-row"><span>Adaptive resolution</span><input type="checkbox" checked={settings.adaptiveResolution} onChange={e => set({ adaptiveResolution: e.target.checked })} /></label><p className="menu-note">Automatically adjusts picture resolution to keep flight smooth. Low reduces scenery density, effects and shadows.</p></>}
+    {tab === "graphics" && <><label className="menu-row"><span>World detail</span><select value={settings.quality} onChange={e => set({ quality: e.target.value as Quality })}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><label className="menu-row"><span>Adaptive resolution</span><input type="checkbox" checked={settings.adaptiveResolution} onChange={e => set({ adaptiveResolution: e.target.checked })} /></label><p className="menu-note">Drops resolution to hold the frame rate; Low also thins scenery and effects.</p></>}
     {tab === "audio" && <label className="menu-row"><span>Volume / {Math.round(settings.volume * 100)}%</span><input type="range" min={0} max={1} step={0.05} value={settings.volume} onChange={e => set({ volume: Number(e.target.value) })} /></label>}
     {tab === "interface" && <>
       <label className="menu-row"><span>Show minimap</span><input type="checkbox" checked={settings.minimap} onChange={e => set({ minimap: e.target.checked })} /></label>

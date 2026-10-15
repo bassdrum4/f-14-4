@@ -75,7 +75,7 @@ export const AIRCRAFT: Record<AircraftId, AircraftSpec> = {
     id: "tomcat",
     name: "F-14A TOMCAT",
     role: "Interceptor",
-    blurb: "Fast, long-legged, twin-tail fleet defender. Balanced guns and a six-bomb load.",
+    blurb: "Twin-tail fleet defender",
     mass: 30_000,
     sWing: 54.6,
     span: 19.5,
@@ -110,7 +110,7 @@ export const AIRCRAFT: Record<AircraftId, AircraftSpec> = {
     id: "hornet",
     name: "F/A-18C HORNET",
     role: "Multirole",
-    blurb: "Light and quick to roll, with a fast-firing gun. Four bombs and a lighter hull.",
+    blurb: "Light, fast-rolling fighter",
     mass: 17_000,
     sWing: 38,
     span: 12.3,
@@ -145,7 +145,7 @@ export const AIRCRAFT: Record<AircraftId, AircraftSpec> = {
     id: "crusader",
     name: "F-8E CRUSADER",
     role: "Gunfighter",
-    blurb: "The last gunfighter: supersonic, four 20 mm cannon and a four-Sidewinder rack.",
+    blurb: "Supersonic gunfighter",
     // A light-ish delta-winged (42° swept) jet with a small wing, a big engine
     // and the F-8's famous nose-high landing attitude. Fast in a straight line,
     // stubborn in a turn, and the heaviest gun of the fleet.
@@ -183,7 +183,7 @@ export const AIRCRAFT: Record<AircraftId, AircraftSpec> = {
     id: "intruder",
     name: "A-6E INTRUDER",
     role: "Bomber",
-    blurb: "Slow, heavy, and armoured — with sixteen bombs and a hard-hitting pair of guns.",
+    blurb: "Slow, armoured bomb truck",
     mass: 26_000,
     sWing: 49,
     span: 16.2,
@@ -218,7 +218,7 @@ export const AIRCRAFT: Record<AircraftId, AircraftSpec> = {
     id: "seahawk",
     name: "SH-60B SEAHAWK",
     role: "Helicopter",
-    blurb: "Rotary wing: collective for height, cyclic to tilt and go. Hovers, and no cat needed.",
+    blurb: "Rotary wing, no catapult",
     rotorcraft: true,
     // Rotor disc: 210 m^2 over a 16.36 m diameter, ~9.6 t on the skids. The
     // "thrust" figures are the rotor's total thrust: enough margin over weight

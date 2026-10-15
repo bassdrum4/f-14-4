@@ -1159,7 +1159,7 @@ export class Multiplayer {
         if (this.isHostConn(conn) && msg.reason === "started") {
           this.stopSession();
           this.status = "error";
-          this.error = "This room has already started and the host has disabled joining. Join another room or open your own.";
+          this.error = "The host has disabled joining: this room has already started.";
           this.emit();
         }
         break;

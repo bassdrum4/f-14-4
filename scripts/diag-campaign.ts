@@ -70,9 +70,17 @@ test("the campaign opens on stage 1: the island bastion, not a convoy", () => {
   assert(d.strikeTargets.some((t: any) => t.role === "bunker"), "the fortress is on the grid");
   assert(!d.strikeTargets.some((t: any) => t.role === "cargo"), "and no convoy has been laid on yet");
   assert.equal(operationTitle(df.operationState!), "TASK FORCE ARCHON · STAGE 1/3");
-  // The brief names the whole war; in flight the objective tracks the stage.
+  // The brief names the whole war, in the order it is flown; in flight the
+  // objective tracks the stage.
   const brief = Operation.create("campaign", 1, 1, 0);
-  assert(phaseObjective(brief.state).includes("Stage 1: Neutralize Island Bastion IADS"));
+  const briefText = phaseObjective(brief.state);
+  const stages = ["Stage 1: Island Bastion", "Stage 2: Supply Convoy", "Stage 3: Enemy Fleet"];
+  let at = -1;
+  for (const stage of stages) {
+    const seen = briefText.indexOf(stage);
+    assert(seen > at, `the brief names ${stage} after the stage before it: ${briefText}`);
+    at = seen;
+  }
   assert(phaseObjective(df.operationState!).includes("FORTRESS OBJECTIVES"), phaseObjective(df.operationState!));
   df.dispose();
 });

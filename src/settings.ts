@@ -113,11 +113,11 @@ export const WEATHER_LABELS: Record<WeatherMode, string> = {
 };
 
 export const MISSION_MODE_LABELS: Record<MissionMode, string> = {
-  versus: "Head-to-head — fight other pilots in your room",
-  cruise: "Cruise — free flight",
-  dogfight: "Aggressor — fleet defense or endless air combat",
-  strike: "Strike — convoy interdiction, island bastion, or endless practice",
-  campaign: "Theater Campaign — Task Force Archon multi-sortie war",
+  versus: "Pilots in your room, guns and missiles",
+  cruise: "Free flight",
+  dogfight: "Fleet defense, or endless air combat",
+  strike: "Convoy or island, or endless practice",
+  campaign: "Task Force Archon: a three-stage war",
 };
 
 /** Short chips for the picker: the profile name, without the explanation. */
