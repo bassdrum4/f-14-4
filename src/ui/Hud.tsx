@@ -1067,6 +1067,10 @@ function TargetPod({ sim }: { sim: Sim | null }) {
 
 function PitchLadder({ hud }: { hud: HudSnapshot }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  // Keep latest snapshot ref so RAF loop reads fresh HUD state without re-creating effect every frame.
+  const hudRef = useRef(hud);
+  hudRef.current = hud;
+
   useEffect(() => {
     let raf = 0;
     const draw = () => {
@@ -1084,9 +1088,10 @@ function PitchLadder({ hud }: { hud: HudSnapshot }) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
 
+      const currentHud = hudRef.current;
       const cx = w / 2, cy = h / 2;
       const pxPerDeg = Math.min(7, h / 90);
-      const roll = (hud.rollDeg * Math.PI) / 180;
+      const roll = (currentHud.rollDeg * Math.PI) / 180;
 
       ctx.save();
       ctx.translate(cx, cy);
@@ -1101,7 +1106,7 @@ function PitchLadder({ hud }: { hud: HudSnapshot }) {
       ctx.font = "11px monospace";
 
       // horizon line
-      const hy = hud.pitchDeg * pxPerDeg;
+      const hy = currentHud.pitchDeg * pxPerDeg;
       ctx.beginPath();
       ctx.moveTo(-w * 0.32, hy);
       ctx.lineTo(-40, hy);
@@ -1146,8 +1151,8 @@ function PitchLadder({ hud }: { hud: HudSnapshot }) {
       ctx.lineTo(cx + 26, cy);
       ctx.stroke();
       // flight path marker (velocity vector, simplified)
-      const fpa = Math.atan2(hud.vsFpm / 196.85, Math.max(hud.speedKt / 1.94384, 8)) * (180 / Math.PI);
-      const fpy = cy - (hud.pitchDeg - fpa) * pxPerDeg;
+      const fpa = Math.atan2(currentHud.vsFpm / 196.85, Math.max(currentHud.speedKt / 1.94384, 8)) * (180 / Math.PI);
+      const fpy = cy - (currentHud.pitchDeg - fpa) * pxPerDeg;
       ctx.strokeStyle = "rgba(120,255,140,0.95)";
       ctx.beginPath();
       ctx.arc(cx, fpy, 5, 0, Math.PI * 2);
@@ -1160,7 +1165,7 @@ function PitchLadder({ hud }: { hud: HudSnapshot }) {
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [hud]);
+  }, []);
   return <canvas ref={ref} className="hud-ladder" />;
 }
 
