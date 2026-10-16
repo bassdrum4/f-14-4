@@ -530,4 +530,47 @@ await step("a spectator ping is called off what the camera is on", () => {
   check("with the range measured from the camera's aircraft", Math.abs(range.km - 5) < 0.05, range.km);
 });
 
+await step("opening a room publishes the weather already selected on the board", async () => {
+  const owner = makePilot();
+  const sim: any = Object.create(Sim.prototype);
+  Object.assign(sim, {
+    settings: { ...defaultSettings(), weather: "storm", missionMode: "campaign" },
+    remoteFleet: { clear() {} }, net: owner.net,
+  });
+  sim.openRoom("WEATHER HOST", "SKY");
+  await flush();
+  const guest = makePilot();
+  guest.net.join("SKY", "WEATHER GUEST", "tomcat");
+  await flush();
+  check("the guest receives storm without the host changing it again", guest.weather.includes("storm"), JSON.stringify(guest.weather));
+  guest.net.leave(); owner.net.leave();
+});
+
+await step("spectators can take a cockpit seat in the current room sortie", () => {
+  for (const returningPilot of [false, true]) {
+    const sim: any = Object.create(Sim.prototype);
+    const launches: Array<{ mission: string; carrier: number }> = [];
+    const profile = { id: 1234, seed: 7, style: "operation" };
+    Object.assign(sim, {
+      netState: { status: "online", host: false, spectator: true },
+      phase: "flying", operationId: profile.id, lastRoomLaunch: null,
+      renderer: { jetGroup: { visible: false } },
+      net: { setSpectator(on: boolean) { sim.netState.spectator = on; } },
+      applyRoomStyle() {},
+      beginMission(mission: string, carrier: number) { launches.push({ mission, carrier }); },
+      quitToMenu() { sim.phase = "menu"; },
+    });
+    if (returningPilot) sim.lastRoomLaunch = { mission: "carrier", carrier: 1, profile };
+    else sim.followLaunch("carrier", 1, profile);
+    check("the current launch is remembered while watching", sim.lastRoomLaunch?.profile === profile);
+    sim.setSpectating(false);
+    check(`${returningPilot ? "a returning pilot" : "a spectator joiner"} launches on the room's boat`, launches.length === 1 && launches[0].carrier === 1 && launches[0].mission === "carrier");
+    check("the room's operation identity is preserved", sim.operationId === profile.id);
+    check("the own-aircraft mesh is restored", sim.renderer.jetGroup.visible && !sim.spectating);
+    // A normal duplicate host launch still must not reset an airborne pilot.
+    sim.followLaunch("carrier", 1, profile);
+    check("duplicate room launches leave an active pilot alone", launches.length === 1);
+  }
+});
+
 if (failures) process.exit(1);

@@ -298,4 +298,31 @@ test("a non-campaign sortie, and a dead campaign, still start a fresh operation"
   lost.df.dispose();
 });
 
+test("the normal takeoff frame starts the campaign and preserves it on a later sortie", () => {
+  const { sim, df, player, d } = engineFor("campaign");
+  sim.renderer.setWind = () => {};
+  sim.input.sample = () => ({ pitch: 0, roll: 0, yaw: 0, fire: false });
+  sim.worldSeed = DEFAULT_SEED;
+  const takeoffFrame = () => {
+    player.onGround = false; player.airborne = true; player.catPhase = "idle";
+    player.pos.y = 3000; player.vel.set(0, 0, -180); player.speed = 180;
+    sim.stepSim(1 / 120);
+  };
+  sim.startMission("carrier");
+  takeoffFrame();
+  assert.equal(df.operationState!.kind, "campaign");
+  assert.equal(df.operationState!.status, "active");
+  assert.equal(df.operationState!.phase, "bastion");
+  for (const t of d.strikeTargets) if (t.role === "bunker" || t.role === "hangar" || t.role === "fuel") d.damageTarget(t, 400, player);
+  df.step(1 / 60, player, false);
+  const id = df.operationState!.id;
+  assert.equal(df.operationState!.campaignStage, 2);
+  sim.startMission("carrier");
+  takeoffFrame();
+  assert.equal(df.operationState!.id, id);
+  assert.equal(df.operationState!.kind, "campaign");
+  assert.equal(df.operationState!.campaignStage, 2);
+  df.dispose();
+});
+
 if (failures) process.exit(1);
