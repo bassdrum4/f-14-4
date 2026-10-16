@@ -163,6 +163,7 @@ export interface Bomb {
   pos: THREE.Vector3;
   vel: THREE.Vector3;
   arm: number; // s until the fuze is live
+  age: number; // s since release — the laser's guidance window runs on this
   mesh: THREE.Object3D;
   /** Laser-guided: steers onto `target` (the designation) while it falls. */
   guided: boolean;

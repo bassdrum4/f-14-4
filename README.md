@@ -126,8 +126,12 @@ Controls, Graphics, Audio and Interface tabs.
   weapon goes to the spot under the cursor rather than wherever the drag
   happened to end. Every later click re-aims the laser and pulls bombs already
   in flight onto the new spot. A shared trajectory predictor checks each click
-  and warns without spending a bomb if the spot cannot be reached. Guidance,
-  racks and release cadence stay the same.
+  and warns without spending a bomb if the spot cannot be reached. The weapon is
+  genuinely laser-guided: it steers hard onto the painted spot and every
+  correction costs it speed, so the designator's guidance window bounds the shot
+  at a few kilometres — inside it the click is hit, past it the store flies
+  ballistically and the release is refused. Racks and release cadence stay the
+  same.
 - Head-to-head uses the existing room codes and PeerJS connection. Open a room,
   have another pilot join, then the host selects Head-to-head and Start Air Battle.
   Pilots spawn airborne apart on **two carriers drawn from the match id** (one

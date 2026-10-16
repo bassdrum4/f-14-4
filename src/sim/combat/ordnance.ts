@@ -118,7 +118,8 @@ export function stepBombs(ctx: Dogfight, dt: number, player: AircraftState, held
   }
   for (let i = ctx.bombs.length - 1; i >= 0; i--) {
     const b = ctx.bombs[i];
-    advanceBomb(b.pos, b.vel, b.guided ? b.target : null, dt);
+    b.age += dt;
+    advanceBomb(b.pos, b.vel, b.guided ? b.target : null, dt, b.age);
     b.mesh.position.copy(b.pos);
     b.mesh.quaternion.setFromUnitVectors(NOSE_Z, DIR.copy(b.vel).normalize());
 
@@ -236,6 +237,7 @@ export function releaseBomb(ctx: Dogfight, player: AircraftState): void {
     pos,
     vel,
     arm: BOMB_ARM,
+    age: 0,
     mesh,
     guided,
     target: guided ? ctx.designation!.clone() : null,

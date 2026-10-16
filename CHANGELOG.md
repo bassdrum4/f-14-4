@@ -6,6 +6,20 @@ arrived in large exports with stale 1.0.0 metadata; see
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md) for the surviving
 timeline, recovered intermediate build, and remaining history gaps.
 
+## 1.9.3 — 2026-10-16
+
+- Make the laser-guided bomb genuinely guided, with a bounded envelope.
+  Steering rotated the weapon's velocity vector at no cost, so a store held a
+  flat line of sight indefinitely and could chase a designated spot 22 km away
+  in over two minutes — a glider, not a bomb. Every radian of correction now
+  costs the weapon speed (canard lift costs energy), and the designator guides
+  for a finite window; when that window closes the store flies ballistically
+  like any other iron bomb. Measured envelope: a click inside roughly 5–8 km
+  (depending on release altitude and speed) is still hit inside the detonation
+  radius — including up to 100° off the nose — while past that limit the release
+  is refused with the existing "BOMB CANNOT REACH TARGET" warning rather than
+  spent. No visual changes. `test:bomb-envelope` pins the new reach.
+
 ## 1.9.2 — 2026-10-15
 
 - Make the pod click the shot. Aiming the sensor is a drag and the weapon goes

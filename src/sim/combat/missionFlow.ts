@@ -245,7 +245,7 @@ export function stepEnemyBombs(ctx: Dogfight, dt: number, player: AircraftState)
   const c = carriers()[s.fleetCarrier] ?? carriers()[0], target = new THREE.Vector3(c.x, c.deckY + 2, c.z);
   if (s.fleetHull < 70) { ctx.fleetSmokeTimer -= dt; if (ctx.fleetSmokeTimer <= 0) { ctx.blasts.trail(target, 3, 4); ctx.fleetSmokeTimer = .7; } }
   for (let i = ctx.enemyBombs.length - 1; i >= 0; i--) {
-    const b = ctx.enemyBombs[i]; b.age += dt; advanceBomb(b.pos, b.vel, target, dt);
+    const b = ctx.enemyBombs[i]; b.age += dt; advanceBomb(b.pos, b.vel, target, dt, b.age);
     b.mesh.position.copy(b.pos); b.mesh.quaternion.setFromUnitVectors(NOSE_Z, b.vel.clone().normalize());
     if (ctx.mirror) continue;
     const hit = b.age >= BOMB_ARM && (b.pos.distanceTo(target) < 15 || (b.pos.y <= c.deckY + 2 && isOnDeck(c, b.pos.x, b.pos.z)));

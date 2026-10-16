@@ -10,7 +10,12 @@ function check(name: string, pass: boolean) { console.log(`${pass ? 'PASS' : 'FA
 const start = new Vector3(-27000, 900, -27000), velocity = new Vector3(0,-2.5,-240);
 const near = new Vector3(-27000,0,-28000);
 check('a normal altitude/range drop can reach the spot', canBombReach(start,velocity,near));
-check('long drops remain available when guidance can reach the spot', canBombReach(new Vector3(-27000,30,-27000),new Vector3(0,-2.5,-300),new Vector3(-27000,0,-39000)));
+// The laser's guidance window bounds the weapon. A low, fast release is still
+// answered out to its glide limit, and past that limit the store flies
+// ballistically and the spot cannot be reached: the old free-energy steering
+// held a line of sight forever and would chase a target 22 km away.
+check('a glide inside the laser window reaches the spot', canBombReach(new Vector3(-27000,30,-27000),new Vector3(0,-2.5,-300),new Vector3(-27000,0,-35000)));
+check('a stand-off past the laser window is refused', !canBombReach(new Vector3(-27000,30,-27000),new Vector3(0,-2.5,-300),new Vector3(-27000,0,-39000)));
 check('a target behind a low fast aircraft is unreachable', !canBombReach(new Vector3(-27000,15,-27000),new Vector3(0,-2.5,-300),new Vector3(-27000,0,-26000)));
 const scene = new Scene(), df = new Dogfight(scene, new ExplosionField(scene,'low'));
 const player=spawnAircraft('airfield',0); player.pos.copy(start); player.vel.copy(velocity);player.onGround=false;player.gearT=0;
