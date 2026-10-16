@@ -675,7 +675,7 @@ export function ControlsPanel({ settings, onSettings, onBack }: {
       )}
       <p className="menu-note">
         Drag the mouse to look around · {keyLabel(settings.bindings.camera)} cycles chase / cockpit / action. {keyLabel(settings.bindings.bomb)} opens
-        the target pod: drag to slew the sensor, release over a target to send a
+        the target pod: drag to slew the sensor, then click a target to send a
         laser-guided bomb.
       </p>
       <div className="menu-row-btns">

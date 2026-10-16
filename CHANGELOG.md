@@ -6,6 +6,26 @@ arrived in large exports with stale 1.0.0 metadata; see
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md) for the surviving
 timeline, recovered intermediate build, and remaining history gaps.
 
+## 1.9.2 — 2026-10-15
+
+- Make the pod click the shot. Aiming the sensor is a drag and the weapon goes
+  to the spot under the cursor, but the release of the drag was firing too —
+  from a moving hand, at wherever the gate happened to be when the button came
+  up, so a slew made to look around spent a bomb on the way past. A drag now
+  only slews and the click behind it is the designation, which is the click the
+  pilot actually makes: a tap on a target puts the weapon on it (measured
+  4 m at 4.7 km, the pixel resolution of the sensor at that range).
+- Stop the HUD eating pod clicks: the radio box and the operation panel take
+  pointer events and sit over the canvas, so a designation aimed at the lower
+  half of the sensor frame landed on a panel instead of the ground. Nothing on
+  the HUD is clickable while the pod is up.
+- Add `test:pod-click`, which drives the real pod path — real input gestures,
+  real camera rig, real `Sim.handlePodClick`, in the frame order the loop runs
+  them — and checks that a slew fires nothing, that a click designates what it
+  was aimed at, that the weapon detonates on it, and that a spot the weapon
+  cannot reach is refused with the reason rather than spent. Regenerate both
+  standalone builds.
+
 ## 1.9.1 — 2026-10-15
 
 - Fix the fatal crash: a solo death froze the wreck in the air with no result

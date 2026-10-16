@@ -42,16 +42,17 @@ export class InputManager {
   /** Pointer position in client pixels, for HUD designators. */
   pointerX = 0;
   pointerY = 0;
-  /** Left-clicks (press + release without dragging) waiting to be consumed. */
+  /**
+   * Left-clicks (a press and release that did not travel) waiting to be
+   * consumed. A drag is never a click anywhere, the target pod included: a
+   * slew is how the sensor is aimed, and the shot is the click that follows
+   * it. Taking the shot from the release of the slew instead fires while the
+   * hand is still moving — and teleports the aim to whatever the cursor
+   * happens to cross on the way.
+   */
   private clicks: ClickEvent[] = [];
   private pressStart: ClickEvent | null = null;
   private pressTravel = 0;
-  /**
-   * In the target pod a slew *ends* in a designation, so a release after
-   * dragging still counts as a click. Everywhere else a camera drag is not a
-   * click, or looking around would fire the guns course changes.
-   */
-  clicksAfterDrag = false;
 
   // rebind capture
   capture: ((code: string) => void) | null = null;
@@ -189,8 +190,9 @@ export class InputManager {
     const wasDrag = this.dragging;
     this.dragging = false;
     this.pressStart = null;
-    const slop = this.clicksAfterDrag ? Infinity : 4;
-    if (hadPress && (!wasDrag || this.clicksAfterDrag) && this.pressTravel <= slop) {
+    // Only a press that stayed put is a click. A release that ends a camera
+    // drag — in the target pod too — is just the end of the drag.
+    if (hadPress && !wasDrag && this.pressTravel <= 4) {
       this.clicks.push({ x: e.clientX, y: e.clientY });
       if (this.clicks.length > 4) this.clicks.shift();
     }

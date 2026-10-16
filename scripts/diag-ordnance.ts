@@ -448,25 +448,19 @@ function newFight(player: AircraftState): { df: Dogfight; blasts: ExplosionField
   check("and that drag still aims the view", flying.takeMouse().dx === 120);
   flying.detach();
 
-  // in the pod: slew onto the target, let go, and the weapon goes
+  // in the pod: the drag aims the sensor and the click behind it is the shot
   const pod = new InputManager(defaultSettings());
   pod.attach(el as unknown as HTMLElement);
-  pod.clicksAfterDrag = true;
   gesture([400, 300], [520, 380]);
-  const shot = pod.takeClick();
-  check("a pod slew fires where the button came up",
-    shot !== null && shot.x === 520 && shot.y === 380, JSON.stringify(shot));
+  check("a pod slew does not fire on the way, wherever it started or ended",
+    pod.takeClick() === null);
   check("the pod still slews while the button is down", pod.takeMouse().dx === 120);
-  // a tap (no travel) fires at the same gate without swinging the sensor
-  gesture([600, 400], [602, 401]);
+  // the click that follows the slew is the shot, at the pixel it was made on
+  gesture([520, 380], [521, 380]);
   const tap = pod.takeClick();
-  check("a tap in the pod fires at the gate without slewing the sensor",
-    tap !== null && tap.x === 602 && tap.y === 401 && pod.takeMouse().dx === 0,
+  check("a click in the pod fires at the gate without swinging the sensor",
+    tap !== null && tap.x === 521 && tap.y === 380 && pod.takeMouse().dx === 0,
     JSON.stringify(tap));
-  // and the gesture is pod-only: closing the pod restores camera-drag behaviour
-  pod.clicksAfterDrag = false;
-  gesture([300, 300], [420, 300]);
-  check("leaving the pod stops drag releases from firing", pod.takeClick() === null);
   pod.detach();
   delete (globalThis as unknown as { window?: unknown }).window;
 }

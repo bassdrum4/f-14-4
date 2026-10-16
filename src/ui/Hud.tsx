@@ -61,7 +61,7 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
 }) {
   const hud = useHud(sim);
   return (
-    <div className="hud-root">
+    <div className={hud.pod ? "hud-root pod" : "hud-root"}>
       {hud.operation && <OperationPanel key={hud.operation.state.id} sim={sim} hud={hud} operation={hud.operation} />}
       {hud.battle && <div className="battle-board">
         <strong>HEAD-TO-HEAD <span>ROOM {hud.netRoom}</span></strong>
@@ -1118,7 +1118,7 @@ function TargetPod({ sim }: { sim: Sim | null }) {
       ctx.fillText("TARGET POD", m, m - 10);
       ctx.fillStyle = "rgba(214,236,255,0.85)";
       ctx.font = "11px ui-monospace, monospace";
-      ctx.fillText("DRAG TO SLEW · RELEASE OVER A TARGET TO LAUNCH", m, h - m + 22);
+      ctx.fillText("DRAG TO SLEW · CLICK A TARGET TO LAUNCH", m, h - m + 22);
       ctx.fillText("[R] OR [C] TO LEAVE THE POD", m, h - m + 38);
       ctx.fillStyle = "rgba(255,210,80,0.9)";
       ctx.fillText(

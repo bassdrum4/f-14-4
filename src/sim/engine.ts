@@ -2014,25 +2014,20 @@ export class Sim {
     // a click queued before the pod opened (a menu button, say) must not
     // immediately designate a target
     this.input.clearClicks();
-    // Aiming the pod is a drag, so the drag's release is the shot: the player
-    // slews onto the target and lets go, rather than having to aim and then
-    // hold still for a second, separate click.
-    this.input.clicksAfterDrag = true;
     this.rig.enterPod(this.state.quat);
     this.pod = true;
     const el = this.renderer.renderer.domElement;
     el.style.cursor = "crosshair";
     this.pushBanner(
       this.df.designated
-        ? "TARGET POD — SLEW ONTO A TARGET, RELEASE TO RE-ENGAGE · [R] TO LEAVE"
-        : "TARGET POD — SLEW THE SENSOR ONTO A TARGET, RELEASE TO LAUNCH",
+        ? "TARGET POD — SLEW ONTO A TARGET, CLICK TO RE-ENGAGE · [R] TO LEAVE"
+        : "TARGET POD — SLEW THE SENSOR ONTO A TARGET, THEN CLICK IT TO LAUNCH",
     );
   }
 
   private endPod(): void {
     if (!this.pod) return;
     this.pod = false;
-    this.input.clicksAfterDrag = false;
     this.rig.exitPod();
     this.renderer.renderer.domElement.style.cursor = "";
     this.input.clearClicks();
@@ -2040,8 +2035,9 @@ export class Sim {
 
   /**
    * A click in the pod view: pick the surface under the cursor, paint the laser
-   * there, and send one weapon after it. Every later release goes to the same
-   * spot until the player clicks again.
+   * there, and send one weapon after it. Slew with any drag you like — only the
+   * click is a shot — and every later click moves the same laser to the new
+   * spot, pulling weapons already in the air with it.
    */
   private handlePodClick(): void {
     const click = this.input.takeClick();

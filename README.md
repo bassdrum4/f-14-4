@@ -1,6 +1,6 @@
 # F-14 Carrier Simulator
 
-Current published build label: **1.9.1**, continuing the reconstructed version
+Current published build label: **1.9.2**, continuing the reconstructed version
 sequence. See [CHANGELOG.md](CHANGELOG.md) for the counting rule and
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md)
 for the earlier development, recovered builds and missing release history.
@@ -121,10 +121,13 @@ Controls, Graphics, Audio and Interface tabs.
   wire area. A missed wire leaves the aircraft controllable for a go-around.
   Runway landings are confirmed after slowing below 12 m/s: idle throttle and
   hold the wheel-brake binding (B by default).
-- Bombing keeps **R → designate/release by click**, including release after a
-  pod drag and retargeting bombs already in flight. A shared trajectory predictor
-  checks each queued release and warns without spending a bomb if the spot
-  cannot be reached. Guidance, racks and release cadence stay the same.
+- Bombing keeps **R → slew, then click a target**. The click is the shot:
+  dropping out of a slew never fires, so looking around costs nothing and the
+  weapon goes to the spot under the cursor rather than wherever the drag
+  happened to end. Every later click re-aims the laser and pulls bombs already
+  in flight onto the new spot. A shared trajectory predictor checks each click
+  and warns without spending a bomb if the spot cannot be reached. Guidance,
+  racks and release cadence stay the same.
 - Head-to-head uses the existing room codes and PeerJS connection. Open a room,
   have another pilot join, then the host selects Head-to-head and Start Air Battle.
   Pilots spawn airborne apart on **two carriers drawn from the match id** (one
@@ -198,5 +201,6 @@ npm run test:iads
 npm run test:campaign
 npm run test:weather
 npm run test:spectate
+npm run test:pod-click
 npm run check:standalone
 ```
