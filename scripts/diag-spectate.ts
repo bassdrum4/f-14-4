@@ -573,4 +573,53 @@ await step("spectators can take a cockpit seat in the current room sortie", () =
   }
 });
 
-if (failures) process.exit(1);
+{
+    const h = makePilot();
+    h.net.open('GATED', 'HOST', 'tomcat');
+    await flush();
+    h.net.setAllowLateJoin(false);
+    h.net.launch('carrier', 0);
+    await flush();
+    const w = makePilot();
+    w.net.spectate('GATED', 'WATCHER', 'tomcat');
+    await flush();
+    w.net.setSpectator(false);
+    await flush();
+    check('S1 closed rooms keep watchers out of cockpit seats', h.net.snapshot.pilots.find(p => p.name === 'WATCHER')?.spectator === true && !h.roster.has(w.net.snapshot.self));
+    h.net.setAllowLateJoin(true);
+    await flush();
+    w.net.setSpectator(false);
+    await flush();
+    check('reopening admission permits taking a seat', h.net.snapshot.pilots.find(p => p.name === 'WATCHER')?.spectator === false && h.roster.has(w.net.snapshot.self));
+    w.net.leave();
+    h.net.leave();
+}
+{
+    const h = makePilot();
+    h.net.open('CLEAR', 'HOST', 'tomcat');
+    await flush();
+    const w = makePilot();
+    let selectedWeather = 'storm';
+    (w.net as any).handlers.onWeather = (v: string) => { selectedWeather = v; };
+    w.net.join('CLEAR', 'STORM USER', 'tomcat');
+    await flush();
+    check('W1 a clear room overrides the guest saved storm', selectedWeather === 'clear');
+    w.net.leave();
+    h.net.leave();
+}
+{
+    const h = makePilot();
+    h.net.open('ONLYSPEC', 'HOST', 'tomcat');
+    await flush();
+    const w = makePilot();
+    w.net.spectate('ONLYSPEC', 'WATCHER', 'tomcat');
+    await flush();
+    h.net.leave();
+    await advance(100);
+    const promoted = { host: w.net.snapshot.host, spectator: w.net.snapshot.spectator };
+    w.net.setSpectator(false);
+    check('S3 the promoted spectator can take a seat', !!promoted.host && !!promoted.spectator && !!w.net.snapshot.host && !w.net.snapshot.spectator);
+    w.net.leave();
+}
+if (failures)
+    process.exit(1);

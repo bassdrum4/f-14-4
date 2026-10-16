@@ -9,7 +9,7 @@ import type { Sim, HudSnapshot } from "../sim/engine";
 import type { ChatMsg } from "../net/multiplayer";
 import { DEFAULT_SEED } from "../sim/world";
 import type { DaylightMode } from "../settings";
-import { operationTitle, phaseObjective, type OperationHud } from "../sim/operations";
+import { operationTitle, phaseObjective, operationProgress, type OperationHud } from "../sim/operations";
 
 export function useHud(sim: Sim | null): HudSnapshot {
   const subscribe = (cb: () => void) => {
@@ -205,7 +205,7 @@ function OperationPanel({ sim, hud, operation: op }: { sim: Sim | null; hud: Hud
   const s = op.state, resolved = s.status === "success" || s.status === "failure";
   const timer = op.eta === null ? "" : `${Math.floor(op.eta / 60)}:${String(Math.floor(op.eta % 60)).padStart(2, "0")}`;
   return <div className={"operation-panel " + s.status} aria-live="polite" style={{ pointerEvents: sim?.phase === "flying" ? "auto" : "none" }}>
-    <strong>{operationTitle(s)} <span>{s.kind === "fleet" ? `FRIENDLY ${hud.carrierMarkers[s.fleetCarrier]?.name ?? "CARRIER"} ${Math.round(s.fleetHull)}%` : s.status === "briefing" ? "BRIEFING" : `${s.stopped}/2 STOPPED`}</span></strong>
+    <strong>{operationTitle(s)} <span>{operationProgress(s, hud.carrierMarkers[s.fleetCarrier]?.name)}</span></strong>
     <div>{phaseObjective(s)}</div>
     {timer && !resolved && <small>{s.kind === "convoy" ? "NEXT ARRIVAL" : s.phase === "forming" || s.phase === "counterattack" ? "NEXT LAUNCH" : "ESTIMATED CONTACT"} {timer}</small>}
     {op.warning && <b className="operation-warning">{s.kind === "bastion" || s.phase === "bastion" ? "THREAT TRACKING — MASK OR BREAK" : "ESCORT TRACKING — BREAK OR SUPPRESS"}</b>}

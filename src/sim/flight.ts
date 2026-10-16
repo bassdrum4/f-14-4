@@ -1289,6 +1289,10 @@ const HUP = new Vector3();
 const HRT = new Vector3();
 
 function stepRotorcraft(st: AircraftState, inp: FlightInput, dt: number): void {
+  const sub = st.subsystems;
+  if (sub?.fuelLeak) sub.fuelPct = Math.max(0, sub.fuelPct - dt * 0.45);
+  const enginePower = sub ? (sub.fuelPct <= 0 ? 0 : (sub.engineL + sub.engineR) * 0.5) : 1;
+  const hydraulicAuthority = sub ? 0.45 + 0.55 * sub.hydraulics : 1;
   const spec = st.spec;
   const atm = atmosphere(st.pos.y);
 
@@ -1306,7 +1310,7 @@ function stepRotorcraft(st: AircraftState, inp: FlightInput, dt: number): void {
   const fore = -inp.pitch;
   // On the ground the cyclic is lazy and self-centres, so the machine does not
   // lean on its stops while parked; in the air it holds whatever is commanded.
-  const auth = st.onGround ? 0.35 : 1;
+  const auth = (st.onGround ? 0.35 : 1) * hydraulicAuthority;
   st.pitchRef = clamp(
     st.pitchRef + fore * HELI_CYCLIC_RATE * auth * dt,
     -HELI_MAX_TILT,
@@ -1323,7 +1327,7 @@ function stepRotorcraft(st: AircraftState, inp: FlightInput, dt: number): void {
   }
   const qCmd = clamp(HELI_ATT_GAIN * (st.pitchRef - pitchAtt), -HELI_PITCH_RATE_MAX, HELI_PITCH_RATE_MAX);
   const pCmd = clamp(HELI_ATT_GAIN * (st.rollRef - rollAtt), -HELI_ROLL_RATE_MAX, HELI_ROLL_RATE_MAX);
-  let yCmd = -inp.yaw * HELI_YAW_RATE; // omega.y + = nose left
+  let yCmd = -inp.yaw * HELI_YAW_RATE * hydraulicAuthority; // omega.y + = nose left
 
   // --- turn coordination: the nose goes where the bank takes it ---
   // Banking tilts the disc and the flight path curves with it; the fin and the
@@ -1375,7 +1379,7 @@ function stepRotorcraft(st: AircraftState, inp: FlightInput, dt: number): void {
 
   // --- rotor thrust (collective) ---
   const coll = st.rpm;
-  let thrust = (spec.idleThrust + (spec.thrustDry - spec.idleThrust) * coll) * atm.sigma;
+  let thrust = (spec.idleThrust + (spec.thrustDry - spec.idleThrust) * coll) * atm.sigma * enginePower;
   if (st.crashFall) thrust = 0;
 
   // --- forces (world): rotor along body up, gravity, parasite drag ---

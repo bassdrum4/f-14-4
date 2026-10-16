@@ -42,6 +42,7 @@ export function applySharedSnapshot(ctx: Dogfight, frame: SharedCombat, nowMs: n
   ctx.fireSerial = Math.max(frame.fireSerial, ctx.receivedFire);
   ctx.scenario = frame.scenario; ctx.active = frame.active; ctx.wave = frame.wave; ctx.kills = frame.kills;
   ctx.operation = frame.operation ? new Operation({ ...frame.operation }) : null;
+  if (frame.operation?.kind === "bastion" || frame.operation?.kind === "convoy") ctx.strikeVariant = frame.operation.kind;
   ctx.authored = !!frame.operation; ctx.roleQueue = [...frame.queue]; ctx.launchTimer = frame.launchTimer; ctx.nextId = frame.nextId;
   ctx.applyRemoteCarrier(frame.carrier);
   const seen = new Set<number>();
