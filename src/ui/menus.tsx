@@ -527,13 +527,13 @@ function ResultOverlay({ sim, settings }: { sim: Sim; settings: Settings }) {
 function MissionBrief({ mode, settings, onSettings, disabled = false }: {
   mode: "strike" | "dogfight" | "campaign"; settings: Settings; onSettings: (s: Settings) => void; disabled?: boolean;
 }) {
-  const authored = settings.missionStyle !== "endless";
+  const authored = mode === "campaign" || settings.missionStyle !== "endless";
   const bastion = (settings.strikeVariant ?? "convoy") === "bastion";
   return <div className="mission-brief">
-    <div className="menu-world-chips">
+    {mode !== "campaign" && <div className="menu-world-chips">
       <button disabled={disabled} className={"world-chip" + (authored ? " on" : "")} onClick={() => onSettings({ ...settings, missionStyle: "operation" })}>OPERATION</button>
       <button disabled={disabled} className={"world-chip" + (!authored ? " on" : "")} onClick={() => onSettings({ ...settings, missionStyle: "endless" })}>ENDLESS PRACTICE</button>
-    </div>
+    </div>}
     {authored && mode === "strike" && <div className="menu-world-chips">
       <button disabled={disabled} className={"world-chip" + (!bastion ? " on" : "")} onClick={() => onSettings({ ...settings, strikeVariant: "convoy" })}>CONVOY</button>
       <button disabled={disabled} className={"world-chip" + (bastion ? " on" : "")} onClick={() => onSettings({ ...settings, strikeVariant: "bastion" })}>IRON BASTION</button>
@@ -595,7 +595,7 @@ function SettingsPanel({ sim = null, settings, onSettings, onBack }: {
     {net.status === "online" && <p className="menu-note" role="status">ROOM {net.room} · {net.host ? "HOST" : "FLIGHT MEMBER"} · {net.allowLateJoin === false ? "JOINING AFTER LAUNCH DISABLED" : "JOINING AFTER LAUNCH ALLOWED"}</p>}
     <nav className="settings-tabs" aria-label="Settings category">{["flight", "controls", "graphics", "audio", "interface"].map(t => <button key={t} aria-pressed={tab === t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>{t.toUpperCase()}</button>)}</nav>
     {tab === "flight" && <>
-      <label className="menu-row"><span>Weather</span><select value={settings.weather ?? "clear"} onChange={e => set({ weather: e.target.value as WeatherMode })}>{(Object.keys(WEATHER_LABELS) as WeatherMode[]).map(m => <option key={m} value={m}>{WEATHER_LABELS[m]}</option>)}</select></label>
+      <label className="menu-row"><span>Weather</span><select disabled={net.status === "online" && !net.host} value={settings.weather ?? "clear"} onChange={e => set({ weather: e.target.value as WeatherMode })}>{(Object.keys(WEATHER_LABELS) as WeatherMode[]).map(m => <option key={m} value={m}>{WEATHER_LABELS[m]}</option>)}</select></label>
       <label className="menu-row"><span>Daylight</span><select value={settings.daylight} onChange={e => set({ daylight: e.target.value as DaylightMode })}>{(Object.keys(DAYLIGHT_LABELS) as DaylightMode[]).map(m => <option key={m} value={m}>{DAYLIGHT_LABELS[m]}</option>)}</select></label>
       <label className="menu-row"><span>Time / {String(Math.floor(settings.timeOfDay)).padStart(2, "0")}:{String(Math.round(settings.timeOfDay % 1 * 60)).padStart(2, "0")}</span><input type="range" min={0} max={23.75} step={0.25} disabled={settings.daylight !== "fixed"} value={settings.timeOfDay} onChange={e => set({ timeOfDay: Number(e.target.value) })} /></label>
       <p className="menu-note">Aircraft and mission are set in Sortie Setup; room hosts pick the shared mission.</p>
@@ -836,8 +836,8 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
         <>
           <div className="menu-row-btns">
             <Btn primary onClick={() => sim?.leaveRoom()}>LEAVE ROOM</Btn>
-            {/* A spectator can step into the fight, or out of it, at any time. */}
-            {!net.host && <Btn onClick={() => sim?.setSpectating(!net.spectator)}>
+            {/* Taking a cockpit seat follows the room admission policy. */}
+            {(!net.host || net.spectator) && <Btn disabled={!!net.spectator && !net.host && !!net.started && net.allowLateJoin === false} onClick={() => sim?.setSpectating(!net.spectator)}>
               {net.spectator ? "TAKE A SEAT IN THE COCKPIT" : "SWITCH TO SPECTATOR"}
             </Btn>}
           </div>

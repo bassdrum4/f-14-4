@@ -320,8 +320,8 @@ function hawaiiHour(): number {
  * the turbulence the pilot will feel. Exported so the weather's effect on the
  * flight model can be exercised headlessly, with no renderer and no room.
  */
-export function applyWeatherPresetTo(st: AircraftState, preset: WeatherPreset, seed: number): void {
-  const w = windFor(preset, seed, st.time);
+export function applyWeatherPresetTo(st: AircraftState, preset: WeatherPreset, seed: number, theatreTime = st.time): void {
+  const w = windFor(preset, seed, theatreTime);
   st.windX = w.x;
   st.windZ = w.z;
   st.turbulence = preset.turbulence;
@@ -520,7 +520,7 @@ export class Sim {
   };
 
   constructor(canvas: HTMLCanvasElement, settings: Settings, peerFactory?: PeerFactory) {
-    this.settings = settings;
+    this.settings = settings.missionMode === "campaign" ? { ...settings, missionStyle: "operation" } : settings;
     this.weather = weatherPreset(settings.weather);
     this.weatherMode = this.weather.mode;
     // The launch point is part of the gamestate: start parked on the boat (or
@@ -568,7 +568,15 @@ export class Sim {
       onPose: (id, pose) => this.remoteFleet.push(id, pose, performance.now()),
       onLaunch: (mission, carrier, profile) => this.followLaunch(mission, carrier, profile),
       onMissionStyle: style => this.applyRoomStyle(style),
-      onCombat: frame => { this.df.setMirror(!this.netState.host, this.state); this.df.applySharedSnapshot(frame, performance.now()); },
+      onCombat: frame => {
+        this.df.setMirror(!this.netState.host, this.state);
+        this.df.applySharedSnapshot(frame, performance.now());
+        const kind = this.df.operationState?.kind;
+        if ((kind === "bastion" || kind === "convoy") && this.settings.strikeVariant !== kind) {
+          this.settings = { ...this.settings, strikeVariant: kind };
+          for (const fn of this.settingsListeners) fn(this.settings);
+        }
+      },
       onEnemyFire: shot => this.df.receiveEnemyFire(shot),
       // The room's fight, from whoever is hosting it. Our guns are still ours;
       // only the aircraft are theirs.
@@ -608,7 +616,7 @@ export class Sim {
    * and eases like the real thing instead of stepping once at launch.
    */
   private applyWeather(st: AircraftState): void {
-    applyWeatherPresetTo(st, this.weather ?? weatherPreset(this.weatherMode), this.worldSeed);
+    applyWeatherPresetTo(st, this.weather ?? weatherPreset(this.weatherMode), this.worldSeed, this.fleetClock);
   }
 
   /**
@@ -663,7 +671,9 @@ export class Sim {
     return target ? target.pos : this.state.pos;
   }
 
-  applySettings(s: Settings): void {
+  applySettings(s: Settings, roomWeather = false): void {
+    if (s.missionMode === "campaign") s = { ...s, missionStyle: "operation" };
+    if (!roomWeather && this.netState.status === "online" && !this.netState.host) s = { ...s, weather: this.settings.weather };
     const qualityChanged = s.quality !== this.settings.quality;
     const resolutionChanged = s.adaptiveResolution !== this.settings.adaptiveResolution;
     const daylightChanged =
@@ -783,9 +793,9 @@ export class Sim {
    * loop. Every other sortie, and any campaign that has already ended, is a
    * fresh attempt under a new id (see beginMission).
    */
-  private mintAttempt(): boolean {
+  private mintAttempt(fresh = false): boolean {
     const s = this.df.operationState;
-    const continuing = this.settings.missionMode === "campaign" && s?.kind === "campaign"
+    const continuing = !fresh && this.settings.missionMode === "campaign" && s?.kind === "campaign"
       && (s.status === "briefing" || s.status === "active");
     if (continuing) { this.operationId = s.id; return true; }
     this.operationId = Math.max(Date.now(), this.operationId + 1);
@@ -806,15 +816,15 @@ export class Sim {
    * one who tells the room which mission and which boat to use. Wingmen still
    * in the lobby follow along; anyone already airborne keeps their own sortie.
    */
-  startRoomMission(mission: MissionKind): void {
+  startRoomMission(mission: MissionKind, fresh = false): void {
     if (!this.netState.host) return;
     if (this.settings.missionMode === "versus") {
-      if (!this.netState.pilots.some(p => p.linked)) { this.pushBanner("HEAD-TO-HEAD — WAIT FOR ANOTHER PILOT"); return; }
+      if (!this.netState.pilots.some(p => p.linked && !p.spectator)) { this.pushBanner("HEAD-TO-HEAD — WAIT FOR ANOTHER PILOT"); return; }
       this.battleReferee.reset(Date.now());
       this.battle = { match: this.battleReferee.match, pilots: [] };
       this.battleTickAt = 0;
     }
-    this.mintAttempt();
+    this.mintAttempt(fresh);
     if (!this.operationOrigin) { const spawn = spawnAircraft(mission, this.spawnCarrier, this.settings.aircraft, this.settings.bindings); this.operationOrigin = { x: spawn.pos.x, z: spawn.pos.z, heading: spawn.headingDeg, carrier: this.spawnCarrier }; }
     this.net.launch(mission, this.spawnCarrier, { id: this.operationId, seed: this.operationSeed, style: this.settings.missionStyle ?? "operation", origin: this.operationOrigin });
     this.beginMission(mission, this.spawnCarrier);
@@ -984,9 +994,9 @@ export class Sim {
    * in the cockpit rejoins the sortie the room is already flying.
    */
   setSpectating(on: boolean): void {
-    if (this.netState.status !== "online" || this.netState.host) return;
+    if (this.netState.status !== "online" || (this.netState.host && on)) return;
     if (on === this.spectating) return;
-    this.net.setSpectator(on);
+    if (this.net.setSpectator(on) === false) { this.pushBanner("JOINING AFTER LAUNCH IS DISABLED"); return; }
     if (on) {
       if (this.phase === "flying" || this.phase === "paused") this.beginSpectating();
       else this.pushBanner("SPECTATOR — YOU WILL WATCH THE ROOM'S NEXT LAUNCH");
@@ -1132,7 +1142,7 @@ export class Sim {
   restart(): void {
     // retry the same mission from the same carrier
     if (this.netState.status === "online") {
-      if (this.netState.host) this.startRoomMission(this.mission);
+      if (this.netState.host) this.startRoomMission(this.mission, true);
       else this.pushBanner("THE HOST CHOOSES RETRY OR NEXT OPERATION");
       return;
     }
@@ -1347,7 +1357,7 @@ export class Sim {
   private applyRoomWeather(weather: WeatherMode): void {
     if ((this.settings.weather ?? "clear") === weather) return;
     const next: Settings = { ...this.settings, weather };
-    this.applySettings(next); for (const fn of this.settingsListeners) fn(next);
+    this.applySettings(next, true); for (const fn of this.settingsListeners) fn(this.settings);
   }
 
   get netSnapshot(): NetState {
@@ -1573,7 +1583,7 @@ export class Sim {
    * HUD is rebuilt from the watched aircraft so the pilot can read the fight.
    */
   private stepSpectateRoom(frameDt: number): void {
-    const w = windFor(this.weather, this.worldSeed, this.state.time);
+    const w = windFor(this.weather, this.worldSeed, this.fleetClock);
     this.renderer.setWind(w.x, w.z);
     this.df.step(frameDt, this.state, false, false);
     this.updateAudio();
@@ -1660,7 +1670,7 @@ export class Sim {
   private spawnBattleAircraft(respawn = false): void {
     this.endPod();
     this.battleRecoveryLife = -1;
-    const ids = [this.netState.self, ...this.netState.pilots.map(p => p.id)].sort();
+    const ids = [this.netState.self, ...this.netState.pilots.filter(p => !p.spectator).map(p => p.id)].sort();
     const slot = Math.max(0, ids.indexOf(this.netState.self));
     // Two boats, one per side: the pair rides the match id, so every pilot in
     // the room works out the same two carriers without another packet, and the
@@ -1726,7 +1736,7 @@ export class Sim {
 
   private receiveBattleAction(sender: string, action: BattleAction): void {
     if (!this.battleActive || !this.netState.host) return;
-    this.battleReferee.reconcile([{ id: this.netState.self, name: this.net.callsign }, ...this.netState.pilots]);
+    this.battleReferee.reconcile([...(this.spectating ? [] : [{ id: this.netState.self, name: this.net.callsign }]), ...this.netState.pilots.filter(p => !p.spectator)]);
     const contacts = this.remoteFleet.combatTargets();
     const from = sender === this.netState.self ? this.state.pos : contacts.find(p => p.id === sender)?.pos;
     const to = action.victim === this.netState.self ? this.state.pos : contacts.find(p => p.id === action.victim)?.pos;
@@ -1754,14 +1764,14 @@ export class Sim {
     this.battle = snapshot;
     this.remoteWeapons.prune?.(snapshot.match, snapshot.pilots);
     const self = snapshot.pilots.find(p => p.id === this.netState.self);
-    if (this.phase === "menu" || !self?.ready) return;
+    if (this.spectating || this.phase === "menu" || !self?.ready) return;
     if (self.hp > 0 && self.life !== this.battleLife) {
       // Dying costs the hull, not the ordnance: only landing re-arms.
       const respawn = this.battleLife >= 0;
       this.battleLife = self.life;
       this.spawnBattleAircraft(respawn);
     }
-    this.df.setBattleHull(self.hp);
+    this.df.setBattleHull(self.hp, this.state);
     if (self.hp === 0 && !this.state.result) {
       this.explosions.spawn(this.state.pos.clone(), "air", 1.5);
       this.state.result = { kind: "crash", title: "SHOT DOWN", detail: "Respawning in three seconds." };
@@ -1773,10 +1783,11 @@ export class Sim {
     const now = performance.now() / 1000;
     if (this.netState.host && now - this.battleTickAt >= .1) {
       if (this.battleReferee.match !== this.battle.match) this.battleReferee.restore(this.battle, now);
-      this.battleReferee.reconcile([{ id: this.netState.self, name: this.net.callsign }, ...this.netState.pilots]);
+      this.battleReferee.reconcile([...(this.spectating ? [] : [{ id: this.netState.self, name: this.net.callsign }]), ...this.netState.pilots.filter(p => !p.spectator)]);
       const snapshot = this.battleReferee.snapshot(now);
       this.applyBattle(snapshot); this.net.publishBattle(snapshot); this.battleTickAt = now;
     }
+    if (this.spectating) { this.df.setOpponents([]); return; }
     const self = this.battle.pilots.find(p => p.id === this.netState.self);
     if (this.phase !== "menu" && this.battle.match && !self?.ready && now - this.battleReadyAt > .5) {
       this.net.sendBattleAction({ kind: "ready", match: this.battle.match, seq: ++this.battleSeq, life: 0 });
@@ -2190,7 +2201,9 @@ export class Sim {
     const self = this.battle.pilots.find(p => p.id === this.netState.self);
     if (!self?.ready || self.hp <= 0) return;
     this.df.refill();
+    // Restore the authoritative hull while awaiting repair acknowledgement; this is not a new hit.
     this.df.setBattleHull(self.hp);
+    this.state.subsystems = { engineL: 1, engineR: 1, hydraulics: 1, avionics: 1, fuelLeak: false, fuelPct: 100 };
     this.battleRecoveryLife = self.life;
     this.battleRecoveryAt = 0;
     this.pushBanner("RECOVERED & REARMED — READY TO LIFT");
@@ -2231,6 +2244,7 @@ export class Sim {
   /** Refuel and re-arm on a landing, and say so. */
   private refillOnRecovery(): void {
     this.df.refill();
+    this.state.subsystems = { engineL: 1, engineR: 1, hydraulics: 1, avionics: 1, fuelLeak: false, fuelPct: 100 };
     const h = this.df.hud(this.state);
     const msl = h.missilesMax > 0 ? ` · ${h.missiles}/${h.missilesMax} MSL` : "";
     const flr = h.flaresMax > 0 ? ` · ${h.flares}/${h.flaresMax} FLARE` : "";
@@ -2264,9 +2278,9 @@ export class Sim {
     const mouse = this.input.takeMouse();
     this.rig.mouse(mouse.dx, mouse.dy);
     // The LSO view always stands on the deck nearest the action being watched:
-    // the enemy boat when the camera is on a bandit, ours otherwise.
+    // use the nearest available deck station, including friendly carriers.
     const station = this.spectateList
-      .filter(t => t.kind === "LSO" && t.carrier !== undefined && t.hostile !== target?.hostile)
+      .filter(t => t.kind === "LSO" && t.carrier !== undefined)
       .sort((a, b) => a.pos.distanceToSquared(target?.pos ?? this.state.pos) - b.pos.distanceToSquared(target?.pos ?? this.state.pos))[0];
     const look = target?.pos ?? station?.pos ?? this.state.pos;
     const lsoPlatform = station

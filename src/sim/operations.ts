@@ -13,6 +13,18 @@ export interface OperationState {
   optional: number; reason: string;
   campaignStage?: number; // 1 = Bastion IADS, 2 = Convoy Interdiction, 3 = Fleet Climax
 }
+export function operationPhaseDuration(s: OperationState): number {
+  return s.phase === "forming" ? (s.scoutStopped ? (s.kind === "campaign" ? 45 : 60) : 15)
+    : s.phase === "counterattack" ? (s.kind === "campaign" ? 50 : 60) : 0;
+}
+
+export function operationProgress(s: OperationState, carrierName = "CARRIER"): string {
+  if (s.status === "briefing") return "BRIEFING";
+  if (s.kind === "bastion" || (s.kind === "campaign" && s.campaignStage === 1)) return `${s.stopped}/3 DESTROYED`;
+  if (s.kind === "convoy" || (s.kind === "campaign" && s.campaignStage === 2)) return `${s.stopped}/2 STOPPED`;
+  return `FRIENDLY ${carrierName} ${Math.round(s.fleetHull)}%`;
+}
+
 export interface OperationMetrics { stopped: number; arrived: number; scouts: number; attackers: number; queued: number }
 
 /**
@@ -101,9 +113,9 @@ export class Operation {
       }
       if (s.phase === "scout" && m.scouts === 0 && m.queued === 0) {
         s.scoutStopped = !s.scoutReported; this.phase("forming");
-      } else if (s.phase === "forming" && s.phaseTime >= (s.scoutStopped ? 45 : 15)) this.phase("strike");
+      } else if (s.phase === "forming" && s.phaseTime >= operationPhaseDuration(s)) this.phase("strike");
       else if (s.phase === "strike" && m.attackers === 0 && m.queued === 0) this.phase("counterattack");
-      else if (s.phase === "counterattack" && s.phaseTime >= 50) this.phase("final");
+      else if (s.phase === "counterattack" && s.phaseTime >= operationPhaseDuration(s)) this.phase("final");
       else if (s.phase === "final" && m.attackers === 0 && m.queued === 0) {
         this.finish(true, "Task Force Archon victorious — the last strike repelled.");
       }
@@ -116,9 +128,9 @@ export class Operation {
     const before = s.phase;
     if (s.phase === "scout" && m.scouts === 0 && m.queued === 0) {
       s.scoutStopped = !s.scoutReported; this.phase("forming");
-    } else if (s.phase === "forming" && s.phaseTime >= (s.scoutStopped ? 60 : 15)) this.phase("strike");
+    } else if (s.phase === "forming" && s.phaseTime >= operationPhaseDuration(s)) this.phase("strike");
     else if (s.phase === "strike" && m.attackers === 0 && m.queued === 0) this.phase("counterattack");
-    else if (s.phase === "counterattack" && s.phaseTime >= 60) this.phase("final");
+    else if (s.phase === "counterattack" && s.phaseTime >= operationPhaseDuration(s)) this.phase("final");
     else if (s.phase === "final" && m.attackers === 0 && m.queued === 0) this.finish(true, "Both attacks resolved; friendly fleet protected.");
     return s.phase !== before ? s.phase : null;
   }

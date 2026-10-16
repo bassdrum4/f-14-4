@@ -1299,7 +1299,8 @@ export class Multiplayer {
           const p = this.pilots.get(conn.peer)!;
           p.name = sanitizeName(msg.name);
           p.aircraft = sanitizeAircraft(msg.aircraft);
-          if (typeof msg.spectator === "boolean" && !p.host) p.spectator = msg.spectator;
+          if (typeof msg.spectator === "boolean" && (!p.host || !msg.spectator)
+            && !(p.spectator && !msg.spectator && !p.host && this.roomLaunch && !this.allowLateJoin)) p.spectator = msg.spectator;
           if (p.spectator) this.handlers.onPilotLeave?.(p.owner ?? conn.peer);
           else this.handlers.onPilot?.(p.owner ?? conn.peer, p.name, p.aircraft);
           this.emit();
@@ -1473,7 +1474,6 @@ export class Multiplayer {
   private adoptWeather(weather: WeatherMode | undefined): void {
     if (this.host) return;
     if (weather !== "clear" && weather !== "overcast" && weather !== "storm") return;
-    if (weather === this.weather) return;
     this.weather = weather;
     this.handlers.onWeather?.(weather);
   }
@@ -1639,10 +1639,12 @@ export class Multiplayer {
     this.setName(this.name);
   }
 
-  setSpectator(spectator: boolean): void {
-    if (this.host || this.spectator === spectator) return;
+  setSpectator(spectator: boolean): boolean {
+    if ((this.host && spectator) || this.spectator === spectator) return false;
+    if (!spectator && !this.host && this.roomLaunch && !this.allowLateJoin) return false;
     this.spectator = spectator;
     this.setName(this.name);
+    return true;
   }
 
   sendPing(kind: PingKind, x: number, y: number, z: number, label: string): TacticalPing | null {

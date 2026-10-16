@@ -701,6 +701,7 @@ export class Dogfight {
   }
 
   prepareCampaign(player: AircraftState): void {
+    this.authored = true;
     this.setAircraft(player);
     this.clear();
     this.scenario = "strike";
@@ -768,8 +769,11 @@ export class Dogfight {
 
   takePlayerHits(): PlayerHit[] { const hits = this.playerHits; this.playerHits = []; return hits; }
 
-  setBattleHull(hp: number): void {
-    if (hp < this.hull) this.damageT = DAMAGE_FLASH;
+  setBattleHull(hp: number, player?: AircraftState): void {
+    if (hp < this.hull) {
+      if (player && hp > 0) this.damagePlayer(player, this.hull - hp);
+      else this.damageT = DAMAGE_FLASH;
+    }
     this.hull = hp;
   }
 

@@ -3,7 +3,7 @@
 
 import { BOMB_ARM_TIME as BOMB_ARM, advanceBomb } from "../bombTrajectory";
 import * as THREE from "three";
-import { convoyRoute, isFortressPrimary } from "../operations";
+import { convoyRoute, isFortressPrimary, operationPhaseDuration } from "../operations";
 import type { OperationHud } from "../operations";
 import { validEnemyFire } from "../combatSnapshot";
 import type { EnemyFire } from "../combatSnapshot";
@@ -33,8 +33,8 @@ export function operationHud(ctx: Dogfight, player: AircraftState): OperationHud
   else if (target) vel.set(Math.sin(target.headingDeg * Math.PI / 180) * target.speed, 0, -Math.cos(target.headingDeg * Math.PI / 180) * target.speed);
   let eta: number | null = null;
   if (isConvoyPhase && cargo.length) eta = Math.min(...cargo.map(t => ((t.route?.length ?? 0) - (t.progress ?? 0)) / Math.max(t.speed, .1)));
-  else if (state.phase === "forming") eta = Math.max(0, (state.scoutStopped ? 60 : 15) - state.phaseTime);
-  else if (state.phase === "counterattack") eta = Math.max(0, 60 - state.phaseTime);
+  else if (state.phase === "forming") eta = Math.max(0, operationPhaseDuration(state) - state.phaseTime);
+  else if (state.phase === "counterattack") eta = Math.max(0, operationPhaseDuration(state) - state.phaseTime);
   else if (ctx.enemyBombs.length) { const c = carriers()[state.fleetCarrier] ?? carriers()[0]; eta = Math.min(...ctx.enemyBombs.map(b => b.pos.distanceTo(new THREE.Vector3(c.x, c.deckY, c.z)) / Math.max(b.vel.length(), 1))); }
   else if (threat) { const c = carriers()[state.fleetCarrier] ?? carriers()[0]; eta = Math.max(0, (Math.hypot(threat.pos.x - c.x, threat.pos.z - c.z) - (threat.role === "scout" ? 3000 : 1000)) / Math.max(threat.speed, 120)); }
   const radarOnline = ctx.strikeTargets.some(t => t.role === "radar" && !t.dead && !t.arrived);
@@ -132,8 +132,8 @@ export function stepOperation(ctx: Dogfight, dt: number, player: AircraftState):
   } else if (phase === "strike" || phase === "final") {
     ctx.wave = phase === "strike" ? 2 : 3; ctx.roleQueue = ["bomber", "bomber", "escort"]; ctx.launchTimer = 1;
     ctx.banner(player, phase === "final" ? "FINAL STRIKE — SPLIT BOMBERS INBOUND" : "BOMBER STRIKE — INTERCEPT THE BOMBERS FIRST");
-  } else if (phase === "forming") ctx.banner(player, op.state.scoutStopped ? "SCOUT STOPPED — 60 SECONDS TO PREPARE" : "SCOUT REPORTED — STRIKE FORMING IN 15 SECONDS");
-  else if (phase === "counterattack") ctx.banner(player, "COUNTERATTACK — 60s · BOMB THE DECK OR REARM");
+  } else if (phase === "forming") ctx.banner(player, op.state.scoutStopped ? `SCOUT STOPPED — ${operationPhaseDuration(op.state)} SECONDS TO PREPARE` : "SCOUT REPORTED — STRIKE FORMING IN 15 SECONDS");
+  else if (phase === "counterattack") ctx.banner(player, `COUNTERATTACK — ${operationPhaseDuration(op.state)}s · BOMB THE DECK OR REARM`);
   if (op.state.suppressed) ctx.roleQueue = [];
   if (before !== op.state.status) {
     ctx.roleQueue = []; ctx.launchQueued = 0;
