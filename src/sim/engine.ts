@@ -825,7 +825,8 @@ export class Sim {
   }
 
   /** A wingman took off: join the same strip, on the same boat. */
-  private followLaunch(mission: MissionKind, carrier: number, profile?: OperationLaunch): void {
+  private followLaunch(mission: MissionKind, carrier: number, profile?: OperationLaunch, rejoin = false): void {
+    this.lastRoomLaunch = { mission, carrier, profile };
     // A spectator never launches a jet: the room's sortie becomes something to
     // watch, and it can be joined at any point in the flight.
     if (this.spectating) {
@@ -835,9 +836,8 @@ export class Sim {
     }
     // Only a pilot still in the menu comes along — one already flying (or
     // reading the pause menu) is left to finish the sortie they are on.
-    if (this.phase !== "menu" && (!profile || profile.id === this.operationId)) return;
+    if (!rejoin && this.phase !== "menu" && (!profile || profile.id === this.operationId)) return;
     if (profile) { this.operationId = profile.id; this.operationSeed = profile.seed; this.operationOrigin = profile.origin; this.applyRoomStyle(profile.style); }
-    this.lastRoomLaunch = { mission, carrier, profile };
     const boats = carriers().length;
     this.spawnCarrier = ((Math.floor(carrier) % boats) + boats) % boats;
     this.beginMission(mission, this.spawnCarrier);
@@ -996,7 +996,7 @@ export class Sim {
     this.spectateId = "";
     this.renderer.jetGroup.visible = true;
     const launch = this.lastRoomLaunch;
-    if (launch) this.followLaunch(launch.mission, launch.carrier, launch.profile);
+    if (launch) this.followLaunch(launch.mission, launch.carrier, launch.profile, true);
     else this.quitToMenu();
   }
 
@@ -1366,6 +1366,7 @@ export class Sim {
     // follows automatically through syncWorldToRoom().
     this.battle = { match: 0, pilots: [] };
     this.net.open(room, callsign, this.settings.aircraft);
+    this.net.setWeather(this.settings.weather ?? "clear");
     this.net.setMode(this.settings.missionMode);
     this.net.setMissionStyle(this.settings.missionStyle ?? "operation");
   }
@@ -2106,6 +2107,7 @@ export class Sim {
           // wheels off the deck/runway: the fight begins
           this.dfArmed = false;
           if (this.settings.missionMode === "strike") this.df.beginStrike(this.state);
+          else if (this.settings.missionMode === "campaign") this.df.beginCampaign(this.state);
           else this.df.begin(this.state);
         } else if (!this.state.banner || this.state.time >= this.state.banner.until) {
           // keep the launch briefing up through taxi/cat tension chatter

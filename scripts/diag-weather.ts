@@ -79,7 +79,7 @@ test("the squall blows the same way for everyone, and gusts on its own cycle", (
   assert(min >= storm.windSpeed - storm.gust - 0.01, `gusts never fall below the lull (${min.toFixed(1)})`);
   assert(max <= storm.windSpeed + storm.gust + 0.01, `gusts never exceed the squall (${max.toFixed(1)})`);
   assert(max - min > storm.gust, "and the wind really does build and ease");
-  assert.equal(Math.hypot(windFor(WEATHER.clear, 1, 0).x, windFor(WEATHER.clear, 1, 0).z), WEATHER.clear.windSpeed);
+  assert(Math.abs(Math.hypot(windFor(WEATHER.clear, 1, 0).x, windFor(WEATHER.clear, 1, 0).z) - WEATHER.clear.windSpeed) < 1e-12);
 });
 
 test("the weather is felt: wind shifts airspeed away from ground speed", () => {
