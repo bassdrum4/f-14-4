@@ -23,6 +23,8 @@ export interface Designation {
 const MARCH_STEP = 22; // m
 const BISECT = 12; // refinement iterations -> sub-centimetre
 const MAX_RANGE = 24000;
+/** Upper bound on terrain height across the world (highest summits < 2500 m). */
+const MAX_TERRAIN_HEIGHT = 2500; // m
 
 const RAYCASTER = new THREE.Raycaster();
 const NDC = new THREE.Vector2();
@@ -65,12 +67,34 @@ export function pickDesignation(
     deckSurface = "deck";
   }
 
+  // --- early exit if ray starts above max terrain and points into sky ---
+  if (dir.y >= 0 && origin.y > MAX_TERRAIN_HEIGHT) {
+    if (deckT < Infinity) {
+      const hit = new THREE.Vector3(
+        origin.x + dir.x * deckT,
+        origin.y + dir.y * deckT,
+        origin.z + dir.z * deckT,
+      );
+      return { pos: hit, range: deckT, surface: deckSurface, onDeck: true };
+    }
+    return null;
+  }
+
+  // --- calculate start distance: skip high-altitude empty air above max terrain ---
+  let tStart = MARCH_STEP;
+  if (dir.y < 0 && origin.y > MAX_TERRAIN_HEIGHT) {
+    const tSkip = (MAX_TERRAIN_HEIGHT - origin.y) / dir.y;
+    tStart = Math.max(MARCH_STEP, Math.floor(tSkip / MARCH_STEP) * MARCH_STEP);
+  }
+
   // --- march the terrain / sea, then bisect the crossing ---
-  let prevT = 0;
-  for (let t = MARCH_STEP; t <= maxRange; t += MARCH_STEP) {
+  let prevT = tStart - MARCH_STEP;
+  for (let t = tStart; t <= maxRange; t += MARCH_STEP) {
     if (t > deckT) break; // a deck is nearer than anything we will find now
-    const x = origin.x + dir.x * t;
     const y = origin.y + dir.y * t;
+    if (dir.y >= 0 && y > MAX_TERRAIN_HEIGHT) break; // ray rose into sky above max terrain
+
+    const x = origin.x + dir.x * t;
     const z = origin.z + dir.z * t;
     const g = groundAt(x, z);
     if (y <= g.y) {
