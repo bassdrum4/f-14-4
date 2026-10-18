@@ -1,6 +1,6 @@
 # F-14 Carrier Simulator
 
-Current published build label: **1.9.2**, continuing the reconstructed version
+Current published build label: **1.10.0**, continuing the reconstructed version
 sequence. See [CHANGELOG.md](CHANGELOG.md) for the counting rule and
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md)
 for the earlier development, recovered builds and missing release history.
@@ -66,7 +66,9 @@ not alter the 120 Hz flight/weapon simulation, host authority or network timers.
 Ordinary flight sends poses near 30 Hz; urgent switches and manoeuvres may
 send at 60 Hz. Congested links skip superseded motion updates and resume with
 the latest pose while combat and room controls remain reliable. Other pilots'
-links continue independently. Existing remote interpolation is preserved.
+links continue independently. Timestamped adaptive interpolation, angular prediction and bounded gun history
+keep rendering smooth without making visual corrections part of gameplay.
+See [networking design, benchmarks and limits](docs/MULTIPLAYER-NETWORKING.md).
 
 Run `bun scripts/diag-performance.ts` and `bun scripts/diag-mp-flow.ts` locally
 to check rendering policy, sustained send rates and congestion recovery. These

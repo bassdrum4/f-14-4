@@ -462,6 +462,11 @@ export class Sim {
   private pickDir = new THREE.Vector3();
   /** Multiplayer: wingmen meshes, the P2P session, and its latest state. */
   private remoteFleet: RemoteFleet;
+  private motionEpoch = 0;
+
+  get networkDiagnostics() {
+    return { links: this.net.networkDiagnostics, aircraft: this.remoteFleet.diagnostics() };
+  }
   private remoteWeapons: RemoteWeapons;
   private net: Multiplayer;
   private netState: NetState = idleNetState();
@@ -605,6 +610,7 @@ export class Sim {
 
   /** A freshly spawned airframe, already dressed for the theatre's weather. */
   private newState(mission: MissionKind, carrier: number): AircraftState {
+    this.motionEpoch = (this.motionEpoch+1) >>> 0;
     const st = spawnAircraft(mission, carrier, this.settings.aircraft, this.settings.bindings);
     this.applyWeather(st);
     return st;
@@ -1529,7 +1535,6 @@ export class Sim {
 
     this.advanceDaylight(frameDt);
     // The room's tactical picture: who can be watched, where the pings are.
-    this.updateSpectate(frameDt);
     this.advancePings(frameDt);
     // Multiplayer: interpolate the wingmen and hand our own pose to the net
     // layer, which sends it at its own fixed rate rather than per frame.
@@ -1539,6 +1544,7 @@ export class Sim {
       this.remoteFleet.setCombatPilots(roster ? roster.pilots.filter(p => p.ready && p.hp > 0).map(p => p.id) : null);
     }
     this.remoteFleet.update(nowMs);
+    this.updateSpectate(frameDt);
     this.startOperationWithWingman();
     this.net.publish(this.buildPose());
     this.syncFight();
@@ -1668,6 +1674,7 @@ export class Sim {
   }
 
   private spawnBattleAircraft(respawn = false): void {
+    this.motionEpoch = (this.motionEpoch+1) >>> 0;
     this.endPod();
     this.battleRecoveryLife = -1;
     const ids = [this.netState.self, ...this.netState.pilots.filter(p => !p.spectator).map(p => p.id)].sort();
@@ -1793,7 +1800,7 @@ export class Sim {
       this.net.sendBattleAction({ kind: "ready", match: this.battle.match, seq: ++this.battleSeq, life: 0 });
       this.battleReadyAt = now;
     }
-    this.df.setOpponents(!self?.ready || self.hp <= 0 || self.shield ? [] : this.remoteFleet.combatTargets().flatMap(p => {
+    this.df.setOpponents(!self?.ready || self.hp <= 0 || self.shield ? [] : this.remoteFleet.combatTargets(true).flatMap(p => {
       const target = this.battle.pilots.find(row => row.id === p.id);
       return target?.ready && target.hp > 0 && !target.shield ? [{ ...p, life: target.life }] : [];
     }));
@@ -1845,6 +1852,8 @@ export class Sim {
     }
     p.speed = st.speed;
     p.sweepT = st.sweepT;
+    p.gearT = st.gearT; p.flapT = st.flapT; p.abLevel = st.abLevel;
+    p.epoch = this.motionEpoch; p.held = this.phase !== "flying" || !!st.result;
     let flags = 0;
     if (st.onGround) flags |= FLAG_ON_GROUND;
     if (st.gearDown) flags |= FLAG_GEAR;

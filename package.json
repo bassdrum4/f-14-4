@@ -1,7 +1,7 @@
 {
   "name": "f14-tomcat-simulator",
   "private": true,
-  "version": "1.9.3",
+  "version": "1.10.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port ${PORT:-5173}",
@@ -52,7 +52,12 @@
     "test:spectate": "bun scripts/diag-spectate.ts",
     "test:review": "bun scripts/diag-review-regressions.ts",
     "test:crash": "bun scripts/diag-crash.ts",
-    "test:pod-click": "bun scripts/diag-pod-click.ts"
+    "test:pod-click": "bun scripts/diag-pod-click.ts",
+    "test:motion": "bun scripts/diag-motion.ts",
+    "test:motion:link": "bun scripts/diag-motion-link.ts",
+    "test:motion:combat": "bun scripts/diag-motion-combat.ts",
+    "test:motion:browser": "node scripts/diag-motion-browser.mjs",
+    "test:motion:scheduling": "bun scripts/diag-motion-scheduling.ts"
   },
   "dependencies": {
     "peerjs": "^1.5.5",
@@ -64,13 +69,16 @@
     "baseline-browser-mapping": "2.11.26"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@types/node": "^26.6.3",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@types/three": "^0.170.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "peer": "^1.0.2",
     "typescript": "~5.6.3",
     "vite": "^6.0.3",
-    "vite-plugin-singlefile": "^2.3.3"
+    "vite-plugin-singlefile": "^2.3.3",
+    "esbuild": "^0.25.12"
   }
 }

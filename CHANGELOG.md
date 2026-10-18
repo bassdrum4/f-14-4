@@ -6,6 +6,22 @@ arrived in large exports with stale 1.0.0 metadata; see
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md) for the surviving
 timeline, recovered intermediate build, and remaining history gaps.
 
+## 1.10.0 — 2026-10-17
+
+- Buffer timestamped remote motion with adaptive delay, bounded Hermite/SLERP
+  reconstruction, acceleration/angular prediction and stable error correction.
+  Explicit lifecycle and held states prevent respawn streaks and stale flight.
+- Negotiate an unordered, zero-retransmit motion channel on each existing
+  PeerJS connection. Preserve reliable controls/combat and the legacy pose
+  contract; add clock sync, reorder/loss tracking, independent backpressure,
+  channel recovery and per-peer diagnostics.
+- Separate gameplay positions from rendered meshes, add bounded received-history
+  gun compensation, interpolate remote surface animations and update spectator
+  views from the current visual frame.
+- Add deterministic impairment/scheduling/combat tests and actual Chromium/PeerJS
+  mesh, channel recovery, reconnection and historical-client compatibility tests.
+  See `docs/MULTIPLAYER-NETWORKING.md` for measured results and verification limits.
+
 ## 1.9.3 — 2026-10-16
 
 - Make the laser-guided bomb genuinely guided, with a bounded envelope.

@@ -5,55 +5,10 @@ export interface OperationLaunch { id: number; seed: number; style: MissionStyle
 function validOperationLaunch(p: OperationLaunch): boolean {
   return Number.isSafeInteger(p.id) && p.id > 0 && Number.isSafeInteger(p.seed) && (p.style === "operation" || p.style === "endless") && (!p.origin || [p.origin.x,p.origin.z,p.origin.heading].every(Number.isFinite) && (p.origin.carrier === undefined || Number.isSafeInteger(p.origin.carrier) && p.origin.carrier >= 0));
 }
-// Multiplayer over WebRTC data channels.
-//
-// There is no hosted server. Two browsers meet through the PeerJS signalling
-// broker, agree on an ICE path, and then talk directly: aircraft state rides a
-// binary ArrayBuffer on the data channel. It is built into the browser, so
-// this costs nothing to run.
-//
-// Topology: one peer opens the room and registers a predictable id
-// (`f14sim-<room>-h`). Everyone else dials that id. The host keeps the roster,
-// and once a new pilot is announced every peer dials every *other* peer by id,
-// so the pose stream is a full mesh rather than relayed through the host. The
-// host can then leave without breaking the formation.
-//
-// The wire format is deliberately not JSON: a pose is 52 bytes of little-endian
-// floats packed with a DataView (see `packPose`). Control traffic — hello,
-// roster, join, launch, goodbye — is a small JSON string, which is fine because
-// it happens a handful of times per session. BinaryPack (the default
-// data-channel serialization) carries both, so the receiver only has to check
-// whether the payload is a string or an ArrayBuffer.
-//
-// The world is not sent at all. The room code determines it (see
-// sim/world.ts's worldSeedForRoom), so two pilots who type the same code build
-// the same islands on their own machines: no terrain payload, no seed handover,
-// and nothing about the world on the wire at any point.
-//
-// Send rate is decoupled from the render loop, but not from the pose: `publish()`
-// is called every frame with the local aircraft, and the moment that pose is
-// newer than the one on the wire it goes out (see flushPose) — bounded by a
-// ~30 Hz floor and a ~80 Hz guard for a hard manoeuvre, so a 144 Hz display
-// cannot flood the link but a jink never waits for a tick. A 15 Hz heartbeat
-// still sends whatever the last pose was, which is what keeps a page with no
-// animation frames (a hidden tab) and the headless flow harness in step.
-// Poses carry velocity, and the renderer (../render/remoteJets.ts) draws each
-// wingman at "now": their newest packet carried forward by the one-way delay
-// measured from the peer connection's own RTT, with corrections eased in.
-//
-// The fight rides the same channel: the host's snapshot goes on every other
-// heartbeat beat, and on a frame flush when the fight has changed and its own
-// floor allows, so a mirroring wingman sees the bandits move at the pace the
-// host is flying them rather than at the heartbeat.
-//
-// Background tabs: rAF and setInterval both throttle to ~1 Hz when the page is
-// hidden. Rather than let a hidden pilot's aircraft keep flying on stale
-// velocity, the sender keeps firing but zeroes the velocity, so the wingman
-// parks in place instead of ghosting off across the map.
-//
-// Configuration (optional — the public broker works out of the box):
-//   VITE_PEER_HOST / VITE_PEER_PORT / VITE_PEER_PATH / VITE_PEER_KEY / VITE_PEER_SECURE
-//   VITE_PEER_ICE   — JSON array of RTCIceServer (add a TURN server for strict NATs)
+// Full-mesh PeerJS room controls are reliable and ordered. A capability-negotiated
+// v2 motion stream uses unordered, zero-retransmit SCTP on that same connection.
+// Legacy clients retain the 52-byte pose contract, with strict queue backpressure.
+// See docs/MULTIPLAYER-NETWORKING.md for timing, recovery and measured limits.
 
 import { Peer, type DataConnection } from "peerjs";
 import type { AircraftId } from "../sim/aircraft";
@@ -160,80 +115,10 @@ export type PeerFactory = (id: string, options?: ConstructorParameters<typeof Pe
 // Wire format
 // ---------------------------------------------------------------------------
 
-/** Bytes per pose packet. */
-export const POSE_BYTES = 52;
-/** Marks a buffer as ours; a stray or truncated packet is dropped. */
-const MAGIC = 0xf14a;
-
-/**
- * Pack a pose into 52 little-endian bytes:
- *   0  f32 x, y, z         12
- *  12  f32 vx, vy, vz      24
- *  24  f32 qx, qy, qz, qw  40
- *  40  f32 speed           44
- *  44  u8  sweepT (0..255) 45
- *  45  u8  flags           46
- *  46  u16 magic           48
- *  48  u32 sequence        52
- */
-export function packPose(p: RemotePose, seq: number): ArrayBuffer {
-  const buf = new ArrayBuffer(POSE_BYTES);
-  const v = new DataView(buf);
-  v.setFloat32(0, p.x);
-  v.setFloat32(4, p.y);
-  v.setFloat32(8, p.z);
-  v.setFloat32(12, p.vx);
-  v.setFloat32(16, p.vy);
-  v.setFloat32(20, p.vz);
-  v.setFloat32(24, p.qx);
-  v.setFloat32(28, p.qy);
-  v.setFloat32(32, p.qz);
-  v.setFloat32(36, p.qw);
-  v.setFloat32(40, p.speed);
-  v.setUint8(44, clampByte(p.sweepT * 255));
-  v.setUint8(45, p.flags & 0xff);
-  v.setUint16(46, MAGIC);
-  v.setUint32(48, seq >>> 0);
-  return buf;
-}
-
-/**
- * Decode a pose packet. Returns the sequence number and fills `out` with a
- * fresh pose, or returns null when the payload is not a valid packet.
- */
-export function unpackPose(buf: ArrayBuffer, out: RemotePose): number | null {
-  if (buf.byteLength !== POSE_BYTES) return null;
-  const v = new DataView(buf);
-  if (v.getUint16(46) !== MAGIC) return null;
-  out.x = v.getFloat32(0);
-  out.y = v.getFloat32(4);
-  out.z = v.getFloat32(8);
-  out.vx = v.getFloat32(12);
-  out.vy = v.getFloat32(16);
-  out.vz = v.getFloat32(20);
-  out.qx = v.getFloat32(24);
-  out.qy = v.getFloat32(28);
-  out.qz = v.getFloat32(32);
-  out.qw = v.getFloat32(36);
-  out.speed = v.getFloat32(40);
-  out.sweepT = v.getUint8(44) / 255;
-  out.flags = v.getUint8(45);
-  return v.getUint32(48);
-}
-
-function clampByte(n: number): number {
-  return n < 0 ? 0 : n > 255 ? 255 : Math.round(n);
-}
-
-/** A blank pose, for the local builder and for decode targets. */
-export function emptyPose(): RemotePose {
-  return {
-    x: 0, y: 0, z: 0,
-    qx: 0, qy: 0, qz: 0, qw: 1,
-    vx: 0, vy: 0, vz: 0,
-    speed: 0, sweepT: 0, flags: 0,
-  };
-}
+export { POSE_BYTES, packPose, unpackPose, emptyPose } from "./poseProtocol";
+import { packPose, unpackPose, emptyPose } from "./poseProtocol";
+import { MotionLink, type MotionControl } from "./motionLink";
+import { derivatives, sequenceNewer } from "./motion";
 
 // ---------------------------------------------------------------------------
 // Enemy stream (the host-authoritative fight)
@@ -373,7 +258,8 @@ interface RosterEntry {
 interface RoomLaunch { mission: MissionKind; carrier: number; profile?: OperationLaunch }
 
 type Control =
-  | { t: "hello"; name: string; aircraft: AircraftId; mode: MissionMode; owner?: string; spectator?: boolean }
+  | { t: "hello"; name: string; aircraft: AircraftId; mode: MissionMode; owner?: string; spectator?: boolean; motion?: 2 }
+  | MotionControl
   | { t: "roster"; peers: RosterEntry[]; mode: MissionMode; style?: MissionStyle; weather?: WeatherMode; allowLateJoin?: boolean; launch?: RoomLaunch | null }
   | { t: "combat"; frame: SharedCombat }
   | { t: "enemyFire"; shots: EnemyFire[] }
@@ -587,6 +473,17 @@ export class Multiplayer {
   private pilots = new Map<string, RosterEntry>();
   /** Newest sequence number seen per pilot, to drop reordered packets. */
   private lastSeq = new Map<string, number>();
+  private motionLinks = new Map<DataConnection, MotionLink>();
+  private lastPublishAt = -Infinity;
+  private motionEpoch = 0;
+  private sourceEpoch: number | undefined;
+  private motionPrevious = emptyPose();
+  private heldPose = emptyPose();
+
+  /** Diagnostics are read on demand, never rebuilt on a rendering tick. */
+  get networkDiagnostics() {
+    return [...this.motionLinks.values()].map(link => ({ id: this.pilots.get(link.conn.peer)?.owner ?? link.conn.peer, ...link.metrics }));
+  }
 
   private pose = emptyPose();
   private seq = 0;
@@ -607,6 +504,7 @@ export class Multiplayer {
   private poseDirty = false;
   /** When the last pose packet left, and what was in it. */
   private lastSendAt = 0;
+  private nextPoseAt = 0;
   private lastSentX = 0;
   private lastSentY = 0;
   private lastSentZ = 0;
@@ -798,6 +696,9 @@ export class Multiplayer {
         /* ignore */
       }
     }
+    for (const link of this.motionLinks.values()) link.dispose();
+    this.motionLinks.clear();
+    this.lastPublishAt = -Infinity; this.motionEpoch = 0; this.sourceEpoch = undefined;
     this.conns.clear();
     this.missileWire = null;
     this.missileSent = new WeakMap();
@@ -825,6 +726,7 @@ export class Multiplayer {
     this.tickCount = 0;
     this.poseDirty = false;
     this.lastSendAt = 0;
+    this.nextPoseAt = 0;
     this.enemySinceBeat = ENEMY_BEATS;
     this.enemyDirty = false;
     this.rttMs = 0;
@@ -1006,7 +908,20 @@ export class Multiplayer {
   private attach(conn: DataConnection, known: RosterEntry | null): void {
     conn.on("open", () => {
       this.dialing.delete(conn.peer);
+      const existing = this.conns.get(conn.peer);
       this.conns.set(conn.peer, conn);
+      if (existing && existing !== conn) {
+        this.motionLinks.get(existing)?.dispose(); this.motionLinks.delete(existing);
+        try { existing.close(); } catch { /* retiring a dead path */ }
+      }
+      const link = new MotionLink(conn, pose => {
+        if (this.conns.get(conn.peer) !== conn || !this.pilots.has(conn.peer) || this.pilots.get(conn.peer)?.spectator) return;
+        const owner = this.pilots.get(conn.peer)?.owner ?? conn.peer;
+        this.handlers.onLinkDelay?.(owner, link.metrics.rttMs/2);
+        this.recv++;
+        this.handlers.onPose?.(owner,pose);
+      });
+      this.motionLinks.set(conn,link);
       if (conn.peer === hostPeerId(this.room)) this.hostRetries = 0;
       // A fresh channel starts its own sequence, so any remembered "newest"
       // from a previous link to this pilot must not drop it. The next published
@@ -1015,6 +930,7 @@ export class Multiplayer {
       // than on the next heartbeat.
       this.lastSeq.delete(conn.peer);
       this.lastSendAt = 0;
+      this.nextPoseAt = 0;
       this.enemyDirty = true;
       // The room's host is whoever answers on the predictable id, and a brand
       // new link has none of the room's state cached yet.
@@ -1029,13 +945,18 @@ export class Multiplayer {
         mode: this.mode,
         owner: this.selfId,
         spectator: this.spectator,
+        motion: conn.peerConnection && typeof conn.peerConnection.createDataChannel === "function" ? 2 : undefined,
       } satisfies Control);
       if (known) this.adopt(conn.peer, known);
       this.emit();
     });
-    conn.on("data", (data) => this.onData(conn, data));
-    conn.on("close", () => this.drop(conn.peer, true));
-    conn.on("error", () => this.drop(conn.peer, true));
+    conn.on("data", (data) => { if (this.conns.get(conn.peer) === conn) this.onData(conn, data); });
+    const closed = () => {
+      this.motionLinks.get(conn)?.dispose(); this.motionLinks.delete(conn);
+      if (this.conns.get(conn.peer) === conn) this.drop(conn.peer, true);
+    };
+    conn.on("close", closed);
+    conn.on("error", closed);
   }
 
   private onData(conn: DataConnection, data: unknown): void {
@@ -1062,8 +983,10 @@ export class Multiplayer {
       if (snap && this.isHostConn(conn)) this.handlers.onEnemies?.(snap);
       return;
     }
+    if (this.motionLinks.get(conn)?.legacy === false) return;
     const prev = this.lastSeq.get(conn.peer);
-    if (prev !== undefined && seq <= prev) return; // reordered or duplicated
+    if (prev !== undefined && !sequenceNewer(seq, prev)) return; // wrap-safe reordered/duplicate check
+    if (this.pilots.get(conn.peer)?.spectator) return;
     this.lastSeq.set(conn.peer, seq);
     this.recv++;
     this.handlers.onPose?.(this.pilots.get(conn.peer)?.owner ?? conn.peer, pose);
@@ -1071,6 +994,8 @@ export class Multiplayer {
 
   private onControl(conn: DataConnection, msg: Control): void {
     switch (msg.t) {
+      case "motionReady": case "motionFallback": case "netPing": case "netPong":
+        this.motionLinks.get(conn)?.control(msg); return;
       case "hello": {
         const isSpec = msg.spectator === true && !this.isHostConn(conn);
         if (this.host && this.roomLaunch && !this.allowLateJoin && !isSpec && !this.admitted.has(conn.peer)) {
@@ -1095,6 +1020,7 @@ export class Multiplayer {
         const known = this.pilots.has(conn.peer);
         if (!this.adopt(conn.peer, entry)) break;
         this.admitted.add(conn.peer);
+        if (msg.motion === 2) this.motionLinks.get(conn)?.enable();
         if (this.host || this.hostDuty) {
           // Tell the newcomer who else is here, and everyone else about them.
           // The room's mission profile rides the roster: a pilot joining an
@@ -1381,6 +1307,8 @@ export class Multiplayer {
     if (!id) return;
     const conn = this.conns.get(id);
     if (conn) {
+      this.motionLinks.get(conn)?.dispose(); this.motionLinks.delete(conn);
+      this.conns.delete(id); // close callbacks cannot tear down a replacement
       try {
         conn.close();
       } catch {
@@ -1657,13 +1585,16 @@ export class Multiplayer {
 
   publish(pose: RemotePose): void {
     if (this.spectator) return; // spectators never broadcast an aircraft pose
-    const p = this.pose;
-    p.x = pose.x; p.y = pose.y; p.z = pose.z;
-    p.qx = pose.qx; p.qy = pose.qy; p.qz = pose.qz; p.qw = pose.qw;
-    p.vx = pose.vx; p.vy = pose.vy; p.vz = pose.vz;
-    p.speed = pose.speed;
-    p.sweepT = pose.sweepT;
-    p.flags = pose.flags;
+    const now = performance.now(), p = this.pose, dt = (now-this.lastPublishAt)/1000;
+    Object.assign(this.motionPrevious,p);
+    const jumped = Number.isFinite(dt) && dt > 0 && Math.hypot(pose.x-p.x-p.vx*dt,pose.y-p.y-p.vy*dt,pose.z-p.z-p.vz*dt) > Math.max(150,dt*800);
+    if (pose.epoch !== this.sourceEpoch || jumped || ((pose.flags^p.flags)&128)) this.motionEpoch++;
+    this.sourceEpoch = pose.epoch;
+    Object.assign(p,pose);
+    p.epoch = this.motionEpoch >>> 0; p.sentAt = now;
+    p.held = this.hidden || pose.held === true;
+    derivatives(p,this.motionPrevious,dt);
+    this.lastPublishAt = now;
     this.poseDirty = true;
     this.flushPose();
   }
@@ -1687,8 +1618,10 @@ export class Multiplayer {
       rotationDot < Math.cos(2.5 * Math.PI / 180) ||
       Math.abs(this.pose.speed - this.lastSentSpeed) > BURST_SPEED_MS ||
       Math.abs(this.pose.sweepT - this.lastSentSweep) > BURST_SWEEP ||
-      this.pose.flags !== this.lastSentFlags;
-    if (since < (big ? BURST_MIN_GAP_MS : FLUSH_MIN_GAP_MS)) return;
+      this.pose.flags !== this.lastSentFlags ||
+      Math.hypot(this.pose.wx ?? 0,this.pose.wy ?? 0,this.pose.wz ?? 0) > 1.5 ||
+      Math.hypot(this.pose.ax ?? 0,this.pose.ay ?? 0,this.pose.az ?? 0) > 65;
+    if (since+.5 < BURST_MIN_GAP_MS || (!big && now+.5 < this.nextPoseAt)) return;
     this.sendPose(now, this.enemyDirty);
   }
 
@@ -1714,14 +1647,11 @@ export class Multiplayer {
     this.flushBattleMissiles();
     this.flushFleetClock();
     this.flushCombat();
+    for (const link of this.motionLinks.values()) link.tick();
     if (this.status !== "online" || this.conns.size === 0 || this.spectator) return;
     // A hidden tab is throttled to ~1 Hz by the browser; zeroing velocity makes
     // the wingman hold position instead of extrapolating off into the sunset.
-    if (this.hidden) {
-      this.pose.vx = 0;
-      this.pose.vy = 0;
-      this.pose.vz = 0;
-    }
+
     this.enemyFlip = !this.enemyFlip;
     const now = performance.now();
     // The beat carries a pose unless a frame flush already did since the last
@@ -1745,21 +1675,30 @@ export class Multiplayer {
     if (withEnemy && this.enemy && ++this.enemySinceBeat >= ENEMY_BEATS) {
       enemyBuf = packEnemies(this.enemy, ++this.enemySeq);
     }
-    const buf = packPose(this.pose, ++this.seq);
+    const p = this.heldPose;
+    Object.assign(p,this.pose);
+    if (this.hidden || p.held || now-this.lastPublishAt > 250) {
+      p.held = true; p.sentAt = now;
+      p.vx = p.vy = p.vz = p.ax = p.ay = p.az = p.wx = p.wy = p.wz = 0;
+    }
+    let legacy: ArrayBuffer | null = null;
     let any = false;
     for (const conn of this.conns.values()) {
       if (!conn.open) continue;
-      // Poses supersede older poses. Do not pile stale motion behind a slow
-      // channel's reliable combat/control messages; send the newest on drain.
-      const channel = conn.dataChannel;
-      const queued = (conn as DataConnection & { bufferSize?: number }).bufferSize ?? 0;
-      if ((channel?.bufferedAmount ?? 0) > 2048 || queued > 8) continue;
-      try {
-        conn.send(buf);
-        if (enemyBuf) conn.send(enemyBuf);
-        any = true;
-      } catch {
-        /* channel is being torn down; the close handler will clean up */
+      const link = this.motionLinks.get(conn);
+      if (link && !link.legacy) {
+        if (link.send(p,this.conns.size > 4 ? 40 : 60)) any = true;
+      } else {
+        // Compatibility costs reliability, but never create an application queue
+        // of old poses. Modern peers never use this channel for motion.
+        const queued = (conn as DataConnection & { bufferSize?: number }).bufferSize ?? 0;
+        if ((conn.dataChannel?.bufferedAmount ?? 0) === 0 && queued === 0) {
+          try { legacy ??= packPose(p,++this.seq); conn.send(legacy); any = true; } catch { /* closing */ }
+        }
+      }
+      // The host-authoritative enemy stream keeps its historical reliable format.
+      if (enemyBuf && (conn.dataChannel?.bufferedAmount ?? 0) < 2048 && ((conn as DataConnection & { bufferSize?: number }).bufferSize ?? 0) === 0) {
+        try { conn.send(enemyBuf); } catch { /* next snapshot replaces it */ }
       }
     }
     if (!any) return false;
@@ -1773,6 +1712,10 @@ export class Multiplayer {
     this.poseDirty = false;
     this.sentSinceBeat = true;
     this.lastSendAt = now;
+    // Preserve the 30 Hz phase across irregular/144 Hz rendering instead of
+    // rounding every interval up to another whole frame (often only 20 Hz).
+    if (now+.5 >= this.nextPoseAt) this.nextPoseAt = this.nextPoseAt < now-FLUSH_MIN_GAP_MS
+      ? now+FLUSH_MIN_GAP_MS : this.nextPoseAt+FLUSH_MIN_GAP_MS;
     this.lastSentX = this.pose.x;
     this.lastSentY = this.pose.y;
     this.lastSentZ = this.pose.z;
@@ -1832,9 +1775,11 @@ export class Multiplayer {
             const v = r.currentRoundTripTime;
             if (typeof v === "number" && Number.isFinite(v) && v > best) best = v;
           });
-          if (best > 0) {
+          if (best > 0 && this.conns.get(id) === conn) {
             this.rttMs = best * 1000;
-            const oneWay = this.rttMs / 2;
+            const link = this.motionLinks.get(conn);
+            if (link && !link.legacy) link.observeRtt(this.rttMs);
+            const oneWay = link && !link.legacy ? link.metrics.rttMs/2 : this.rttMs/2;
             // The global is the fallback for a wingman we have not measured
             // yet; the per-peer value is what that wingman is drawn on.
             setLinkDelayMs(oneWay);
@@ -1862,6 +1807,7 @@ export class Multiplayer {
 
   private onVisibility = (): void => {
     this.hidden = document.hidden;
+    this.sentSinceBeat = false;
     // Send one packet straight away so the change is felt immediately rather
     // than after the throttled interval.
     this.tick();

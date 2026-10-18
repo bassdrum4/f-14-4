@@ -103,7 +103,7 @@ export function gunSolution(ctx: Dogfight, player: AircraftState): GunCue {
       }
     }
     for (const opponent of ctx.opponents) {
-      GUN_B.copy(opponent.pos).addScaledVector(opponent.vel, t);
+      GUN_B.copy(opponent.hitPos ?? opponent.pos).addScaledVector(opponent.vel, t);
       if (segSphere(GUN_PREV, GUN_P, GUN_B, airR)) { hit = "bandit"; break; }
     }
     if (hit) break;
@@ -188,7 +188,7 @@ export function assistBore(ctx: Dogfight,
     }
   }
   for (const opponent of ctx.opponents) {
-    TMP.copy(opponent.pos).sub(muzzle);
+    TMP.copy(opponent.hitPos ?? opponent.pos).sub(muzzle);
     const distance = TMP.length();
     if (distance > ASSIST_RANGE) continue;
     const tof = Math.min(distance / MUZZLE_V, 1.2);
@@ -304,7 +304,7 @@ export function stepTracers(ctx: Dogfight, dt: number, player: AircraftState): v
           }
         }
         if (!dead) for (const opponent of ctx.opponents) {
-          if (segSphere(prev, t.pos, opponent.pos, HIT_RADIUS)) {
+          if (segSphere(prev, t.pos, opponent.hitPos ?? opponent.pos, HIT_RADIUS)) {
             ctx.hitOpponent(opponent, "gun");
             dead = true;
             break;

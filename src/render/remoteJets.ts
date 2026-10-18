@@ -1,18 +1,8 @@
-// Remote aircraft for multiplayer: one mesh per wingman, driven from the
-// packets that arrive from the net layer. The netcode itself lives in
-// ../net/multiplayer.ts; this file only turns decoded poses into smooth motion.
-//
-// A wingman is drawn at "now", not behind it. Each remote keeps a presented
-// clock that rides real time and is pulled onto the newest packet plus the
-// measured one-way delay, so the aircraft is where the pilot is rather than one
-// send interval in the past. Corrections are eased in a few milliseconds at a
-// time (and a hopelessly stale remote snaps forward), which is what keeps the
-// formation smooth while the link is being chased; between packets the pose is
-// carried along the last known velocity.
-
+// Remote meshes consume a dedicated visual timeline; combat reads motion history.
 import * as THREE from "three";
 import { buildAircraft, type TomcatMesh } from "./geometry";
 import type { AircraftId } from "../sim/aircraft";
+import { MotionTimeline, motionSample, MAX_REWIND_MS } from "../net/motion";
 import { headingOfQuat } from "../sim/world";
 
 /** One decoded state frame from a remote pilot. */
@@ -30,6 +20,11 @@ export interface RemotePose {
   speed: number;
   sweepT: number;
   flags: number;
+  /** v2 motion extension; absent for legacy peers. */
+  sentAt?: number; sampleAt?: number; epoch?: number;
+  ax?: number; ay?: number; az?: number;
+  wx?: number; wy?: number; wz?: number;
+  gearT?: number; flapT?: number; abLevel?: number; held?: boolean;
 }
 
 export const FLAG_ON_GROUND = 1;
@@ -46,7 +41,7 @@ export const FLAG_ACTIVE = 128;
  * the newest packet plus this, i.e. where the wingman is right now. */
 let linkDelayMs = 25;
 function clampDelay(ms: number): number {
-  return Math.min(150, Math.max(6, ms));
+  return Math.min(250, Math.max(0, ms));
 }
 /** One-way delay for a wingman we have not measured yet. */
 export function setLinkDelayMs(ms: number): void {
@@ -73,40 +68,18 @@ export function clearPeerLinkDelayMs(id: string): void {
   peerDelayMs.delete(id);
 }
 
-/** How quickly the presented clock is walked onto its target (ms). */
-const CORR_TAU_MS = 70;
-/** Per-frame limits on a correction, so no packet ever causes a visible pop. */
-const MAX_LURCH_MS = 9; // forward: catching up on a remote that slipped behind
-const MAX_BACKSTEP_MS = 6; // backward: easing off when we are running early
-/** Past this much error the remote is simply out of date: snap it. */
-const MAX_BEHIND_MS = 350;
-const MAX_EXTRAP_MS = 600; // keep flying on velocity this long after a gap
-const STALE_MS = 2500; // dim the label when the peer goes quiet
-const GONE_MS = 12000; // hide a peer that has stopped sending entirely
-const MAX_SNAPSHOTS = 10;
+const STALE_MS = 1000;
+const GONE_MS = 12000;
 
 const TAG_TEXTURE_W = 512;
 const TAG_TEXTURE_H = 128;
 
-interface Snapshot {
-  t: number;
-  p: RemotePose;
-}
-
 interface RemoteEntity {
-  id: string;
-  name: string;
-  /** The airframe id the mesh was built from: a change means a rebuild. */
-  aircraft: AircraftId;
-  mesh: TomcatMesh;
-  tag: THREE.Sprite;
-  tagTex: THREE.CanvasTexture;
-  buf: Snapshot[];
+  id: string; name: string; aircraft: AircraftId;
+  mesh: TomcatMesh; tag: THREE.Sprite; tagTex: THREE.CanvasTexture;
+  motion: MotionTimeline;
+  buf: MotionTimeline["frames"];
   lastAt: number;
-  /** The instant this aircraft is being drawn at, on our clock (ms). */
-  presentT: number;
-  /** False until the first packet places the clock (then it eases, never snaps). */
-  placed: boolean;
 }
 
 /** A callsign label drawn onto a canvas sprite (cached per remote). */
@@ -147,9 +120,8 @@ function makeTag(name: string, hostile = false): { tag: THREE.Sprite; texture: T
   return { tag, texture };
 }
 
-const V_A = new THREE.Vector3();
-const Q_A = new THREE.Quaternion();
-const Q_B = new THREE.Quaternion();
+const GAMEPLAY = motionSample();
+const HIT_HISTORY = motionSample();
 
 export class RemoteFleet {
   private root = new THREE.Group();
@@ -184,10 +156,12 @@ export class RemoteFleet {
       this.remove(id);
     }
     const mesh = buildAircraft(aircraft, "gray");
+    mesh.afterburner.material = (mesh.afterburner.material as THREE.Material).clone();
     mesh.group.position.set(0, -8000, 0); // parked below the water until the first frame
     this.root.add(mesh.group);
     const { tag, texture } = makeTag(name, this.combatPilots !== null);
     this.root.add(tag);
+    const motion = new MotionTimeline();
     this.remotes.set(id, {
       id,
       name,
@@ -195,10 +169,9 @@ export class RemoteFleet {
       mesh,
       tag,
       tagTex: texture,
-      buf: [],
+      motion,
+      buf: motion.frames,
       lastAt: 0,
-      presentT: 0,
-      placed: false,
     });
   }
 
@@ -221,9 +194,7 @@ export class RemoteFleet {
   push(id: string, p: RemotePose, nowMs: number): void {
     const r = this.remotes.get(id);
     if (!r) return;
-    r.buf.push({ t: nowMs, p });
-    if (r.buf.length > MAX_SNAPSHOTS) r.buf.splice(0, r.buf.length - MAX_SNAPSHOTS);
-    r.lastAt = nowMs;
+    if (r.motion.push(p, nowMs, getPeerLinkDelayMs(id))) r.lastAt = r.motion.lastAt;
   }
 
   remove(id: string): void {
@@ -235,6 +206,7 @@ export class RemoteFleet {
       const mesh = o as THREE.Mesh;
       mesh.geometry?.dispose();
     });
+    (r.mesh.afterburner.material as THREE.Material).dispose();
     r.tag.removeFromParent();
     (r.tag.material as THREE.SpriteMaterial).dispose();
     r.tagTex.dispose();
@@ -273,15 +245,30 @@ export class RemoteFleet {
     return count;
   }
 
-  combatTargets(): Array<{ id: string; pos: THREE.Vector3; vel: THREE.Vector3; onGround?: boolean }> {
-    const out: Array<{ id: string; pos: THREE.Vector3; vel: THREE.Vector3; onGround?: boolean }> = [];
+  /** Gameplay prediction uses the current receiver time, never a mesh or a
+   * presentation clock. Gun collision may use up to 200 ms of received history;
+   * missile guidance, defenders and host validation use the current estimate. */
+  combatTargets(lagCompensateGuns = false): Array<{ id: string; pos: THREE.Vector3; vel: THREE.Vector3; hitPos?: THREE.Vector3; onGround?: boolean }> {
+    const out: Array<{ id: string; pos: THREE.Vector3; vel: THREE.Vector3; hitPos?: THREE.Vector3; onGround?: boolean }> = [];
+    const now = performance.now();
     for (const r of this.remotes.values()) {
-      if (!r.buf.length || performance.now() - r.lastAt > 800) continue;
-      const p = r.buf[r.buf.length - 1].p;
+      if (!r.buf.length || now-r.lastAt > 800) continue;
+      const p = r.buf[r.buf.length-1].p;
       if (!(p.flags & FLAG_ACTIVE)) continue;
-      out.push({ id: r.id, pos: r.mesh.group.position.clone(), vel: new THREE.Vector3(p.vx, p.vy, p.vz), onGround: !!(p.flags & FLAG_ON_GROUND) });
+      r.motion.sample(now, GAMEPLAY);
+      let hitPos: THREE.Vector3 | undefined;
+      if (lagCompensateGuns) {
+        const rewind = Math.min(MAX_REWIND_MS, getPeerLinkDelayMs(r.id)+r.motion.metrics.delayMs);
+        r.motion.sample(now-rewind,HIT_HISTORY); hitPos = HIT_HISTORY.pos.clone();
+      }
+      out.push({ id: r.id, pos: GAMEPLAY.pos.clone(), vel: GAMEPLAY.vel.clone(), hitPos, onGround: !!(p.flags & FLAG_ON_GROUND) });
     }
     return out;
+  }
+
+  /** Inspectable per-aircraft reconstruction statistics, copied off the hot path. */
+  diagnostics(): Array<{ id: string } & MotionTimeline["metrics"]> {
+    return [...this.remotes.values()].map(r => ({ id: r.id, ...r.motion.metrics }));
   }
 
   /** Every live wingman with range and bearing from a world point. */
@@ -314,7 +301,7 @@ export class RemoteFleet {
     let best: RemoteEntity | null = null;
     let bestD = Infinity;
     for (const r of this.remotes.values()) {
-      if (!r.buf.length) continue;
+      if (!r.buf.length || performance.now()-r.lastAt > GONE_MS) continue;
       const p = r.buf[r.buf.length - 1].p;
       const d = Math.hypot(p.x - x, p.y - y, p.z - z);
       if (d < bestD) {
@@ -342,17 +329,16 @@ export class RemoteFleet {
   } | null {
     const r = this.remotes.get(id);
     if (!r || !r.buf.length || performance.now() - r.lastAt > GONE_MS) return null;
-    const p = r.buf[r.buf.length - 1].p;
     return {
       id: r.id,
       name: r.name,
       aircraft: r.aircraft,
       pos: r.mesh.group.position.clone(),
       quat: r.mesh.group.quaternion.clone(),
-      vel: new THREE.Vector3(p.vx, p.vy, p.vz),
-      speed: p.speed,
-      sweepT: p.sweepT,
-      flags: p.flags,
+      vel: r.motion.visual.vel.clone(),
+      speed: r.motion.visual.speed,
+      sweepT: r.motion.visual.sweep,
+      flags: r.motion.visual.flags,
     };
   }
 
@@ -389,68 +375,12 @@ export class RemoteFleet {
       r.mesh.group.visible = true;
       r.tag.visible = true;
 
-      // Where the wingman is now: their newest packet, carried forward by the
-      // one-way delay the net layer measured. The presented clock is walked
-      // onto that target, a few ms at a time, instead of being snapped to it.
-      const newest = buf[buf.length - 1];
-      const target = newest.t + getPeerLinkDelayMs(r.id);
-      if (!r.placed) {
-        r.presentT = target;
-        r.placed = true;
-      } else {
-        r.presentT += dtMs;
-        const err = target - r.presentT;
-        if (err > MAX_BEHIND_MS) {
-          r.presentT = target; // far too stale to ease: this is a rejoin
-        } else {
-          const ease = err * (1 - Math.exp(-dtMs / CORR_TAU_MS));
-          r.presentT += Math.min(MAX_LURCH_MS, Math.max(-MAX_BACKSTEP_MS, ease));
-        }
-      }
-      const rt = r.presentT;
-
-      // newest snapshot at or before the presented time, and the one after it
-      let a: Snapshot | null = null;
-      let b: Snapshot | null = null;
-      for (let i = buf.length - 1; i >= 0; i--) {
-        if (buf[i].t <= rt) {
-          a = buf[i];
-          b = buf[i + 1] ?? null;
-          break;
-        }
-      }
-      if (!a) {
-        // No packet is old enough: the clock is behind the oldest one in the
-        // buffer (the measured lead just shrank). Start from that packet and
-        // interpolate forward from it.
-        a = buf[0];
-        b = buf.length > 1 && buf[1].t <= rt ? buf[1] : null;
-      }
-
-      if (a && b) {
-        const span = Math.max(b.t - a.t, 1);
-        const f = THREE.MathUtils.clamp((rt - a.t) / span, 0, 1);
-        V_A.set(
-          a.p.x + (b.p.x - a.p.x) * f,
-          a.p.y + (b.p.y - a.p.y) * f,
-          a.p.z + (b.p.z - a.p.z) * f,
-        );
-        Q_A.set(a.p.qx, a.p.qy, a.p.qz, a.p.qw);
-        Q_B.set(b.p.qx, b.p.qy, b.p.qz, b.p.qw);
-        Q_A.slerp(Q_B, f);
-      } else {
-        const dt = Math.min(Math.max(rt - a.t, 0), MAX_EXTRAP_MS) / 1000;
-        V_A.set(a.p.x + a.p.vx * dt, a.p.y + a.p.vy * dt, a.p.z + a.p.vz * dt);
-        Q_A.set(a.p.qx, a.p.qy, a.p.qz, a.p.qw);
-      }
-
-      r.mesh.group.position.copy(V_A);
-      r.mesh.group.quaternion.copy(Q_A);
-      r.tag.position.set(V_A.x, V_A.y + 7.5, V_A.z);
-
-      // surface state, approximated from the packet flags
+      const visual = r.motion.update(nowMs,getPeerLinkDelayMs(r.id));
+      r.mesh.group.position.copy(visual.pos);
+      r.mesh.group.quaternion.copy(visual.quat);
+      r.tag.position.set(visual.pos.x, visual.pos.y+7.5, visual.pos.z);
       if (r.mesh.sweepable !== false) {
-        const sweep = THREE.MathUtils.degToRad(20 + 48 * THREE.MathUtils.clamp(a.p.sweepT, 0, 1));
+        const sweep = THREE.MathUtils.degToRad(20+48*THREE.MathUtils.clamp(visual.sweep,0,1));
         r.mesh.wings[0].rotation.y = -sweep;
         r.mesh.wings[1].rotation.y = sweep;
       }
@@ -458,13 +388,13 @@ export class RemoteFleet {
       // on frame time rather than leaving the helicopter's blades frozen.
       if (r.mesh.rotor) r.mesh.rotor.rotation.y = (r.mesh.rotor.rotation.y + 27 * dtMs / 1000) % (Math.PI * 2);
       if (r.mesh.tailRotor) r.mesh.tailRotor.rotation.x = (r.mesh.tailRotor.rotation.x + 70 * dtMs / 1000) % (Math.PI * 2);
-      r.mesh.gear.visible = (a.p.flags & FLAG_GEAR) !== 0;
-      const ab = (a.p.flags & FLAG_AB) !== 0;
-      r.mesh.afterburner.visible = ab;
-      if (ab) (r.mesh.afterburner.material as THREE.MeshBasicMaterial).opacity = 0.8;
-      const flap = (a.p.flags & FLAG_FLAPS) !== 0 ? 0.4 : 0;
-      r.mesh.flaps[0].rotation.z = flap;
-      r.mesh.flaps[1].rotation.z = -flap;
+      r.mesh.gear.visible = visual.gear > .02;
+      r.mesh.gear.scale.y = Math.max(.08,visual.gear);
+      r.mesh.gear.position.y = (1-visual.gear)*1.1;
+      r.mesh.afterburner.visible = visual.ab > .02;
+      (r.mesh.afterburner.material as THREE.MeshBasicMaterial).opacity = .8*visual.ab;
+      r.mesh.flaps[0].rotation.z = .4*visual.flap;
+      r.mesh.flaps[1].rotation.z = -.4*visual.flap;
 
       (r.tag.material as THREE.SpriteMaterial).opacity = silent > STALE_MS ? 0.35 : 1;
     }

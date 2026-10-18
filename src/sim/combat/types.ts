@@ -285,7 +285,7 @@ export interface DogfightHud {
   } | null;
 }
 
-export interface CombatOpponent { id: string; life: number; pos: THREE.Vector3; vel: THREE.Vector3 }
+export interface CombatOpponent { id: string; life: number; pos: THREE.Vector3; vel: THREE.Vector3; hitPos?: THREE.Vector3 }
 export interface PlayerHit { id: string; life: number; weapon: BattleWeapon }
 
 /** One pilot's aircraft as the room reports it for the fleet-defense check. */
