@@ -350,8 +350,12 @@ function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
     // dpr carries the panel size as well as the display density: the drawing
     // below stays in 176 units and is simply rendered larger for the map view.
     const dpr = Math.min(window.devicePixelRatio, 2) * (side / n);
-    cv.width = Math.round(n * dpr);
-    cv.height = Math.round(n * dpr);
+    const targetDim = Math.round(n * dpr);
+    // Only reallocate canvas buffer when dimensions change to avoid per-frame GPU reallocation.
+    if (cv.width !== targetDim || cv.height !== targetDim) {
+      cv.width = targetDim;
+      cv.height = targetDim;
+    }
     const ctx = cv.getContext("2d");
     if (!ctx) return;
 
