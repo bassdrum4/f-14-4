@@ -763,7 +763,7 @@ export class Dogfight {
   battleMissiles(): BattleMissile[] {
     if (!this.versus) return [];
     return this.missiles.filter(m => !m.hostile).map(m => {
-      const target = m.decoy ? null : m.naval?.kind === "pilot" ? this.opponents.find(o => o.id === m.naval!.id)?.pos ?? null : this.nearestMissileTarget(m.pos);
+      const target = m.decoy ? null : m.naval?.kind === "pilot" ? this.opponents.find(o => o.id === m.naval!.id && o.life === m.naval!.life)?.pos ?? null : this.nearestMissileTarget(m.pos);
       return { id: m.id, pos: m.pos.toArray(), vel: m.vel.toArray(), age: MISSILE_LIFE - m.life,
         target: this.opponents.find(o => o.pos === target)?.id ?? null };
     });

@@ -59,6 +59,7 @@
     "test:motion:browser": "node scripts/diag-motion-browser.mjs",
     "test:motion:scheduling": "bun scripts/diag-motion-scheduling.ts",
     "test:destroyer": "bun scripts/diag-destroyer.ts",
+    "test:destroyer:regressions": "bun scripts/diag-destroyer-regressions.ts",
     "test:destroyer:browser": "node scripts/diag-destroyer-browser.mjs"
   },
   "dependencies": {

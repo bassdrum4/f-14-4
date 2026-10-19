@@ -6,6 +6,14 @@ arrived in large exports with stale 1.0.0 metadata; see
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md) for the surviving
 timeline, recovered intermediate build, and remaining history gaps.
 
+## Unreleased — Destroyer review fixes
+
+- Keep director clicks on hostile decks attached to the moving carrier.
+- Bind naval PvP locks to the target's current life and use surface cruise/terminal guidance for player-controlled destroyers.
+- Match the gun cue's destroyer hit shape to the oriented hull used by damaging rounds.
+- Require naval service at the pilot's assigned friendly carrier in head-to-head, with the same water, altitude and speed checks on the client and host.
+- Add nine cross-system regressions covering moving-target impacts, respawns, local/remote service validation, campaign preservation and mixed aircraft/destroyer co-op damage. Keep aircraft landing fixtures limited to aircraft.
+
 ## 2.10.0 — Playable destroyer beta
 
 - Added DDG DESTROYER with a BETA PHASE selector badge, saved selection and sea spawn in solo and multiplayer.

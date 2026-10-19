@@ -110,7 +110,9 @@ export function gunSolution(ctx: Dogfight, player: AircraftState): GunCue {
     }
     for (const opponent of ctx.opponents) {
       GUN_B.copy(opponent.hitPos ?? opponent.pos).addScaledVector(opponent.vel, t);
-      if (segSphere(GUN_PREV, GUN_P, GUN_B, airR)) { hit = "bandit"; break; }
+      if (opponent.surfaceVessel && opponent.quat
+        ? hitsVessel(GUN_PREV, GUN_P, { pos: GUN_B, quat: opponent.quat })
+        : segSphere(GUN_PREV, GUN_P, GUN_B, airR)) { hit = "bandit"; break; }
     }
     if (hit) break;
     for (const t of ctx.strikeTargets) {

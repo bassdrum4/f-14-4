@@ -1779,7 +1779,7 @@ export class Sim {
       // A repair claim must agree with the host's view of the aircraft: near
       // a friendly deck/runway and slow enough to have completed a recovery.
       if (specFor(aircraft ?? "tomcat").surfaceVessel) {
-        if (surface.kind !== "water" || Math.abs(from.y) > 3 || velocity.length() > 2 || !carriers().some(c => Math.hypot(c.x - from.x, c.z - from.z) < 1000)) return;
+        if (!this.canServiceShip(from, velocity.length(), sender)) return;
       } else if ((surface.kind !== "deck" && surface.kind !== "runway") || Math.abs(from.y - surface.y) > 6 || velocity.length() > 20) return;
     }
     if (this.battleReferee.action(sender, action, performance.now() / 1000, range, specFor(aircraft ?? "tomcat").gunDamage)) {
@@ -2251,11 +2251,24 @@ export class Sim {
   private recoveryPending = false;
   private shipRearmHold = 0;
 
+  /** Local stores and host-owned repairs must agree on the friendly station. */
+  private canServiceShip(pos: THREE.Vector3, speed: number, pilot = this.netState.self): boolean {
+    if (![pos.x, pos.y, pos.z, speed].every(Number.isFinite) || speed > 2 || Math.abs(pos.y) > 3 || groundAt(pos.x, pos.z).kind !== "water") return false;
+    let homes = carriers();
+    if (this.battleActive) {
+      const ids = [this.netState.self, ...this.netState.pilots.filter(p => !p.spectator).map(p => p.id)].sort();
+      const slot = ids.indexOf(pilot);
+      if (slot < 0) return false;
+      const pair = battleCarrierPair(Math.floor(this.battle.match) || 0, homes.length);
+      homes = [homes[pair[slot % pair.length]]];
+    }
+    return homes.some(c => Math.hypot(c.x - pos.x, c.z - pos.z) <= 1000);
+  }
+
   private stepShipRearm(held: boolean, dt: number): void {
     const st = this.state;
     if (!st.spec.surfaceVessel || st.result) return;
-    const home = nearestCarrier(st.pos.x, st.pos.z);
-    if (!held || st.speed > 2 || Math.hypot(home.x - st.pos.x, home.z - st.pos.z) > 1000) { this.shipRearmHold = 0; return; }
+    if (!held || !this.canServiceShip(st.pos, st.speed)) { this.shipRearmHold = 0; return; }
     this.shipRearmHold += dt;
     if (this.shipRearmHold > 0 && this.shipRearmHold < 3) st.banner = { text: `NAVAL SERVICE — HOLD ${keyLabel(this.settings.bindings.cat)} · ${Math.ceil(3 - this.shipRearmHold)}s`, until: st.time + .2 };
     if (this.shipRearmHold >= 3) {
