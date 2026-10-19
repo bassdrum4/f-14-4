@@ -796,3 +796,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .lso-grade.good { color: #92efad; }
 .lso-grade.fair { color: var(--hud-amber); }
 .lso-grade.poor { color: #ff8165; }
+
+.vehicle-beta { display: inline-block; margin-left: 8px; padding: 2px 5px; border: 1px solid #e8b357; color: #ffce7c; font: 700 9px ui-monospace, monospace; letter-spacing: .08em; vertical-align: middle; }
+.ship-director { position: absolute; top: 20%; left: 50%; transform: translateX(-50%); color: #a1f5be; text-align: center; font: 12px ui-monospace, monospace; line-height: 1.8; text-shadow: 0 1px 3px #000; }
+.ship-reticle { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); color: #a1f5be; font: 30px ui-monospace, monospace; }

@@ -487,6 +487,13 @@ check("the others see the new callsign", byName(host, "GOOSE 2") !== undefined,
 check("and the new airframe", byName(host, "GOOSE 2")?.aircraft === "intruder",
   byName(host, "GOOSE 2")?.aircraft);
 
+// The new surface vehicle must survive the same roster/update path as jets.
+wing.net.setAircraft("destroyer");
+await flush();
+check("mixed rooms preserve the destroyer vehicle identity", byName(host, "GOOSE 2")?.aircraft === "destroyer" && byName(third, "GOOSE 2")?.aircraft === "destroyer");
+wing.net.setAircraft("intruder");
+await flush();
+
 // ---------------------------------------------------------------------------
 // 6. a wingman leaves
 // ---------------------------------------------------------------------------

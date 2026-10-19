@@ -1,6 +1,7 @@
 // Authored-operation glue: phase transitions, the launch queue, enemy bombs and
 // the fleet defenders those operations shoot at.
 
+import { specFor } from "../aircraft";
 import { BOMB_ARM_TIME as BOMB_ARM, advanceBomb } from "../bombTrajectory";
 import * as THREE from "three";
 import { convoyRoute, isFortressPrimary, operationPhaseDuration } from "../operations";
@@ -259,7 +260,7 @@ export function stepEnemyBombs(ctx: Dogfight, dt: number, player: AircraftState)
 export function nearestDefender(ctx: Dogfight, player: AircraftState, from: THREE.Vector3): AircraftState {
   let closest: FleetDefender | null = null, distance = player.result ? Infinity : from.distanceToSquared(player.pos);
   for (const p of ctx.defenders) { const d = p.pos.distanceToSquared(from); if (d < distance) { closest = p; distance = d; } }
-  return closest ? { ...player, pos: closest.pos, vel: closest.vel, speed: closest.vel.length(), onGround: closest.onGround ?? false, result: null } : player;
+  return closest ? { ...player, spec: specFor(closest.aircraft ?? player.spec.id), pos: closest.pos, vel: closest.vel, speed: closest.vel.length(), onGround: closest.onGround ?? false, result: null } : player;
 }
 
 export function takeEnemyFire(ctx: Dogfight): EnemyFire[] { const shots = ctx.enemyFire; ctx.enemyFire = []; return shots; }

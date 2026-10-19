@@ -14,6 +14,8 @@ import type { EnemyFire, SharedCombat } from "../combatSnapshot";
 import type { TargetKind } from "../../render/targets";
 import type { BlastKind, ExplosionField } from "../../render/effects";
 import { MAX_BOMBS, MAX_MISSILES } from "../aircraft";
+import { gunMuzzle, shipGunQuaternion } from "../surface";
+const MUZZLE_Q = new THREE.Quaternion();
 import type { AircraftState } from "../flight";
 import type { CarrierDef } from "../world";
 import {
@@ -761,7 +763,7 @@ export class Dogfight {
   battleMissiles(): BattleMissile[] {
     if (!this.versus) return [];
     return this.missiles.filter(m => !m.hostile).map(m => {
-      const target = m.decoy ? null : this.nearestMissileTarget(m.pos);
+      const target = m.decoy ? null : m.naval?.kind === "pilot" ? this.opponents.find(o => o.id === m.naval!.id)?.pos ?? null : this.nearestMissileTarget(m.pos);
       return { id: m.id, pos: m.pos.toArray(), vel: m.vel.toArray(), age: MISSILE_LIFE - m.life,
         target: this.opponents.find(o => o.pos === target)?.id ?? null };
     });
@@ -927,8 +929,8 @@ export class Dogfight {
     // it tracks the jet instead of blinking at an old position.
     if (this.muzzleT > 0) {
       this.muzzleT = Math.max(0, this.muzzleT - dt);
-      FWD.set(0, 0, -1).applyQuaternion(player.quat);
-      this.muzzle.position.copy(player.pos).addScaledVector(FWD, 8);
+      FWD.set(0, 0, -1).applyQuaternion(player.spec.surfaceVessel ? shipGunQuaternion(player, MUZZLE_Q) : player.quat);
+      gunMuzzle(player, this.muzzle.position, FWD);
       this.muzzle.scale.setScalar(1.3 + 0.7 * Math.abs(Math.sin(player.time * 97)));
       this.muzzle.visible = this.muzzleT > 0;
     } else {
@@ -1024,7 +1026,7 @@ export class Dogfight {
     const before = this.hull;
     this.hull -= dmg;
     this.damageT = DAMAGE_FLASH;
-    if (player.subsystems && this.hull > 0) {
+    if (player.subsystems && this.hull > 0 && !player.spec.surfaceVessel) {
       const sub = player.subsystems;
       const roll = Math.floor(Math.abs(Math.sin(player.time * 43.7 + dmg * 7.1)) * 4);
       if (roll === 0 && sub.engineL > 0.5) {
@@ -1047,8 +1049,8 @@ export class Dogfight {
     if (this.hull <= 0 && !player.result) {
       player.result = {
         kind: "crash",
-        title: "OUT OF THE FIGHT",
-        detail: `Downed by an aggressor over the islands. ${this.kills} tagged.`,
+        title: player.spec.surfaceVessel ? "DESTROYER LOST" : "OUT OF THE FIGHT",
+        detail: player.spec.surfaceVessel ? `Hull breached. ${this.kills} contacts destroyed.` : `Downed by an aggressor over the islands. ${this.kills} tagged.`,
       };
     }
   }

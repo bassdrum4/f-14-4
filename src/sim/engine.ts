@@ -2,6 +2,8 @@ import { RemoteWeapons } from "../render/remoteWeapons";
 import { BattleReferee, battleCarrierPair, type BattleAction, type BattleSnapshot, type BattleShot, type BattleMissiles } from "../net/versus";
 import { specFor, type AircraftId } from "./aircraft";
 import { atmosphere } from "./atmosphere";
+import { shipGunQuaternion, shipSpawn } from "./surface";
+import { launchNavalMissile } from "./combat/naval";
 // Sim orchestrator: state machine, fixed-timestep sim, render loop, HUD feed.
 
 import * as THREE from "three";
@@ -103,6 +105,10 @@ export interface HudSnapshot {
   /** True only for airframes with variable-geometry wings (the Tomcat). */
   sweepable: boolean;
   rotorcraft: boolean;
+  surfaceVessel?: boolean;
+  turretBearingDeg?: number;
+  turretElevationDeg?: number;
+  shipControls?: string;
   stalled: boolean;
   onGround: boolean;
   catPhase: string;
@@ -612,6 +618,11 @@ export class Sim {
   private newState(mission: MissionKind, carrier: number): AircraftState {
     this.motionEpoch = (this.motionEpoch+1) >>> 0;
     const st = spawnAircraft(mission, carrier, this.settings.aircraft, this.settings.bindings);
+    if (st.spec.surfaceVessel && this.netState?.status === "online") {
+      const ids = [this.netState.self, ...this.netState.pilots.filter(p => !p.spectator).map(p => p.id)].sort();
+      st.pos.copy(shipSpawn(carrier, Math.max(0, ids.indexOf(this.netState.self))));
+      st.prevPos.copy(st.pos);
+    }
     this.applyWeather(st);
     return st;
   }
@@ -860,6 +871,7 @@ export class Sim {
   }
 
   private beginMission(mission: MissionKind, carrierIndex: number): void {
+    this.shipRearmHold = 0;
     this.operationDebrief = false; this.allPilotsDown = 0; this.combatSentAt = -Infinity;
     this.mission = mission;
     this.recoveryPending = false;
@@ -906,7 +918,9 @@ export class Sim {
         : strike
         ? "STRIKE TARGETS ON THE GRID"
         : "HOSTILE CARRIER INBOUND";
-      this.dfArmText = this.state.spec.rotorcraft
+      this.dfArmText = this.state.spec.surfaceVessel
+        ? "DESTROYER BETA — AIR DEFENSE / SURFACE STRIKE · ARROWS TRAIN GUN · R DIRECTOR · E VLS"
+        : this.state.spec.rotorcraft
         ? `${what} — COLLECTIVE UP (${keyLabel(this.settings.bindings.throttleUp)}) TO LIFT OFF`
         : mission === "carrier"
         ? `${what} — FULL THROTTLE (${keyLabel(this.settings.bindings.throttleUp)}) — HOLD ${keyLabel(this.settings.bindings.cat)} — CLIMB (${keyLabel(this.settings.bindings.pitchUp)})`
@@ -915,6 +929,7 @@ export class Sim {
     } else {
       this.dfArmed = false;
       this.df.clear();
+      if (this.state.spec.surfaceVessel) this.df.refill();
     }
     this.prevPos.copy(this.state.pos);
     this.prevQuat.copy(this.state.quat);
@@ -1713,6 +1728,14 @@ export class Sim {
       );
       st.banner.text = "HEAD-TO-HEAD — HOVER READY · FIVE-SECOND SPAWN SHIELD";
     }
+    if (st.spec.surfaceVessel) {
+      st.pos.copy(shipSpawn(carrierIndex, slot)); st.prevPos.copy(st.pos);
+      st.vel.set(0, 0, 0); st.speed = 0; st.throttle = st.rpm = 0;
+      st.airborne = false; st.groundKind = "water";
+      st.headingDeg = center.headingDeg;
+      st.quat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -st.headingDeg * Math.PI / 180);
+      st.banner.text = "DESTROYER BETA — FIVE-SECOND SPAWN SHIELD · R DIRECTOR · E VLS";
+    }
     // A respawn keeps the racks you have left; a fresh launch arms them.
     this.df.beginVersus(st, !respawn);
     this.remoteWeapons.clear();
@@ -1755,7 +1778,9 @@ export class Sim {
       const surface = groundAt(from.x, from.z);
       // A repair claim must agree with the host's view of the aircraft: near
       // a friendly deck/runway and slow enough to have completed a recovery.
-      if ((surface.kind !== "deck" && surface.kind !== "runway") || Math.abs(from.y - surface.y) > 6 || velocity.length() > 20) return;
+      if (specFor(aircraft ?? "tomcat").surfaceVessel) {
+        if (surface.kind !== "water" || Math.abs(from.y) > 3 || velocity.length() > 2 || !carriers().some(c => Math.hypot(c.x - from.x, c.z - from.z) < 1000)) return;
+      } else if ((surface.kind !== "deck" && surface.kind !== "runway") || Math.abs(from.y - surface.y) > 6 || velocity.length() > 20) return;
     }
     if (this.battleReferee.action(sender, action, performance.now() / 1000, range, specFor(aircraft ?? "tomcat").gunDamage)) {
       const snapshot = this.battleReferee.snapshot(performance.now() / 1000);
@@ -1988,6 +2013,12 @@ export class Sim {
     // A missile launch is an edge, like gear or flaps: one press, one shot.
     if (this.input.take("missile")) this.df.requestMissile(this.state);
     if (this.input.take("flares")) this.df.requestFlares(this.state);
+    // A destroyer has no aircraft fittings. Consume those edges without
+    // allowing a gear/flap toggle to leak into its network pose.
+    if (this.state.spec.surfaceVessel) {
+      for (const action of ["gear", "flaps", "speedbrake", "ab", "cat"] as const) this.input.take(action);
+      return;
+    }
     if (this.input.take("gear")) {
       if (this.state.onGround && this.state.speed < 1) {
         this.pushBanner("GEAR LOCKED — cannot retract while parked");
@@ -2023,10 +2054,11 @@ export class Sim {
     // a click queued before the pod opened (a menu button, say) must not
     // immediately designate a target
     this.input.clearClicks();
-    this.rig.enterPod(this.state.quat);
+    this.rig.enterPod(this.state.spec.surfaceVessel ? shipGunQuaternion(this.state, this.camQ) : this.state.quat);
     this.pod = true;
     const el = this.renderer.renderer.domElement;
     el.style.cursor = "crosshair";
+    if (this.state.spec.surfaceVessel) { this.pushBanner("GUN DIRECTOR — ARROWS / DRAG TO AIM · Q GUN · E VLS LOCK · CLICK SURFACE TO STRIKE"); return; }
     this.pushBanner(
       this.df.designated
         ? "TARGET POD — SLEW ONTO A TARGET, CLICK TO RE-ENGAGE · [R] TO LEAVE"
@@ -2064,6 +2096,7 @@ export class Sim {
     }
     this.df.setDesignation(hit.pos);
     if (this.state.result) return;
+    if (this.state.spec.surfaceVessel) { launchNavalMissile(this.df, this.state, hit.pos); return; }
     if (this.df.hud(this.state).bombs <= 0) {
       this.pushBanner("TARGET DESIGNATED — BOMBS EXPENDED");
       return;
@@ -2133,6 +2166,7 @@ export class Sim {
       // Releases come from target-pod clicks (queued in the Dogfight), not
       // from holding the key: the pod is the aiming station.
       this.df.step(FIXED_DT, this.state, inp.fire === true, false);
+      this.stepShipRearm(inp.catHold, FIXED_DT);
       // A wheels-down on a friendly deck or runway is a recovery, not the end:
       // the racks and the hull come back full so the pilot can go again.
       if (wasAirborne && isRecoverySurface(this.state)) this.recoveryPending = true;
@@ -2158,7 +2192,7 @@ export class Sim {
     if (this.state.result) this.endPod();
     // A fatal crash starts the replay instead of cutting straight to the
     // screen; a trap or a bolter still ends the flight the normal way.
-    if (this.state.result?.kind === "crash" && !this.crashSeq && !this.battleActive) this.beginCrashReplay();
+    if (this.state.result?.kind === "crash" && !this.crashSeq && !this.battleActive && !this.state.spec.surfaceVessel) this.beginCrashReplay();
     if (this.state.result && this.phase === "flying" && !this.crashSeq && !this.battleActive) {
       this.setPhase("result");
     }
@@ -2215,6 +2249,21 @@ export class Sim {
   }
 
   private recoveryPending = false;
+  private shipRearmHold = 0;
+
+  private stepShipRearm(held: boolean, dt: number): void {
+    const st = this.state;
+    if (!st.spec.surfaceVessel || st.result) return;
+    const home = nearestCarrier(st.pos.x, st.pos.z);
+    if (!held || st.speed > 2 || Math.hypot(home.x - st.pos.x, home.z - st.pos.z) > 1000) { this.shipRearmHold = 0; return; }
+    this.shipRearmHold += dt;
+    if (this.shipRearmHold > 0 && this.shipRearmHold < 3) st.banner = { text: `NAVAL SERVICE — HOLD ${keyLabel(this.settings.bindings.cat)} · ${Math.ceil(3 - this.shipRearmHold)}s`, until: st.time + .2 };
+    if (this.shipRearmHold >= 3) {
+      if (this.battleActive) this.rearmBattleAircraft();
+      else this.refillOnRecovery();
+      this.shipRearmHold = -Infinity; // release before starting another service
+    }
+  }
 
   /**
    * Remember where a sortie ended, if it ended on a deck or the runway. The
@@ -2291,6 +2340,10 @@ export class Sim {
     const lsoPlatform = station
       ? { x: station.pos.x, y: station.pos.y, z: station.pos.z, lookX: look.x, lookY: look.y, lookZ: look.z }
       : undefined;
+    if (target?.aircraft === "destroyer" && this.rig.mode !== "lso" && this.rig.mode !== "free") {
+      this.rig.updateShip(this.renderer.camera, target.pos, target.quat, target.quat, dt);
+      return;
+    }
     this.rig.update(
       this.renderer.camera,
       target?.pos ?? this.state.pos,
@@ -2312,14 +2365,18 @@ export class Sim {
     const p = this.camP.lerpVectors(this.prevPos, st.pos, alpha);
     const q = this.camQ.copy(this.prevQuat).slerp(st.quat, alpha);
     const mouse = this.input.takeMouse();
-    this.rig.mouse(mouse.dx, mouse.dy);
+    if (st.spec.surfaceVessel && (this.pod || this.rig.mode === "cockpit")) {
+      st.turretYaw = ((st.turretYaw ?? 0) + mouse.dx * .0018 + Math.PI * 3) % (Math.PI * 2) - Math.PI;
+      st.turretPitch = THREE.MathUtils.clamp((st.turretPitch ?? .2) - mouse.dy * .0018, .025, 1.4);
+    } else this.rig.mouse(mouse.dx, mouse.dy);
     // menu attract + crash replay get the slow orbit; in flight the third
     // camera is locked behind the jet
     const cinematic =
       this.phase === "menu" ||
       this.crashSeq !== null ||
       (this.phase === "result" && st.result?.kind === "crash");
-    this.rig.update(this.renderer.camera, p, q, st.speed, dt, cinematic);
+    if (st.spec.surfaceVessel) this.rig.updateShip(this.renderer.camera, p, q, shipGunQuaternion(st, this.poseQ), dt, cinematic);
+    else this.rig.update(this.renderer.camera, p, q, st.speed, dt, cinematic);
     // hide the airframe in the cockpit (you are inside it) and in the target
     // pod (the sensor sees past it)
     const inside = this.rig.mode === "cockpit" || this.rig.mode === "pod";
@@ -2428,6 +2485,12 @@ export class Sim {
       sweepDeg: Math.round(st.sweep),
       sweepable: st.spec.sweepMax > st.spec.sweepMin,
       rotorcraft: st.spec.rotorcraft === true,
+      surfaceVessel: st.spec.surfaceVessel === true,
+      turretBearingDeg: ((st.headingDeg + (st.turretYaw ?? 0) * 180 / Math.PI) + 360) % 360,
+      turretElevationDeg: (st.turretPitch ?? .2) * 180 / Math.PI,
+      shipControls: st.spec.surfaceVessel
+        ? `${keyLabel(this.settings.bindings.pitchUp)}/${keyLabel(this.settings.bindings.pitchDown)} ELEV · ${keyLabel(this.settings.bindings.rollLeft)}/${keyLabel(this.settings.bindings.rollRight)} TRAIN · ${keyLabel(this.settings.bindings.fire)} GUN · ${keyLabel(this.settings.bindings.missile)} VLS · ${keyLabel(this.settings.bindings.bomb)} DIRECTOR`
+        : undefined,
       stalled: st.stalled,
       onGround: st.onGround,
       catPhase: st.catPhase,
@@ -2580,7 +2643,7 @@ export class Sim {
     return {
       dfActive: h.active,
       dfStrike: h.strike,
-      dfHull: h.hull,
+      dfHull: st.spec.surfaceVessel && !this.battleActive ? Math.round(h.hull / st.spec.hull * 100) : h.hull,
       dfKills: h.kills,
       dfWave: h.wave,
       dfBandits: h.bandits,

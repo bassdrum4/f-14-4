@@ -19,7 +19,7 @@
 //                    ~9,927 kg max takeoff, ~258 rpm four-blade main rotor,
 //                    two Hellfire/torpedo stations and a door gun.
 
-export type AircraftId = "tomcat" | "hornet" | "crusader" | "intruder" | "seahawk";
+export type AircraftId = "tomcat" | "hornet" | "crusader" | "intruder" | "seahawk" | "destroyer";
 
 export interface AircraftSpec {
   id: AircraftId;
@@ -28,6 +28,9 @@ export interface AircraftSpec {
   blurb: string; // menu description
   /** Rotary wing: the flight model flies it with the rotor model, not a wing. */
   rotorcraft?: boolean;
+  /** Surface vessel: buoyancy and rudder model instead of aerodynamics. */
+  surfaceVessel?: boolean;
+  beta?: boolean;
 
   // --- mass + aero ---
   mass: number; // kg, combat loaded
@@ -71,6 +74,19 @@ export interface AircraftSpec {
 }
 
 export const AIRCRAFT: Record<AircraftId, AircraftSpec> = {
+  destroyer: {
+    id: "destroyer", name: "DDG DESTROYER", role: "Surface combatant",
+    blurb: "BETA PHASE · Fleet air defense, convoy interception and coastal strike",
+    surfaceVessel: true, beta: true,
+    mass: 8_500_000, sWing: 0, span: 20, chord: 142,
+    iPitch: 1e10, iYaw: 1e10, iRoll: 1e9,
+    clAlpha: 0, alphaStall: 1, cd0: 0, kInduced: 0,
+    cmElev: 0, cmQ: 0, clAil: 0, clP: 0, cnRud: 0, flapLift: 0,
+    gLimit: 1, sweepMin: 0, sweepMax: 0,
+    idleThrust: 0, thrustDry: 0, abThrust: 0,
+    bombs: 0, missiles: 32, flares: 60,
+    gunRps: 8, gunDamage: 16, hull: 300,
+  },
   tomcat: {
     id: "tomcat",
     name: "F-14A TOMCAT",
@@ -262,6 +278,7 @@ export const AIRCRAFT_LIST: AircraftSpec[] = [
   AIRCRAFT.crusader,
   AIRCRAFT.intruder,
   AIRCRAFT.seahawk,
+  AIRCRAFT.destroyer,
 ];
 
 export const DEFAULT_AIRCRAFT: AircraftId = "tomcat";
@@ -271,7 +288,7 @@ export function specFor(id: AircraftId): AircraftSpec {
   return AIRCRAFT[id] ?? AIRCRAFT.tomcat;
 }
 
-/** True when `id` names a flyable airframe. Used to sanitise stored profiles. */
+/** True when `id` names a playable vehicle. Used to sanitise stored profiles. */
 export function isAircraftId(id: unknown): id is AircraftId {
   return typeof id === "string" && Object.prototype.hasOwnProperty.call(AIRCRAFT, id);
 }

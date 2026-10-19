@@ -11,6 +11,7 @@ import type { BlastKind } from "../../render/effects";
 import type { CarrierDef } from "../world";
 
 export interface Missile {
+  naval?: { kind: "air" | "surface" | "carrier" | "point" | "pilot"; id: number | string; point: THREE.Vector3; cruiseHeight: number };
   targetPilot?: string;
   id: number;
   pos: THREE.Vector3;
@@ -285,8 +286,8 @@ export interface DogfightHud {
   } | null;
 }
 
-export interface CombatOpponent { id: string; life: number; pos: THREE.Vector3; vel: THREE.Vector3; hitPos?: THREE.Vector3 }
+export interface CombatOpponent { id: string; life: number; pos: THREE.Vector3; vel: THREE.Vector3; hitPos?: THREE.Vector3; quat?: THREE.Quaternion; surfaceVessel?: boolean }
 export interface PlayerHit { id: string; life: number; weapon: BattleWeapon }
 
 /** One pilot's aircraft as the room reports it for the fleet-defense check. */
-export interface FleetDefender { id: string; pos: THREE.Vector3; vel: THREE.Vector3; onGround?: boolean }
+export interface FleetDefender { id: string; pos: THREE.Vector3; vel: THREE.Vector3; onGround?: boolean; aircraft?: import("../aircraft").AircraftId }

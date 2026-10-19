@@ -1,6 +1,8 @@
 // Missiles and hostile air-to-air rounds: launch, guidance and fusing.
 
 import { captureFlare } from "../countermeasures";
+import { hitsVessel } from "../surface";
+import { launchNavalMissile, navalTarget } from "./naval";
 import * as THREE from "three";
 import type { BlastKind } from "../../render/effects";
 import { atmosphere } from "../atmosphere";
@@ -187,6 +189,7 @@ export function steerSeeker(_ctx: Dogfight, m: Missile, target: THREE.Vector3, d
  * are per-airframe (the Tomcat and Hornet ride two, the Intruder none).
  */
 export function requestMissile(ctx: Dogfight, player: AircraftState): void {
+  if (player.spec.surfaceVessel) { launchNavalMissile(ctx, player); return; }
   if (ctx.missileCd > 0 || ctx.missilesLeft <= 0 || ctx.missilePool.length === 0) return;
   if (player.onGround || player.result) {
     if (!player.onGround) return;
@@ -244,12 +247,14 @@ export function fireMissile(ctx: Dogfight, player: AircraftState): void {
   const mesh = ctx.missilePool.pop();
   if (!mesh) return;
   const [sx, sy, sz] = MISSILE_STATIONS[ctx.missiles.length % MISSILE_STATIONS.length];
-  const pos = player.pos.clone().add(new THREE.Vector3(sx, sy, sz).applyQuaternion(player.quat));
+  const naval = player.spec.surfaceVessel;
+  const pos = player.pos.clone().add(new THREE.Vector3(sx, naval ? 9 : sy, naval ? -30 : sz).applyQuaternion(player.quat));
   // A rail launch: down and outboard first, then the motor lights and the
   // seeker pulls it around.
   const vel = player.vel
     .clone()
     .add(new THREE.Vector3(sx > 0 ? 5 : -5, -3.5, 0).applyQuaternion(player.quat));
+  if (naval) vel.copy(player.vel).add(new THREE.Vector3(0, 100, 0));
   mesh.visible = true;
   mesh.position.copy(pos);
   mesh.quaternion.setFromUnitVectors(NOSE_Z, DIR.copy(vel).normalize());
@@ -335,10 +340,10 @@ export function stepMissiles(ctx: Dogfight, dt: number, player: AircraftState): 
             continue;
           }
         }
-        const target = m.decoy ? null : ctx.nearestMissileTarget(m.pos);
+        const target = m.decoy ? null : m.naval ? navalTarget(ctx, m) : ctx.nearestMissileTarget(m.pos);
         if (target) {
           const toT = ctx.steerSeeker(m, target, dt);
-          if (toT < MISSILE_DET) {
+          if (toT < MISSILE_DET && (!m.naval || target.distanceTo(m.naval.point) < 40)) {
             ctx.impactMissile(i, m.pos, "air", player);
             continue;
           }
@@ -380,7 +385,7 @@ export function stepMissiles(ctx: Dogfight, dt: number, player: AircraftState): 
         // jet: the fuze follows the flare, so a cartridge dropped a few
         // metres off the wing still breaks the attack instead of trading a
         // flare for the warhead's splash.
-        if (!decoyed && player.pos.distanceTo(m.pos) < MISSILE_AIR_R) {
+        if (!decoyed && (player.spec.surfaceVessel ? hitsVessel(m.pos, m.pos, player, 12) : player.pos.distanceTo(m.pos) < MISSILE_AIR_R)) {
           ctx.hitT = HIT_FLASH;
           ctx.damagePlayer(player, MISSILE_PLAYER_DMG);
           hit = "air";
@@ -395,14 +400,14 @@ export function stepMissiles(ctx: Dogfight, dt: number, player: AircraftState): 
             break;
           }
         }
-        if (!hit && ctx.opponents.some(o => o.pos.distanceTo(m.pos) < MISSILE_AIR_R)) hit = "air";
+        if (!hit && ctx.opponents.some(o => o.surfaceVessel && o.quat ? hitsVessel(m.pos, m.pos, { pos: o.pos, quat: o.quat }, 12) : o.pos.distanceTo(m.pos) < MISSILE_AIR_R)) hit = "air";
       }
       if (!hit) {
         for (const t of ctx.strikeTargets) {
           if (t.dead || t.arrived) continue;
           TMP.copy(t.pos);
           TMP.y += 8;
-          if (TMP.distanceTo(m.pos) < t.radius + MISSILE_DET) {
+          if (TMP.distanceTo(m.pos) < (m.naval ? 18 : t.radius + MISSILE_DET)) {
             hit = "ground";
             break;
           }
@@ -456,7 +461,7 @@ export function impactMissile(ctx: Dogfight, i: number, at: THREE.Vector3, kind:
   ctx.blasts.trail(TMP.set(at.x, y + 10, at.z), 4.6, IMPACT_SMOKE_TTL);
   ctx.blasts.trail(TMP.set(at.x, y + 24, at.z), 6.5, IMPACT_SMOKE_TTL * 0.8);
   for (const opponent of ctx.opponents) {
-    if (opponent.pos.distanceTo(at) < MISSILE_AIR_R) ctx.hitOpponent(opponent, "missile");
+    if (opponent.surfaceVessel && opponent.quat ? hitsVessel(at, at, { pos: opponent.pos, quat: opponent.quat }, 16) : opponent.pos.distanceTo(at) < MISSILE_AIR_R) ctx.hitOpponent(opponent, "missile");
   }
 
   // splash damage on anything airborne near the burst

@@ -13,6 +13,7 @@ import { Quaternion, Vector3 } from "three";
 import { atmosphere } from "./atmosphere";
 import { DEFAULT_AIRCRAFT, specFor, type AircraftId, type AircraftSpec } from "./aircraft";
 import { clamp } from "./noise";
+import { shipSpawn, stepSurfaceVessel } from "./surface";
 import {
   CAT_START_ALONG,
   STRIP,
@@ -437,6 +438,8 @@ export interface AircraftState {
   vel: Vector3;
   quat: Quaternion;
   omega: Vector3; // body rates (x pitch, y yaw, z roll)
+  turretYaw?: number;
+  turretPitch?: number;
 
   // engine + systems
   throttle: number; // 0..1
@@ -615,7 +618,10 @@ export function spawnAircraft(
 
   // Spawn at the static ride height so the jet starts settled on its gear
   // instead of dropping onto it.
-  if (mission === "carrier") {
+  if (spec.surfaceVessel) {
+    pos = shipSpawn(idx);
+    quat = headingQuat(fleet[idx].headingDeg);
+  } else if (mission === "carrier") {
     const cat = catTrack(fleet[idx]);
     pos = cat.start.clone();
     pos.y = fleet[idx].deckY + ride;
@@ -636,14 +642,16 @@ export function spawnAircraft(
     vel: new Vector3(0, 0, 0),
     quat,
     omega: new Vector3(0, 0, 0),
+    turretYaw: spec.surfaceVessel ? 0 : undefined,
+    turretPitch: spec.surfaceVessel ? .2 : undefined,
     throttle: 0,
     rpm: 0.05,
     abOn: false,
     abLevel: 0,
-    gearDown: true,
-    gearT: 1,
-    flapsDown: !rotor,
-    flapT: rotor ? 0 : 1,
+    gearDown: !spec.surfaceVessel,
+    gearT: spec.surfaceVessel ? 0 : 1,
+    flapsDown: !rotor && !spec.surfaceVessel,
+    flapT: rotor || spec.surfaceVessel ? 0 : 1,
     speedbrake: false,
     sbT: 0,
     brakeOn: false,
@@ -657,10 +665,10 @@ export function spawnAircraft(
     alpha: 0,
     gLoad: 1,
     vspeed: 0,
-    headingDeg: mission === "carrier" ? fleet[idx].headingDeg : af.headingDeg,
+    headingDeg: spec.surfaceVessel || mission === "carrier" ? fleet[idx].headingDeg : af.headingDeg,
     stalled: false,
-    onGround: true,
-    groundKind: mission === "carrier" ? "deck" : "runway",
+    onGround: !spec.surfaceVessel,
+    groundKind: spec.surfaceVessel ? "water" : mission === "carrier" ? "deck" : "runway",
     wheelPen: staticPen(spec),
     catPhase,
     catProgress: 0,
@@ -683,7 +691,9 @@ export function spawnAircraft(
     lsoSamples: [],
     lsoGrade: null,
     lsoCall: null,
-    banner: rotor
+    banner: spec.surfaceVessel
+      ? { text: `DESTROYER BETA — ${keyLabel(bindings.throttleUp)}/${keyLabel(bindings.throttleDown)} ENGINES · ${keyLabel(bindings.yawLeft)}/${keyLabel(bindings.yawRight)} HELM · ARROWS AIM · ${keyLabel(bindings.bomb)} GUN SIGHT`, until: 30 }
+      : rotor
       ? {
           text:
             mission === "carrier"
@@ -759,6 +769,7 @@ export function stepAircraft(st: AircraftState, inp: FlightInput, dt: number): v
   // A terminal result freezes the jet — unless it is mid-crash-replay, when
   // the airframe keeps integrating so the engine's camera can watch it fall.
   if (st.result && !st.crashFall) return;
+  if (st.spec.surfaceVessel) { if (!st.result) stepSurfaceVessel(st, inp, dt); return; }
   st.time += dt;
   st.flightTime += dt;
 

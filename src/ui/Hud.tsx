@@ -75,17 +75,21 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
         <span>{hud.spectateKind} · {hud.spectateTarget}</span>
         <small>VIEW {hud.spectateIndex}/{hud.spectateCount} · [N] NEXT VIEW · [C] CAMERA {hud.cameraMode.toUpperCase()} · [P] PING THE ROOM</small>
       </div>}
-      {!hud.pod && ladder && <PitchLadder hud={hud} />}
-      {!hud.pod && <TargetBoxes sim={sim} gunCross={gunCross} />}
-      {hud.pod && <TargetPod sim={sim} />}
+      {!hud.pod && !hud.surfaceVessel && ladder && <PitchLadder hud={hud} />}
+      {(!hud.pod || hud.surfaceVessel) && <TargetBoxes sim={sim} gunCross={gunCross} />}
+      {hud.pod && !hud.surfaceVessel && <TargetPod sim={sim} />}
+      {hud.surfaceVessel && <div className="ship-director"><strong>DESTROYER · BETA PHASE{hud.pod ? " · GUN DIRECTOR" : ""}</strong><div>GUN {Math.round(hud.turretBearingDeg ?? 0)}° · ELEV {Math.round(hud.turretElevationDeg ?? 0)}° · VLS {hud.dfMissiles}/{hud.dfMissilesMax}</div><small>{hud.shipControls}</small></div>}
+      {hud.surfaceVessel && hud.pod && <div className="ship-reticle">+</div>}
       {minimap && !hud.pod && !hud.bigMap && <Minimap hud={hud} />}
       {!hud.pod && hud.bigMap && <Minimap hud={hud} big />}
       {sim?.phase === "flying" && hud.netStatus === "online" && <RadioOverlay sim={sim} />}
       <div className="hud-left">
-        <Gauge label="AIRSPEED" value={Math.round(hud.speedKt)} unit="KT" big />
+        <Gauge label={hud.surfaceVessel ? "SHIP SPEED" : "AIRSPEED"} value={Math.round(hud.speedKt)} unit="KT" big />
+        {!hud.surfaceVessel && <>
         <Gauge label="MACH" value={hud.mach.toFixed(2)} />
         <Gauge label="AOA" value={hud.aoaDeg.toFixed(1)} unit="°" warn={Math.abs(hud.aoaDeg) > 13} />
         <Gauge label="G" value={hud.gLoad.toFixed(1)} warn={hud.gLoad > 7.5 || hud.gLoad < -1} />
+        </>}
         {hud.dfActive && (
           <Gauge label="HULL" value={hud.dfHull} unit="%" warn={hud.dfHull <= 30} />
         )}
@@ -99,6 +103,7 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
         )}
       </div>
       <div className="hud-right">
+        {!hud.surfaceVessel && <>
         <Gauge label="ALT" value={Math.round(hud.altFt).toLocaleString()} unit="FT" big />
         <Gauge
           label="RALT"
@@ -107,6 +112,7 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
           warn={hud.radarAltFt < 500}
         />
         <Gauge label="V/S" value={(hud.vsFpm > 0 ? "+" : "") + Math.round(hud.vsFpm)} unit="FPM" />
+        </>}
         <Gauge label="HDG" value={String(Math.round(hud.headingDeg)).padStart(3, "0")} unit="°" />
         {/* Only the variable-geometry Tomcat sweeps; for the others it is a
             constant number that would just be cockpit furniture. */}
@@ -119,6 +125,7 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
           <ThrottleBar pct={hud.throttlePct} ab={hud.ab} collective={hud.rotorcraft} />
         </div>
         <div className="hud-toggles">
+          {!hud.surfaceVessel && <>
           <Tag on={hud.gear} text="GEAR" warn={!hud.gear && !hud.onGround} />
           {!hud.rotorcraft && <>
             <Tag on={hud.flaps} text="FLAPS" />
@@ -130,6 +137,7 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
           {(hud.abOn || hud.ab > 0.05) && (
             <Tag on={hud.ab > 0.05} warn={hud.abOn && hud.ab <= 0.05} text="AB" />
           )}
+          </>}
         </div>
         <div className="hud-nav">
           <div>CARRIER {hud.carrierName} · {hud.distCarrierKm.toFixed(1)} KM · {Math.round(hud.bearingCarrierDeg)}°</div>
@@ -155,14 +163,14 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
                     .join(" · ")}
             </div>
           )}
-          {!hud.spectating && <div>
+          {!hud.spectating && !hud.surfaceVessel && <div>
             {hud.dfBombs > 0
               ? `LGB ${hud.dfBombs}/${hud.dfBombsMax}${hud.dfBombsAway > 0 ? ` · ${hud.dfBombsAway} AWAY` : ""}${hud.dfBombsTracking > 0 ? ` · ${hud.dfBombsTracking} TRACKING` : ""} · [R] POD`
               : "STORES EMPTY"}
           </div>}
           {!hud.spectating && hud.dfMissilesMax > 0 && (
             <div className={hud.dfMissiles > 0 ? "hud-laser" : undefined}>
-              MSL {hud.dfMissiles}/{hud.dfMissilesMax} · [E] FIRE · SEEKS NEAREST
+              {hud.surfaceVessel ? "VLS" : "MSL"} {hud.dfMissiles}/{hud.dfMissilesMax} · [E] FIRE · {hud.surfaceVessel ? "DIRECTOR LOCK" : "SEEKS NEAREST"}
             </div>
           )}
           {!hud.spectating && hud.dfFlaresMax > 0 && (

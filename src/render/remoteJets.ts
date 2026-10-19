@@ -248,8 +248,8 @@ export class RemoteFleet {
   /** Gameplay prediction uses the current receiver time, never a mesh or a
    * presentation clock. Gun collision may use up to 200 ms of received history;
    * missile guidance, defenders and host validation use the current estimate. */
-  combatTargets(lagCompensateGuns = false): Array<{ id: string; pos: THREE.Vector3; vel: THREE.Vector3; hitPos?: THREE.Vector3; onGround?: boolean }> {
-    const out: Array<{ id: string; pos: THREE.Vector3; vel: THREE.Vector3; hitPos?: THREE.Vector3; onGround?: boolean }> = [];
+  combatTargets(lagCompensateGuns = false): Array<{ id: string; pos: THREE.Vector3; vel: THREE.Vector3; hitPos?: THREE.Vector3; onGround?: boolean; quat?: THREE.Quaternion; surfaceVessel?: boolean; aircraft?: AircraftId }> {
+    const out: Array<{ id: string; pos: THREE.Vector3; vel: THREE.Vector3; hitPos?: THREE.Vector3; onGround?: boolean; quat?: THREE.Quaternion; surfaceVessel?: boolean; aircraft?: AircraftId }> = [];
     const now = performance.now();
     for (const r of this.remotes.values()) {
       if (!r.buf.length || now-r.lastAt > 800) continue;
@@ -261,7 +261,7 @@ export class RemoteFleet {
         const rewind = Math.min(MAX_REWIND_MS, getPeerLinkDelayMs(r.id)+r.motion.metrics.delayMs);
         r.motion.sample(now-rewind,HIT_HISTORY); hitPos = HIT_HISTORY.pos.clone();
       }
-      out.push({ id: r.id, pos: GAMEPLAY.pos.clone(), vel: GAMEPLAY.vel.clone(), hitPos, onGround: !!(p.flags & FLAG_ON_GROUND) });
+      out.push({ id: r.id, pos: GAMEPLAY.pos.clone(), vel: GAMEPLAY.vel.clone(), hitPos, quat: GAMEPLAY.quat.clone(), surfaceVessel: r.aircraft === "destroyer", aircraft: r.aircraft, onGround: !!(p.flags & FLAG_ON_GROUND) });
     }
     return out;
   }
@@ -378,7 +378,7 @@ export class RemoteFleet {
       const visual = r.motion.update(nowMs,getPeerLinkDelayMs(r.id));
       r.mesh.group.position.copy(visual.pos);
       r.mesh.group.quaternion.copy(visual.quat);
-      r.tag.position.set(visual.pos.x, visual.pos.y+7.5, visual.pos.z);
+      r.tag.position.set(visual.pos.x, visual.pos.y+(r.aircraft === "destroyer" ? 45 : 7.5), visual.pos.z);
       if (r.mesh.sweepable !== false) {
         const sweep = THREE.MathUtils.degToRad(20+48*THREE.MathUtils.clamp(visual.sweep,0,1));
         r.mesh.wings[0].rotation.y = -sweep;

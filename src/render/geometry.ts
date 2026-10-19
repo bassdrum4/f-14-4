@@ -25,6 +25,8 @@ export interface TomcatMesh {
   /** Rotary wing: the main rotor disc and the tail rotor, spun by the rig. */
   rotor?: THREE.Object3D;
   tailRotor?: THREE.Object3D;
+  turret?: THREE.Group;
+  gunBarrel?: THREE.Group;
 }
 
 const MAT_BODY = new THREE.MeshStandardMaterial({
@@ -760,9 +762,56 @@ function buildSeahawkMesh(paint: "gray" | "bandit"): TomcatMesh {
   };
 }
 
-/** Build the player's airframe. Any unknown id falls back to the Tomcat. */
+function buildDestroyerMesh(): TomcatMesh {
+  const group = new THREE.Group();
+  // Tapered hull with a raised bow, bridge, twin funnels, radar and aft pad.
+  const hull = new THREE.Shape();
+  hull.moveTo(0, -72); hull.lineTo(10, -45); hull.lineTo(10, 62);
+  hull.lineTo(7, 71); hull.lineTo(-7, 71); hull.lineTo(-10, 62);
+  hull.lineTo(-10, -45); hull.closePath();
+  const hullGeo = new THREE.ExtrudeGeometry(hull, { depth: 10, bevelEnabled: false });
+  hullGeo.rotateX(Math.PI / 2); hullGeo.translate(0, 7, 0);
+  group.add(new THREE.Mesh(hullGeo, MAT_BODY));
+  const box = (w: number, h: number, d: number, x: number, y: number, z: number, mat = MAT_BODY) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    mesh.position.set(x, y, z); group.add(mesh); return mesh;
+  };
+  box(15, 10, 27, 0, 12, -6);
+  box(14, 6, 14, 0, 20, -10);
+  const canopy = box(14.2, 1.8, 2, 0, 21, -17.1, MAT_GLASS);
+  box(2, 16, 2, 0, 30, -1, MAT_DARK);
+  box(11, 2, 3, 0, 37, -1);
+  for (const z of [16, 33]) { box(7, 11, 8, 0, 12, z); box(7.3, 1.5, 8.3, 0, 18, z, MAT_DARK); }
+  for (const z of [-36, 43]) for (let x = -2; x <= 2; x++) for (let r = 0; r < 4; r++) box(1.7, .3, 2.2, x * 2, 7.25, z + r * 2.5, MAT_DARK);
+  box(14, .3, 17, 0, 7.2, 58, MAT_DARK);
+  for (const x of [-5, 5]) box(.4, .35, 14, x, 7.5, 58);
+  box(10, .35, .4, 0, 7.5, 58);
+  // Main deck gun plus an elevated director/rapid-fire gun for air defense.
+  box(6, 3, 6, 0, 8.5, -48);
+  box(.7, .7, 9, 0, 9, -54, MAT_DARK);
+  const turret = new THREE.Group(), gunBarrel = new THREE.Group();
+  turret.position.set(0, 23, -14); turret.add(gunBarrel); group.add(turret);
+  const housing = new THREE.Mesh(new THREE.BoxGeometry(4, 3, 4), MAT_BODY);
+  gunBarrel.add(housing);
+  const barrel = new THREE.Mesh(new THREE.BoxGeometry(.6, .6, 6), MAT_DARK);
+  barrel.position.z = -3; gunBarrel.add(barrel);
+  // Empty aircraft fittings keep the existing rig and remote renderer API.
+  const fittings = new THREE.Group(); fittings.visible = false; group.add(fittings);
+  const pair = (): [THREE.Group, THREE.Group] => [new THREE.Group(), new THREE.Group()];
+  const emptyMesh = () => { const mesh = new THREE.Mesh(new THREE.BufferGeometry(), MAT_DARK); fittings.add(mesh); return mesh; };
+  const afterburner = new THREE.Mesh(new THREE.BufferGeometry(), MAT_FLAME);
+  fittings.add(afterburner);
+  finishShip(group, afterburner, { leftTip: [-9, 15, -10], rightTip: [9, 15, -10], tail: [0, 8, 70], beacon: [0, 39, -1] });
+  return { group, wings: pair(), wingPanels: [emptyMesh(), emptyMesh()], stabs: pair(),
+    rudders: [emptyMesh(), emptyMesh()], flaps: pair(), gear: new THREE.Group(),
+    canopy, intakes: new THREE.Group(), afterburner, sweepable: false, turret, gunBarrel };
+}
+
+/** Build the player's vehicle. Any unknown id falls back to the Tomcat. */
 export function buildAircraft(id: AircraftId, paint: "gray" | "bandit" = "gray"): TomcatMesh {
   switch (id) {
+    case "destroyer":
+      return buildDestroyerMesh();
     case "hornet":
       return buildHornetMesh(paint);
     case "crusader":

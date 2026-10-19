@@ -95,6 +95,30 @@ export class CameraRig {
     this.smoothedReady = false;
   }
 
+  /** Ship-scale follow and director views; the aircraft camera stays unchanged. */
+  updateShip(camera: THREE.PerspectiveCamera, pos: THREE.Vector3, quat: THREE.Quaternion, gunQuat: THREE.Quaternion, dt: number, cinematic = false): void {
+    camera.up.copy(WORLD_UP);
+    if (this.mode === "pod" || this.mode === "cockpit") {
+      camera.position.copy(this.offsetTmp.set(0, 23, -14).applyQuaternion(quat)).add(pos);
+      this.fwd.set(0, 0, -1).applyQuaternion(gunQuat);
+      camera.position.addScaledVector(this.fwd, 7);
+      camera.quaternion.copy(gunQuat);
+      return;
+    }
+    this.lookTarget.copy(pos).y += 12;
+    if (cinematic) {
+      this.orbitAngle += dt * .1;
+      camera.position.set(pos.x + Math.cos(this.orbitAngle) * 225, pos.y + 85, pos.z + Math.sin(this.orbitAngle) * 225);
+    } else {
+      this.lookQ.setFromEuler(this.tmpEuler.set(this.pitch * .6, this.yaw, 0, "YXZ"));
+      this.offsetTmp.set(0, 85, 210).applyQuaternion(this.tmpQ.copy(quat).multiply(this.lookQ)).add(pos);
+      if (!this.smoothedReady) { this.smoothed.copy(this.offsetTmp); this.smoothedReady = true; }
+      else this.smoothed.lerp(this.offsetTmp, 1 - Math.exp(-dt * 5));
+      camera.position.copy(this.smoothed);
+    }
+    camera.lookAt(this.lookTarget);
+  }
+
   get isPod(): boolean {
     return this.mode === "pod";
   }

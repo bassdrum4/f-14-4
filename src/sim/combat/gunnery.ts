@@ -2,6 +2,12 @@
 
 import * as THREE from "three";
 import { atmosphere } from "../atmosphere";
+import { gunMuzzle, hitsVessel, shipGunQuaternion } from "../surface";
+const GUN_Q = new THREE.Quaternion();
+
+function bore(player: AircraftState, out: THREE.Vector3): THREE.Vector3 {
+  return out.set(0, 0, -1).applyQuaternion(player.spec.surfaceVessel ? shipGunQuaternion(player, GUN_Q) : player.quat);
+}
 import type { AircraftState } from "../flight";
 import { groundAt, isOnDeck } from "../world";
 import type { GunCue } from "./types";
@@ -58,8 +64,8 @@ export function tracerCount(ctx: Dogfight): number {
  */
 export function gunSolution(ctx: Dogfight, player: AircraftState): GunCue {
   const cue = ctx.cueOut;
-  const fwd = GUN_FWD.set(0, 0, -1).applyQuaternion(player.quat);
-  GUN_MUZ.copy(player.pos).addScaledVector(fwd, 8);
+  const fwd = bore(player, GUN_FWD);
+  gunMuzzle(player, GUN_MUZ, fwd);
   GUN_P.copy(GUN_MUZ);
   // Rounds leave at muzzle speed along the (assisted) bore, plus the jet's
   // own velocity — identical to what fireGuns will actually spawn.
@@ -218,11 +224,11 @@ export function playerGuns(ctx: Dogfight, dt: number, player: AircraftState, fir
   ctx.gunCd -= dt;
   while (ctx.gunCd <= 0) {
     ctx.gunCd += 1 / rate;
-    FWD.set(0, 0, -1).applyQuaternion(player.quat);
+    bore(player, FWD);
     // The cue's dedicated muzzle scratch, not TMP: assistBore recomputes the
     // lead direction into TMP, so passing TMP as the muzzle zeroed it and
     // every round spawned from the world origin, 1500 m from the fight.
-    GUN_MUZ.copy(player.pos).addScaledVector(FWD, 8);
+    gunMuzzle(player, GUN_MUZ, FWD);
     // the same slight aim assist the crosshair solution uses, so the pipper
     // and the rounds agree exactly
     const assisted = ctx.assistBore(player, GUN_MUZ, FWD);
@@ -235,7 +241,7 @@ export function playerGuns(ctx: Dogfight, dt: number, player: AircraftState, fir
     // muzzle flash at the ports: the burst has to read from any camera
     // (no smoke puff here — it read as haze drifting over the nose)
     ctx.muzzleT = 0.055;
-    ctx.muzzle.position.copy(TMP);
+    ctx.muzzle.position.copy(GUN_MUZ);
   }
 }
 
@@ -289,7 +295,7 @@ export function stepTracers(ctx: Dogfight, dt: number, player: AircraftState): v
     let dead = t.life <= 0;
     if (!dead) {
       if (t.hostile) {
-        if (segSphere(prev, t.pos, player.pos, HIT_RADIUS)) {
+        if (player.spec.surfaceVessel ? hitsVessel(prev, t.pos, player) : segSphere(prev, t.pos, player.pos, HIT_RADIUS)) {
           ctx.damagePlayer(player, BANDIT_DAMAGE);
           dead = true;
         }
@@ -304,7 +310,7 @@ export function stepTracers(ctx: Dogfight, dt: number, player: AircraftState): v
           }
         }
         if (!dead) for (const opponent of ctx.opponents) {
-          if (segSphere(prev, t.pos, opponent.hitPos ?? opponent.pos, HIT_RADIUS)) {
+          if (opponent.surfaceVessel && opponent.quat ? hitsVessel(prev, t.pos, { pos: opponent.hitPos ?? opponent.pos, quat: opponent.quat }) : segSphere(prev, t.pos, opponent.hitPos ?? opponent.pos, HIT_RADIUS)) {
             ctx.hitOpponent(opponent, "gun");
             dead = true;
             break;
@@ -318,7 +324,7 @@ export function stepTracers(ctx: Dogfight, dt: number, player: AircraftState): v
             REF.copy(tg.pos);
             REF.y += 8;
             if (segSphere(prev, t.pos, REF, tg.radius)) {
-              ctx.damageTarget(tg, tg.sea ? 2 : player.spec.gunDamage * 0.5, player);
+              ctx.damageTarget(tg, tg.sea && !player.spec.surfaceVessel ? 2 : player.spec.gunDamage * 0.5, player);
               dead = true;
               break;
             }

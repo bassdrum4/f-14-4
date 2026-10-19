@@ -1,10 +1,18 @@
 # Changelog
 
-The current label uses the code-state reconstruction below. Older entries
-preserve labels that were actually assigned at the time. Earlier development
+Release labels are recorded below. Older entries preserve labels that were
+actually assigned at the time. Earlier development
 arrived in large exports with stale 1.0.0 metadata; see
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md) for the surviving
 timeline, recovered intermediate build, and remaining history gaps.
+
+## 2.10.0 — Playable destroyer beta
+
+- Added DDG DESTROYER with a BETA PHASE selector badge, saved selection and sea spawn in solo and multiplayer.
+- Added separate surface movement: gradual engine response, helm, braking, hull-footprint checks against shoals/land and fleet collision clearance.
+- Added an independent rapid-fire gun/director, 32 VLS rounds, pinned air/surface locks, terrain-clearing coastal strike guidance, countermeasures, ship-scale cameras/HUD and carrier-side servicing.
+- Adapted fleet defense, convoy interdiction, coastal bombardment and the three-stage campaign for naval play. Mixed co-op and head-to-head retain the existing combat authority, shields and scores.
+- Added headless movement/combat/mission/service checks and a Chromium selector-to-launch smoke test.
 
 ## 1.10.0 — 2026-10-17
 

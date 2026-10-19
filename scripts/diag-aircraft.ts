@@ -92,7 +92,7 @@ function airPlayer(id: AircraftId): AircraftState {
 
 // --- 1. the registry: five distinct types with distinct capabilities ---
 {
-  check("five airframes are offered", AIRCRAFT_LIST.length === 5, `${AIRCRAFT_LIST.length}`);
+  check("five airframes and a beta destroyer are offered", AIRCRAFT_LIST.filter(a => !a.surfaceVessel).length === 5 && AIRCRAFT_LIST.some(a => a.id === "destroyer" && a.beta), `${AIRCRAFT_LIST.length}`);
   check("the picker offers the Tomcat, Hornet, Crusader, Intruder and Seahawk",
     ["tomcat", "hornet", "crusader", "intruder", "seahawk"].every((id) =>
       AIRCRAFT_LIST.some((a) => a.id === id)),
@@ -110,7 +110,7 @@ function airPlayer(id: AircraftId): AircraftState {
   check("the multirole rolls harder than the bomber", agile.clAil > bomber.clAil);
   check("the multirole is lighter than the interceptor", agile.mass < fighter.mass);
   check("all specs are fully populated",
-    AIRCRAFT_LIST.every((a) => a.mass > 0 && a.sWing > 0 && a.hull > 0 && a.gunRps > 0 && a.name.length > 0));
+    AIRCRAFT_LIST.every((a) => a.mass > 0 && (a.surfaceVessel || a.sWing > 0) && a.hull > 0 && a.gunRps > 0 && a.name.length > 0));
   check("the Intruder has no afterburner", bomber.abThrust === 0, `${bomber.abThrust}`);
   check("unknown ids fall back to the Tomcat",
     specFor("nope" as AircraftId).id === "tomcat");

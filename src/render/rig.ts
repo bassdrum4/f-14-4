@@ -12,6 +12,8 @@ export function animateJet(
   dt: number,
 ): void {
   const g = jet.group;
+  if (jet.turret) jet.turret.rotation.y = -(s.turretYaw ?? 0);
+  if (jet.gunBarrel) jet.gunBarrel.rotation.x = s.turretPitch ?? .2;
 
   // position + orientation interpolation is done by the caller on g directly.
 

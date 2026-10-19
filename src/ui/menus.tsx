@@ -385,16 +385,17 @@ function FlightSetup({ sim, settings, onSettings, onBack, gate }: {
   };
   return <div className="menu-screen">
     <h3 className="menu-h3">SORTIE SETUP</h3>
-    <span className="menu-world-label">AIRCRAFT</span>
-    <div className="menu-world-chips">{AIRCRAFT_LIST.map(a => <button key={a.id} className={"world-chip" + (settings.aircraft === a.id ? " on" : "")} onClick={() => onSettings({ ...settings, aircraft: a.id })}>{a.name}</button>)}</div>
-    <p className="menu-note">{craft.blurb} · {craft.bombs} bombs · {craft.missiles} missiles</p>
+    <span className="menu-world-label">VEHICLE</span>
+    <div className="menu-world-chips">{AIRCRAFT_LIST.map(a => <button key={a.id} className={"world-chip" + (settings.aircraft === a.id ? " on" : "")} onClick={() => onSettings({ ...settings, aircraft: a.id })}>{a.name}{a.beta && <span className="vehicle-beta">BETA PHASE</span>}</button>)}</div>
+    <p className="menu-note">{craft.blurb} · {craft.surfaceVessel ? "Rapid-fire deck gun · 32 VLS missiles · 31 knots" : `${craft.bombs} bombs · ${craft.missiles} missiles`}</p>
     <span className="menu-world-label">MISSION</span>
-    <div className="menu-world-chips">{(["cruise", "dogfight", "strike", "campaign"] as MissionMode[]).map(m => <button key={m} className={"world-chip" + (mode === m ? " on" : "")} onClick={() => onSettings({ ...settings, missionMode: m })}>{MISSION_MODE_CHIPS[m]}</button>)}</div>
+    <div className="menu-world-chips">{(["cruise", "dogfight", "strike", "campaign"] as MissionMode[]).map(m => <button key={m} className={"world-chip" + (mode === m ? " on" : "")} onClick={() => onSettings({ ...settings, missionMode: m })}>{craft.surfaceVessel ? ({ cruise: "SEA TRIALS", dogfight: "AIR DEFENSE", strike: "NAVAL STRIKE", campaign: "TASK FORCE", versus: "HEAD-TO-HEAD" })[m] : MISSION_MODE_CHIPS[m]}</button>)}</div>
     {(mode === "strike" || mode === "dogfight" || mode === "campaign") && <MissionBrief mode={mode} settings={settings} onSettings={onSettings} />}
-    <p className="menu-note">{MISSION_MODE_LABELS[mode]}</p>
+    <p className="menu-note">{craft.surfaceVessel ? ({ cruise: "Free navigation and weapons practice", dogfight: "Carrier air-defense station", strike: "Convoy interdiction or coastal bombardment", campaign: "Island, convoy, and fleet operations", versus: "Live players, guns and missiles" })[mode] : MISSION_MODE_LABELS[mode]}</p>
     <label className="menu-row"><span>Weather</span><select value={settings.weather ?? "clear"} onChange={e => onSettings({ ...settings, weather: e.target.value as WeatherMode })}>{(Object.keys(WEATHER_LABELS) as WeatherMode[]).map(w => <option key={w} value={w}>{WEATHER_LABELS[w]}</option>)}</select></label>
-    <p className="menu-note">Home deck: {homeCarrier(settings)} — land on another boat and it becomes home.</p>
-    <div className="menu-buttons"><Btn primary onClick={() => gate(() => launch("carrier"))}>{craft.rotorcraft ? "LIFT OFF — CARRIER" : "CAT SHOT — CARRIER"}</Btn><Btn onClick={() => gate(() => launch("airfield"))}>TAKEOFF — RUNWAY</Btn><Btn onClick={onBack}>BACK</Btn></div>
+    <p className="menu-note">{craft.surfaceVessel ? `Take station near ${homeCarrier(settings)}. Stop within 1 km of a friendly carrier and hold ${keyLabel(settings.bindings.cat)} for 3 seconds to repair and rearm.` : `Home deck: ${homeCarrier(settings)} — land on another boat and it becomes home.`}</p>
+    {craft.surfaceVessel && <p className="menu-note">{keyLabel(settings.bindings.throttleUp)}/{keyLabel(settings.bindings.throttleDown)} engines · {keyLabel(settings.bindings.yawLeft)}/{keyLabel(settings.bindings.yawRight)} steer · Arrow controls train gun · {keyLabel(settings.bindings.fire)} fire · {keyLabel(settings.bindings.missile)} VLS · {keyLabel(settings.bindings.bomb)} gun director</p>}
+    <div className="menu-buttons"><Btn primary onClick={() => gate(() => launch("carrier"))}>{craft.surfaceVessel ? "TAKE STATION — DESTROYER" : craft.rotorcraft ? "LIFT OFF — CARRIER" : "CAT SHOT — CARRIER"}</Btn>{!craft.surfaceVessel && <Btn onClick={() => gate(() => launch("airfield"))}>TAKEOFF — RUNWAY</Btn>}<Btn onClick={onBack}>BACK</Btn></div>
   </div>;
 }
 
@@ -529,6 +530,7 @@ function MissionBrief({ mode, settings, onSettings, disabled = false }: {
 }) {
   const authored = mode === "campaign" || settings.missionStyle !== "endless";
   const bastion = (settings.strikeVariant ?? "convoy") === "bastion";
+  const ship = settings.aircraft === "destroyer";
   return <div className="mission-brief">
     {mode !== "campaign" && <div className="menu-world-chips">
       <button disabled={disabled} className={"world-chip" + (authored ? " on" : "")} onClick={() => onSettings({ ...settings, missionStyle: "operation" })}>OPERATION</button>
@@ -536,17 +538,18 @@ function MissionBrief({ mode, settings, onSettings, disabled = false }: {
     </div>}
     {authored && mode === "strike" && <div className="menu-world-chips">
       <button disabled={disabled} className={"world-chip" + (!bastion ? " on" : "")} onClick={() => onSettings({ ...settings, strikeVariant: "convoy" })}>CONVOY</button>
-      <button disabled={disabled} className={"world-chip" + (bastion ? " on" : "")} onClick={() => onSettings({ ...settings, strikeVariant: "bastion" })}>IRON BASTION</button>
+      <button disabled={disabled} className={"world-chip" + (bastion ? " on" : "")} onClick={() => onSettings({ ...settings, strikeVariant: "bastion" })}>{ship ? "COASTAL BOMBARDMENT" : "IRON BASTION"}</button>
     </div>}
     <strong>{!authored ? "ENDLESS WAVES" : mode === "campaign" ? "TASK FORCE ARCHON" : mode === "strike" ? (bastion ? "OPERATION IRON BASTION" : "STOP THE CONVOY") : "FLEET DEFENSE"}</strong>
     <p className="menu-note">{!authored ? "Practice against repeating waves. Recover to repair and rearm." : mode === "campaign"
       ? "Three ordered stages: island bastion, convoy, opposing fleet. Stage, wrecks and damage carry across sorties."
       : mode === "strike"
       ? bastion
-        ? "Bunker, hangars and fuel depot, behind radar-cued SAMs and AAA."
+        ? ship ? "Launch terrain-clearing strike missiles at the bunker, hangars and fuel depot. Drag the director, then click a surface target to launch." : "Bunker, hangars and fuel depot, behind radar-cued SAMs and AAA."
         : "Stop 2 of 3 transports before they unload."
-      : "Scout, then two escorted bomber attacks. Bomb the flight deck to stop launches."}</p>
-    {authored && <p className="menu-note">{mode === "campaign" ? "Recovery rearms without resetting the operation, so the war continues." : "Recovery rearms without resetting the operation."}</p>}
+      : ship ? "Protect the carrier from the scout and two bomber raids. Use the gun director and VLS to engage aircraft." : "Scout, then two escorted bomber attacks. Bomb the flight deck to stop launches."}</p>
+    {ship && <p className="menu-note">Naval service: stop within 1 km of a friendly carrier; hold {keyLabel(settings.bindings.cat)} for 3 seconds to repair and replenish VLS.</p>}
+    {authored && !ship && <p className="menu-note">{mode === "campaign" ? "Recovery rearms without resetting the operation, so the war continues." : "Recovery rearms without resetting the operation."}</p>}
   </div>;
 }
 
@@ -618,6 +621,8 @@ export function ControlsPanel({ settings, onSettings, onBack }: {
 }) {
   const [capturing, setCapturing] = useState<Action | null>(null);
   const rotor = AIRCRAFT_LIST.find((a) => a.id === settings.aircraft)?.rotorcraft === true;
+  const ship = settings.aircraft === "destroyer";
+  const shipLabels: Partial<Record<Action, string>> = { pitchUp: "Gun elevation up", pitchDown: "Gun elevation down", rollLeft: "Train gun left", rollRight: "Train gun right", yawLeft: "Helm left", yawRight: "Helm right", throttleUp: "Engines up", throttleDown: "Engines down", brake: "Stop engines / brake", cat: "Hold to rearm near carrier (3 seconds)", bomb: "Gun director / surface strike", missile: "Launch VLS at director contact" };
 
   useEffect(() => {
     if (!capturing) return;
@@ -647,7 +652,7 @@ export function ControlsPanel({ settings, onSettings, onBack }: {
   };
   const rotorUnused = new Set<Action>(["gear", "flaps", "speedbrake", "ab", "cat"]);
   const actions = (Object.keys(ACTION_LABELS) as Action[]).filter(
-    (a) => !(rotor && rotorUnused.has(a)),
+    (a) => !(rotor && rotorUnused.has(a)) && !(ship && ["gear", "flaps", "speedbrake", "ab", "trimUp", "trimDown"].includes(a)),
   );
   return (
     <div className="menu-screen">
@@ -659,7 +664,7 @@ export function ControlsPanel({ settings, onSettings, onBack }: {
             className={"binding" + (capturing === a ? " capturing" : "")}
             onClick={() => setCapturing(a)}
           >
-            <span>{rotor ? (rotorLabels[a] ?? ACTION_LABELS[a]) : ACTION_LABELS[a]}</span>
+            <span>{ship ? (shipLabels[a] ?? ACTION_LABELS[a]) : rotor ? (rotorLabels[a] ?? ACTION_LABELS[a]) : ACTION_LABELS[a]}</span>
             <kbd>
               {capturing === a ? "press a key…" : keyLabel(settings.bindings[a])}
             </kbd>
@@ -673,11 +678,11 @@ export function ControlsPanel({ settings, onSettings, onBack }: {
           reverse of the winged stick — up flies the machine forward.
         </p>
       )}
-      <p className="menu-note">
+      {ship ? <p className="menu-note">The helm and gun train independently. Open the gun director to aim with arrows or a mouse drag. Fire the gun, launch VLS at the contact nearest your sight (within 18 km), or click a surface point for a strike. Stop near a friendly carrier to rearm.</p> : <p className="menu-note">
         Drag the mouse to look around · {keyLabel(settings.bindings.camera)} cycles chase / cockpit / action. {keyLabel(settings.bindings.bomb)} opens
         the target pod: drag to slew the sensor, then click a target to send a
         laser-guided bomb.
-      </p>
+      </p>}
       <div className="menu-row-btns">
         <Btn
           onClick={() =>
@@ -886,7 +891,7 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
 
       {live && <div className="mp-launch">
           <div className="menu-world">
-            <span className="menu-world-label">YOUR AIRCRAFT</span>
+            <span className="menu-world-label">YOUR VEHICLE</span>
             <div className="menu-world-chips">
               {AIRCRAFT_LIST.map((a) => (
                 <button
@@ -894,7 +899,7 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
                   className={"world-chip" + (a.id === settings.aircraft ? " on" : "")}
                   onClick={() => onSettings({ ...settings, aircraft: a.id })}
                 >
-                  {a.name}
+                  {a.name}{a.beta && <span className="vehicle-beta">BETA PHASE</span>}
                 </button>
               ))}
             </div>
@@ -962,9 +967,9 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
           )}
           <div className="menu-row-btns">
             <Btn primary disabled={settings.missionMode === "versus" && !net.pilots.some(p => p.linked)} onClick={() => sim?.startRoomMission("carrier")}>
-              {settings.missionMode === "versus" ? "START AIR BATTLE" : "CARRIER LAUNCH"}
+              {settings.missionMode === "versus" ? "START BATTLE" : settings.aircraft === "destroyer" ? "TAKE STATION — DESTROYER" : "CARRIER LAUNCH"}
             </Btn>
-            {settings.missionMode !== "versus" && <Btn onClick={() => sim?.startRoomMission("airfield")}>
+            {settings.missionMode !== "versus" && settings.aircraft !== "destroyer" && <Btn onClick={() => sim?.startRoomMission("airfield")}>
               RUNWAY TAKEOFF
             </Btn>}
           </div>
