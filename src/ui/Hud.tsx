@@ -631,8 +631,10 @@ function TargetBoxes({ sim, gunCross }: { sim: Sim | null; gunCross: boolean }) 
 
       // taking hits: a soft red wash over the view
       if (hud.dfDamageT > 0) {
-        ctx.fillStyle = `rgba(255, 44, 24, ${(hud.dfDamageT * 0.3).toFixed(3)})`;
+        ctx.fillStyle = "rgb(255, 44, 24)";
+        ctx.globalAlpha = hud.dfDamageT * 0.3;
         ctx.fillRect(0, 0, w, h);
+        ctx.globalAlpha = 1;
       }
 
       // a hostile round is in the air: range, bearing and the seconds left,
@@ -641,9 +643,11 @@ function TargetBoxes({ sim, gunCross }: { sim: Sim | null; gunCross: boolean }) 
       if (inc) {
         const pulse = 0.6 + 0.4 * Math.sin(performance.now() / 110);
         ctx.textAlign = "center";
-        ctx.fillStyle = `rgba(255, 58, 44, ${pulse.toFixed(3)})`;
+        ctx.fillStyle = "rgb(255, 58, 44)";
+        ctx.globalAlpha = pulse;
         ctx.font = "700 18px ui-monospace, monospace";
         ctx.fillText("MISSILE INBOUND", w / 2, h * 0.24);
+        ctx.globalAlpha = 1;
         ctx.font = "600 13px ui-monospace, monospace";
         ctx.fillStyle = "rgba(255, 176, 120, 0.95)";
         ctx.fillText(
@@ -728,7 +732,8 @@ function TargetBoxes({ sim, gunCross }: { sim: Sim | null; gunCross: boolean }) 
       // our rounds connected
       if (hud.dfHitT > 0) {
         const cx = w / 2, cy = h / 2;
-        ctx.strokeStyle = `rgba(255, 240, 200, ${Math.min(1, hud.dfHitT).toFixed(3)})`;
+        ctx.strokeStyle = "rgb(255, 240, 200)";
+        ctx.globalAlpha = Math.min(1, hud.dfHitT);
         ctx.lineWidth = 2;
         ctx.beginPath();
         for (const [sx, sy] of HIT_TICKS) {
@@ -736,6 +741,7 @@ function TargetBoxes({ sim, gunCross }: { sim: Sim | null; gunCross: boolean }) 
           ctx.lineTo(cx + sx * 13, cy + sy * 13);
         }
         ctx.stroke();
+        ctx.globalAlpha = 1;
       }
     };
     raf = requestAnimationFrame(draw);
@@ -792,11 +798,13 @@ function drawOrdnance(
   const rel = hud.dfReleased;
   if (rel && rel.age < 3 && sim.projectPoint(rel.x, rel.y, rel.z, ORD_P)) {
     const f = 1 - rel.age / 3;
-    ctx.strokeStyle = `rgba(255,235,170,${(f * 0.9).toFixed(3)})`;
+    ctx.strokeStyle = "rgb(255,235,170)";
+    ctx.globalAlpha = f * 0.9;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(ORD_P.x, ORD_P.y, 8 + rel.age * 24, 0, Math.PI * 2);
     ctx.stroke();
+    ctx.globalAlpha = 1;
   }
 
   // --- and where the last weapon went off ---
@@ -807,9 +815,10 @@ function drawOrdnance(
     const y = ORD_P.y;
     if (x > -60 && x < w + 60 && y > -60 && y < h + 60) {
       const water = land.kind === "water";
-      const col = water ? "150,220,255" : "255,150,80";
+      const col = water ? "rgb(150,220,255)" : "rgb(255,150,80)";
       const g = 9;
-      ctx.strokeStyle = `rgba(${col},${(f * 0.95).toFixed(3)})`;
+      ctx.strokeStyle = col;
+      ctx.globalAlpha = f * 0.95;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(x - g, y - g);
@@ -818,9 +827,11 @@ function drawOrdnance(
       ctx.lineTo(x - g, y + g);
       ctx.stroke();
       ctx.strokeRect(x - g - 3, y - g - 3, (g + 3) * 2, (g + 3) * 2);
-      ctx.fillStyle = `rgba(${col},${(f * 0.9).toFixed(3)})`;
+      ctx.fillStyle = col;
+      ctx.globalAlpha = f * 0.9;
       ctx.font = "10px ui-monospace, monospace";
       ctx.fillText(water ? "SPLASH" : "IMPACT", x + g + 7, y + 3);
+      ctx.globalAlpha = 1;
     }
   }
 }
@@ -944,7 +955,7 @@ function drawGunCrosshair(
   if (x < -60 || x > w + 60 || y < -60 || y > h + 60) return;
 
   const locked = cue.hit === "bandit" || cue.hit === "ship" || cue.hit === "target";
-  const color = locked ? "255,64,54" : cue.hit === "ground" ? "255,182,72" : "130,255,150";
+  const colorRgb = locked ? "rgb(255,64,54)" : cue.hit === "ground" ? "rgb(255,182,72)" : "rgb(130,255,150)";
   const alpha = cue.live ? 0.95 : 0.45;
 
   // --- the bullet ladder ---
@@ -953,6 +964,7 @@ function drawGunCrosshair(
   // bright while firing — the answer to "where are my bullets going to go".
   const path = sim.gunPath();
   const hot = hud.gunFiring ? 1 : 0.45;
+  ctx.fillStyle = colorRgb;
   for (let i = 1; i < path.n; i++) {
     const p = path.points[i];
     if (!sim.projectPoint(p.x, p.y, p.z, CUE_P)) continue;
@@ -960,14 +972,15 @@ function drawGunCrosshair(
     const py = CUE_P.y;
     if (px < -40 || px > w + 40 || py < -40 || py > h + 40) continue;
     const f = i / path.n; // 0 near the muzzle -> 1 at the solution point
-    const a = Math.max(0.08, alpha * hot * (0.6 - 0.42 * f));
-    ctx.fillStyle = `rgba(${color},${a.toFixed(3)})`;
+    ctx.globalAlpha = Math.max(0.08, alpha * hot * (0.6 - 0.42 * f));
     ctx.fillRect(px - 1.5, py - 1.5, 3, 3);
   }
+  ctx.globalAlpha = 1;
 
   const r = locked ? 15 : 12;
   ctx.save();
-  ctx.strokeStyle = `rgba(${color},${alpha})`;
+  ctx.strokeStyle = colorRgb;
+  ctx.globalAlpha = alpha;
   ctx.lineWidth = locked ? 2.4 : 1.6;
   // corner ticks, then the cross arms with a centre gap
   for (const [dx, dy] of HIT_TICKS) {
@@ -982,7 +995,7 @@ function drawGunCrosshair(
   ctx.moveTo(x, y - r * 1.6); ctx.lineTo(x, y - r * 0.55);
   ctx.moveTo(x, y + r * 0.55); ctx.lineTo(x, y + r * 1.6);
   ctx.stroke();
-  ctx.fillStyle = `rgba(${color},${alpha})`;
+  ctx.fillStyle = colorRgb;
   ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
   if (locked) {
     // in the cone: a ring makes the "shoot now" state unmistakable
@@ -991,7 +1004,7 @@ function drawGunCrosshair(
     ctx.stroke();
   }
   ctx.font = "10px ui-monospace, monospace";
-  ctx.fillStyle = `rgba(${color},${cue.live ? 0.9 : 0.55})`;
+  ctx.globalAlpha = cue.live ? 0.9 : 0.55;
   ctx.fillText(`${(cue.range / 1000).toFixed(1)} KM`, x + r * 2 + 5, y + 3);
   ctx.restore();
 }
@@ -1153,6 +1166,13 @@ function TargetPod({ sim }: { sim: Sim | null }) {
   return <canvas ref={ref} className="hud-pod" />;
 }
 
+/** Pre-allocated pitch labels to eliminate string allocations in the 60 FPS HUD animation loop. */
+const PITCH_LABELS: Record<number, string> = {
+  "-90": "-90", "-80": "-80", "-70": "-70", "-60": "-60", "-50": "-50", "-40": "-40",
+  "-30": "-30", "-20": "-20", "-10": "-10", "10": "10", "20": "20", "30": "30",
+  "40": "40", "50": "50", "60": "60", "70": "70", "80": "80", "90": "90",
+};
+
 function PitchLadder({ hud }: { hud: HudSnapshot }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
@@ -1217,8 +1237,9 @@ function PitchLadder({ hud }: { hud: HudSnapshot }) {
         ctx.moveTo(8, yy);
         ctx.lineTo(half, yy);
         ctx.stroke();
-        ctx.fillText(String(d), half + 6, yy + 4);
-        ctx.fillText(String(d), -half - 22, yy + 4);
+        const label = PITCH_LABELS[d] ?? String(d);
+        ctx.fillText(label, half + 6, yy + 4);
+        ctx.fillText(label, -half - 22, yy + 4);
       }
       ctx.restore();
 
