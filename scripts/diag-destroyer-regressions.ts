@@ -183,4 +183,47 @@ test("a destroyer wingman reports VLS target damage to an aircraft host without 
   host.df.dispose(); wing.df.dispose();
 });
 
+test("naval collision and splash cannot report a hit on the locked pilot's new life", () => {
+  const { df, player } = setup(); df.versus = true;
+  const pos = player.pos.clone().add(new Vector3(2000, 0, 0)); aim(player, pos);
+  df.setOpponents([{ id: "ship", life: 1, pos, vel: new Vector3(), quat: new Quaternion(), surfaceVessel: true }]);
+  assert(launchNavalMissile(df, player));
+  df.setOpponents([{ ...df.opponents[0], life: 2 }]);
+  const missile = df.missiles[0]; missile.arm = -1; missile.motor = 0;
+  missile.pos.copy(pos).y += 8; missile.vel.set(1, 0, 0);
+  df.stepMissiles(1 / 120, player);
+  assert.equal(df.playerHits.length, 0); assert.equal(df.missiles.length, 1, "new hull does not fuze the old lock");
+  df.impactMissile(0, missile.pos.clone(), "air", player);
+  assert.equal(df.playerHits.length, 0, "nearby terrain/other impacts cannot splash the new life");
+  df.dispose();
+});
+
+test("host-assigned service and spawn sides survive joins, departures and host takeover", () => {
+  const { sim, ref, player, pair, df } = serviceSim();
+  const now = performance.now() / 1000;
+  const side = (id: string) => ref.snapshot(now).pilots.find(p => p.id === id)!.side;
+  assert.equal(side("a"), 0); assert.equal(side("b"), 1);
+  ref.reconcile([{ id: "0", name: "LATE" }, { id: "a", name: "ALPHA" }, { id: "b", name: "BRAVO" }]);
+  sim.netState.pilots.unshift({ id: "0", name: "LATE", aircraft: "tomcat" });
+  sim.battle = ref.snapshot(now);
+  assert.equal(side("a"), 0); assert.equal(side("b"), 1);
+  assert(sim.canServiceShip(shipSpawn(pair[0]), 0, "a"));
+  assert(!sim.canServiceShip(shipSpawn(pair[1]), 0, "a"));
+  assert(sim.canServiceShip(shipSpawn(pair[1]), 0, "b"));
+  // Exercise the actual spawn selection after slot parity changed.
+  sim.newState = (_mission: string, carrier: number) => spawnAircraft("carrier", carrier, "destroyer");
+  sim.endPod = () => {}; sim.rig = { resetFollow() {} }; sim.remoteWeapons = { clear() {} };
+  sim.prevPos = new Vector3(); sim.prevQuat = new Quaternion(); sim.motionEpoch = 0;
+  sim.spawnBattleAircraft(true);
+  assert.equal(sim.state.catCarrier, pair[0]);
+  ref.reconcile([{ id: "0", name: "LATE" }, { id: "a", name: "ALPHA" }]);
+  sim.netState.pilots = sim.netState.pilots.filter((p: { id: string }) => p.id !== "b");
+  const restored = new BattleReferee(); restored.restore(ref.snapshot(now), now);
+  sim.battle = restored.snapshot(now);
+  assert.equal(sim.battle.pilots.find((p: { id: string }) => p.id === "a").side, 0);
+  assert(sim.canServiceShip(shipSpawn(pair[0]), 0, "a"));
+  assert(!sim.canServiceShip(shipSpawn(pair[1]), 0, "a"));
+  assert.equal(player.result, null); df.dispose();
+});
+
 if (failures) process.exitCode = 1;

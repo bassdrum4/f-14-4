@@ -1694,15 +1694,14 @@ export class Sim {
     this.battleRecoveryLife = -1;
     const ids = [this.netState.self, ...this.netState.pilots.filter(p => !p.spectator).map(p => p.id)].sort();
     const slot = Math.max(0, ids.indexOf(this.netState.self));
-    // Two boats, one per side: the pair rides the match id, so every pilot in
-    // the room works out the same two carriers without another packet, and the
-    // slots alternate between them — with two pilots that is one boat each.
+    // The pair rides the match id; the host retains each pilot's side in the
+    // scoreboard so joins and departures never change an assigned station.
     const fleet = carriers();
     const pair = battleCarrierPair(Math.floor(this.battle.match) || 0, fleet.length);
-    const side = slot % pair.length;
+    const side = this.battleSide(this.netState.self) ?? slot % pair.length;
     const carrierIndex = pair[side] % fleet.length;
     const center = fleet[carrierIndex];
-    const ring = ids.filter((_, i) => i % pair.length === side);
+    const ring = ids.filter(id => this.battleSide(id) === side);
     const ringSlot = Math.max(0, ring.indexOf(this.netState.self));
     const angle = ringSlot * Math.PI * 2 / Math.max(1, ring.length) + (Math.max(0, this.battleLife) % 4) * .3;
     this.state = this.newState("carrier", carrierIndex);
@@ -1792,6 +1791,7 @@ export class Sim {
   private applyBattle(snapshot: BattleSnapshot): void {
     if (!this.battleActive || !Number.isFinite(snapshot.match)) return;
     if (snapshot.pilots.some(p => !p || typeof p.id !== "string" || typeof p.name !== "string" || !Number.isFinite(p.hp) || p.hp < 0 || p.hp > 100 || !Number.isInteger(p.life) || p.life < 0 || !Number.isFinite(p.kills) || !Number.isFinite(p.deaths) || !Number.isFinite(p.respawnIn) || typeof p.ready !== "boolean" || typeof p.shield !== "boolean")) return;
+    if (snapshot.pilots.some(p => p.side !== undefined && p.side !== 0 && p.side !== 1)) return;
     if (snapshot.match !== this.battle.match) { this.battleLife = -1; this.battleDeadLife = -1; }
     this.battle = snapshot;
     this.remoteWeapons.prune?.(snapshot.match, snapshot.pilots);
@@ -2251,16 +2251,24 @@ export class Sim {
   private recoveryPending = false;
   private shipRearmHold = 0;
 
+  private battleSide(pilot: string): number | null {
+    const assigned = this.battle.pilots.find(p => p.id === pilot)?.side;
+    if (assigned !== undefined) return assigned;
+    // Older hosts do not send stations; retain their original spawn convention.
+    const ids = [this.netState.self, ...this.netState.pilots.filter(p => !p.spectator).map(p => p.id)].sort();
+    const slot = ids.indexOf(pilot);
+    return slot < 0 ? null : slot % 2;
+  }
+
   /** Local stores and host-owned repairs must agree on the friendly station. */
   private canServiceShip(pos: THREE.Vector3, speed: number, pilot = this.netState.self): boolean {
     if (![pos.x, pos.y, pos.z, speed].every(Number.isFinite) || speed > 2 || Math.abs(pos.y) > 3 || groundAt(pos.x, pos.z).kind !== "water") return false;
     let homes = carriers();
     if (this.battleActive) {
-      const ids = [this.netState.self, ...this.netState.pilots.filter(p => !p.spectator).map(p => p.id)].sort();
-      const slot = ids.indexOf(pilot);
-      if (slot < 0) return false;
+      const side = this.battleSide(pilot);
+      if (side === null) return false;
       const pair = battleCarrierPair(Math.floor(this.battle.match) || 0, homes.length);
-      homes = [homes[pair[slot % pair.length]]];
+      homes = [homes[pair[side]]];
     }
     return homes.some(c => Math.hypot(c.x - pos.x, c.z - pos.z) <= 1000);
   }

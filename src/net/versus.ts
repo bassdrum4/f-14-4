@@ -13,6 +13,8 @@ export interface BattleAction {
 export interface BattlePilot {
   id: string; name: string; hp: number; kills: number; deaths: number;
   life: number; shield: boolean; respawnIn: number; ready: boolean;
+  /** Host-assigned station, retained through roster changes and takeover. */
+  side?: 0 | 1;
 }
 export interface BattleSnapshot { match: number; pilots: BattlePilot[] }
 interface Entry extends BattlePilot { shieldUntil: number; respawnAt: number }
@@ -43,19 +45,22 @@ export class BattleReferee {
   private pilots = new Map<string, Entry>();
   private seen = new Set<string>();
   private lastHit = new Map<string, number>();
+  private nextSide = 0;
   match = 0;
-  reset(match: number): void { this.match = match; this.pilots.clear(); this.seen.clear(); this.lastHit.clear(); }
+  reset(match: number): void { this.match = match; this.pilots.clear(); this.seen.clear(); this.lastHit.clear(); this.nextSide = 0; }
   restore(snapshot: BattleSnapshot, now: number): void {
     this.reset(snapshot.match);
-    for (const p of snapshot.pilots) this.pilots.set(p.id, { ...p, shieldUntil: p.shield ? now + 5 : 0, respawnAt: p.hp === 0 && p.ready ? now + p.respawnIn : 0 });
+    const ids = snapshot.pilots.map(p => p.id).sort();
+    for (const p of snapshot.pilots) this.pilots.set(p.id, { ...p, side: p.side ?? (ids.indexOf(p.id) % 2) as 0 | 1, shieldUntil: p.shield ? now + 5 : 0, respawnAt: p.hp === 0 && p.ready ? now + p.respawnIn : 0 });
+    this.nextSide = snapshot.pilots.length;
   }
   reconcile(roster: Array<{ id: string; name: string }>): void {
     const ids = new Set(roster.map(p => p.id));
     for (const id of this.pilots.keys()) if (!ids.has(id)) this.pilots.delete(id);
-    for (const p of roster) {
+    for (const p of [...roster].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)) {
       const old = this.pilots.get(p.id);
       if (old) old.name = p.name;
-      else this.pilots.set(p.id, { ...p, hp: 0, kills: 0, deaths: 0, life: 0, shield: false, respawnIn: 0, ready: false, shieldUntil: 0, respawnAt: 0 });
+      else this.pilots.set(p.id, { ...p, side: (this.nextSide++ % 2) as 0 | 1, hp: 0, kills: 0, deaths: 0, life: 0, shield: false, respawnIn: 0, ready: false, shieldUntil: 0, respawnAt: 0 });
     }
   }
   action(attacker: string, action: BattleAction, now: number, range: number, gunDamage = 7): boolean {
@@ -94,6 +99,6 @@ export class BattleReferee {
   private spawn(p: Entry, now: number): void { p.life++; p.hp = 100; p.shieldUntil = now + 5; p.respawnAt = 0; }
   snapshot(now: number): BattleSnapshot {
     for (const p of this.pilots.values()) if (p.ready && p.hp === 0 && p.respawnAt > 0 && now >= p.respawnAt) this.spawn(p, now);
-    return { match: this.match, pilots: [...this.pilots.values()].map(p => ({ id: p.id, name: p.name, hp: p.hp, kills: p.kills, deaths: p.deaths, life: p.life, ready: p.ready, shield: p.hp > 0 && now < p.shieldUntil, respawnIn: p.respawnAt ? Math.max(0, p.respawnAt - now) : 0 })) };
+    return { match: this.match, pilots: [...this.pilots.values()].map(p => ({ id: p.id, name: p.name, hp: p.hp, kills: p.kills, deaths: p.deaths, life: p.life, side: p.side, ready: p.ready, shield: p.hp > 0 && now < p.shieldUntil, respawnIn: p.respawnAt ? Math.max(0, p.respawnAt - now) : 0 })) };
   }
 }
