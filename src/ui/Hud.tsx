@@ -75,7 +75,7 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
         <span>{hud.spectateKind} · {hud.spectateTarget}</span>
         <small>VIEW {hud.spectateIndex}/{hud.spectateCount} · [N] NEXT VIEW · [C] CAMERA {hud.cameraMode.toUpperCase()} · [P] PING THE ROOM</small>
       </div>}
-      {!hud.pod && !hud.surfaceVessel && ladder && <PitchLadder hud={hud} />}
+      {!hud.pod && !hud.surfaceVessel && ladder && <PitchLadder sim={sim} />}
       {(!hud.pod || hud.surfaceVessel) && <TargetBoxes sim={sim} gunCross={gunCross} />}
       {hud.pod && !hud.surfaceVessel && <TargetPod sim={sim} />}
       {hud.surfaceVessel && <div className="ship-director"><strong>DESTROYER · BETA PHASE{hud.pod ? " · GUN DIRECTOR" : ""}</strong><div>GUN {Math.round(hud.turretBearingDeg ?? 0)}° · ELEV {Math.round(hud.turretElevationDeg ?? 0)}° · VLS {hud.dfMissiles}/{hud.dfMissilesMax}</div><small>{hud.shipControls}</small></div>}
@@ -1153,14 +1153,16 @@ function TargetPod({ sim }: { sim: Sim | null }) {
   return <canvas ref={ref} className="hud-pod" />;
 }
 
-function PitchLadder({ hud }: { hud: HudSnapshot }) {
+// PitchLadder draws directly from the sim's live snapshot at frame rate in RAF
+// rather than depending on React state re-renders to prevent effect teardown churn.
+function PitchLadder({ sim }: { sim: Sim | null }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     let raf = 0;
     const draw = () => {
       raf = requestAnimationFrame(draw);
       const cv = ref.current;
-      if (!cv) return;
+      if (!cv || !sim) return;
       const dpr = Math.min(window.devicePixelRatio, 2);
       const w = cv.clientWidth, h = cv.clientHeight;
       if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
@@ -1172,6 +1174,7 @@ function PitchLadder({ hud }: { hud: HudSnapshot }) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
 
+      const hud = sim.snapshot;
       const cx = w / 2, cy = h / 2;
       const pxPerDeg = Math.min(7, h / 90);
       const roll = (hud.rollDeg * Math.PI) / 180;
@@ -1248,7 +1251,7 @@ function PitchLadder({ hud }: { hud: HudSnapshot }) {
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [hud]);
+  }, [sim]);
   return <canvas ref={ref} className="hud-ladder" />;
 }
 
