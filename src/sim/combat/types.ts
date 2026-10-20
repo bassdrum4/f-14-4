@@ -11,7 +11,7 @@ import type { BlastKind } from "../../render/effects";
 import type { CarrierDef } from "../world";
 
 export interface Missile {
-  naval?: { kind: "air" | "surface" | "carrier" | "point" | "pilot"; id: number | string; point: THREE.Vector3; cruiseHeight: number };
+  naval?: { kind: "air" | "surface" | "carrier" | "point" | "pilot"; id: number | string; point: THREE.Vector3; cruiseHeight: number; life?: number; surfaceVessel?: boolean };
   targetPilot?: string;
   id: number;
   pos: THREE.Vector3;

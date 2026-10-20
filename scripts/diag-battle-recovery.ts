@@ -89,7 +89,9 @@ for (const result of [
   console.log(`PASS ${result.title}: rearm, repair and relaunch without death or new life`);
 }
 
-for (const aircraft of AIRCRAFT_LIST) {
+// Ships never produce a landing result; their real held-service path is covered
+// by diag-destroyer-regressions.ts instead of an injected aircraft touchdown.
+for (const aircraft of AIRCRAFT_LIST.filter(a => !a.surfaceVessel)) {
   const { sim } = setup({ kind: 'landing', title: 'DECK LANDING', detail: 'Recovered' }, true, aircraft.id);
   sim.stepSim(0); sim.syncBattle();
   const stores = sim.df.hud(sim.state);

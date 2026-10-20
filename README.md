@@ -220,8 +220,8 @@ Select **DDG DESTROYER — BETA PHASE** in Sortie Setup or the multiplayer vehic
 - **R**: gun director. Drag or use the arrows to aim; **E** launches VLS at the contact closest to the director within its acquisition cone. Click a surface point to launch a terrain-clearing strike missile. **R/C** leaves the director.
 - **Z**: countermeasures. Stop below 4 knots within 1 km of a friendly carrier and hold **Space** for 3 seconds to repair/rearm. Release before another service. All keyboard actions remain rebindable.
 
-Air Defense adapts fleet defense to a naval air-defense station. Naval Strike offers convoy interdiction and coastal bombardment against Iron Bastion. Task Force uses the existing three-stage campaign. Sea Trials is free navigation/weapons practice. Aircraft and destroyers can share co-op rooms. Head-to-head uses the existing equal-hull rules, spawn shield and 12 km missile claim limit; solo/co-op VLS has an 18 km launch limit.
+Air Defense adapts fleet defense to a naval air-defense station. Naval Strike offers convoy interdiction and coastal bombardment against Iron Bastion. Task Force uses the existing three-stage campaign. Sea Trials is free navigation/weapons practice. Aircraft and destroyers can share co-op rooms. Head-to-head uses the existing equal-hull rules, spawn shield and 12 km missile claim limit; solo/co-op VLS has an 18 km launch limit. In head-to-head, naval service is available only at your assigned starting carrier.
 
 This is an arcade naval beta: simplified buoyancy, propulsion and countermeasures; the deck gun, rather than a full naval weapons suite. Remote hull movement uses the existing timestamped multiplayer transport; remote turret articulation is not transmitted.
 
-Checks: `npm run test:destroyer`, `npm run test:destroyer:browser` (install Chromium with Playwright first), plus the existing aircraft, mission and multiplayer checks.
+Checks: `npm run test:destroyer`, `npm run test:destroyer:regressions` (moving targets, target lives, mixed combat and naval service), `npm run test:destroyer:browser` (install Chromium with Playwright first), plus the existing aircraft, mission and multiplayer checks.

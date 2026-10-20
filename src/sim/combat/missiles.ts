@@ -8,7 +8,7 @@ import type { BlastKind } from "../../render/effects";
 import { atmosphere } from "../atmosphere";
 import type { AircraftState } from "../flight";
 import { groundAt, isOnDeck } from "../world";
-import type { Bandit, Flare, Missile } from "./types";
+import type { Bandit, CombatOpponent, Flare, Missile } from "./types";
 import {
   BANDIT_MISSILE_CD,
   BANDIT_MISSILE_CONE,
@@ -41,6 +41,10 @@ import { AXIS, CVPT, DIR, FWD, NOSE_Z, TMP, TO_P, hash, terrainBlocks } from "./
 
 import type { Dogfight } from "./core";
 
+/** A locked victim's new life cannot inherit an old naval warhead. */
+function canHitOpponent(m: Missile, opponent: CombatOpponent): boolean {
+  return m.naval?.kind !== "pilot" || m.naval.id !== opponent.id || m.naval.life === opponent.life;
+}
 
 /**
  * Can this seeker be talked out of the jet? A burning flare inside the
@@ -400,7 +404,7 @@ export function stepMissiles(ctx: Dogfight, dt: number, player: AircraftState): 
             break;
           }
         }
-        if (!hit && ctx.opponents.some(o => o.surfaceVessel && o.quat ? hitsVessel(m.pos, m.pos, { pos: o.pos, quat: o.quat }, 12) : o.pos.distanceTo(m.pos) < MISSILE_AIR_R)) hit = "air";
+        if (!hit && ctx.opponents.some(o => canHitOpponent(m, o) && (o.surfaceVessel && o.quat ? hitsVessel(m.pos, m.pos, { pos: o.pos, quat: o.quat }, 12) : o.pos.distanceTo(m.pos) < MISSILE_AIR_R))) hit = "air";
       }
       if (!hit) {
         for (const t of ctx.strikeTargets) {
@@ -461,6 +465,7 @@ export function impactMissile(ctx: Dogfight, i: number, at: THREE.Vector3, kind:
   ctx.blasts.trail(TMP.set(at.x, y + 10, at.z), 4.6, IMPACT_SMOKE_TTL);
   ctx.blasts.trail(TMP.set(at.x, y + 24, at.z), 6.5, IMPACT_SMOKE_TTL * 0.8);
   for (const opponent of ctx.opponents) {
+    if (!canHitOpponent(ctx.missiles[i], opponent)) continue;
     if (opponent.surfaceVessel && opponent.quat ? hitsVessel(at, at, { pos: opponent.pos, quat: opponent.quat }, 16) : opponent.pos.distanceTo(at) < MISSILE_AIR_R) ctx.hitOpponent(opponent, "missile");
   }
 
