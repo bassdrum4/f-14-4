@@ -1,6 +1,6 @@
 # F-14 Carrier Simulator
 
-Current published build label: **2.10.0**, including the playable destroyer beta.
+Current published build label: **2.11.0**, including the aircraft visual overhaul and playable destroyer beta.
 See [CHANGELOG.md](CHANGELOG.md) for release notes and
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md)
 for the earlier development, recovered builds and missing release history.
@@ -73,6 +73,28 @@ See [networking design, benchmarks and limits](docs/MULTIPLAYER-NETWORKING.md).
 Run `bun scripts/diag-performance.ts` and `bun scripts/diag-mp-flow.ts` locally
 to check rendering policy, sustained send rates and congestion recovery. These
 checks are not connected to GitHub Actions.
+
+## Aircraft visuals (v2.11.0)
+
+![F-14 procedural airframe, canopy, intake ducts and naval markings](docs/aircraft/tomcat.png)
+
+Fixed-wing aircraft use smooth procedural fuselages, airfoil sections and swept
+fins. The Tomcat has separated nacelles and twin exhausts, while the Hornet,
+Crusader and Intruder retain their own silhouettes. Reflective canopy glass,
+crew seats, panel seams, low-visibility markings, nozzle petals and gear hardware
+work without downloaded assets. The Seahawk shares the cockpit and finish pass.
+
+Small hardware is merged by material and hidden at distance. The generated
+reflection environment is captured once, with intensity following day/night and
+cloud cover. This is an approximate procedural representation, not a scanned
+aircraft model or a validated change to flight dynamics.
+
+Run `npm run test:aircraft:visuals` for surface winding, geometry budgets,
+rig/material consistency, exhaust alignment, distance detail and resource-lifetime
+checks. Run `npm run test:aircraft:browser` with Chromium installed for rendered
+views and the actual aircraft-selection-to-flight flow. Set
+`F14_CHROMIUM_EXECUTABLE` to use an existing browser; screenshots default to
+`/tmp/f14-aircraft-visuals` (`F14_AIRCRAFT_SCREENSHOTS` overrides the folder).
 
 ## Source layout
 

@@ -2,6 +2,7 @@
 
 import * as THREE from "three";
 import { buildAircraft } from "../../render/geometry";
+import { animateExhaust } from "../../render/aircraftDetails";
 import type { SharedBandit } from "../combatSnapshot";
 import type { BlastKind } from "../../render/effects";
 import { AIRCRAFT } from "../aircraft";
@@ -275,7 +276,7 @@ export function stepBandit(ctx: Dogfight, b: Bandit, dt: number, player: Aircraf
     b.abOn = true;
     b.abT = BANDIT_AB_TIME;
   }
-  b.mesh.afterburner.visible = b.abOn;
+  animateExhaust(b.mesh, b.abOn ? 1 : 0, player.time);
 
   if (b.evadeT > 0) {
     // jink: weave around the current heading with a climb bias

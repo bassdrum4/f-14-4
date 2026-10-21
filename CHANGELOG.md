@@ -6,7 +6,23 @@ arrived in large exports with stale 1.0.0 metadata; see
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md) for the surviving
 timeline, recovered intermediate build, and remaining history gaps.
 
-## Unreleased — Destroyer review fixes
+## 2.11.0 — Aircraft visual overhaul
+
+- Replace box-segment jet bodies with smooth lofted fuselages, airfoil wings,
+  swept fins and shaped wing-root strakes; give the Tomcat separated nacelles
+  and the Tomcat/Hornet recessed intake ducts.
+- Add reflective canopy glass, frames and crew seating, restrained paint wear
+  and seams, naval markings, exhaust nozzle petals and landing-gear hardware.
+- Align independent engine plumes with each nozzle and use the same animated
+  exhaust for player, AI and remote aircraft. Keep the Intruder and Seahawk
+  free of afterburners.
+- Generate one reflection environment per renderer, fade it with daylight and
+  cloud cover, batch small hardware and hide it at distance. Release per-aircraft
+  resources on switches without invalidating shared fleet materials.
+- Add headless visual regressions and a Chromium inspection covering all five
+  airframes, multiple views, aircraft switching and the real launch/flight flow.
+
+### Destroyer review fixes
 
 - Keep director clicks on hostile decks attached to the moving carrier.
 - Bind naval PvP locks to the target's current life and use surface cruise/terminal guidance for player-controlled destroyers.

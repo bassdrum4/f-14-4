@@ -4,6 +4,7 @@
 import * as THREE from "three";
 import type { TomcatMesh } from "./geometry";
 import type { AircraftState } from "../sim/flight";
+import { animateExhaust } from "./aircraftDetails";
 
 export function animateJet(
   jet: TomcatMesh,
@@ -29,8 +30,8 @@ export function animateJet(
   // flaps droop when down (also act as flaperons)
   const flapDroop = 0.45 * s.flapT;
   const ailDefl = clampSym(g.userData.aileron ?? 0, 0.5);
-  jet.flaps[0].rotation.z = flapDroop - ailDefl * 0.4;
-  jet.flaps[1].rotation.z = -(flapDroop + ailDefl * 0.4);
+  jet.flaps[0].rotation.z = flapDroop - ailDefl * 0.55;
+  jet.flaps[1].rotation.z = -(flapDroop + ailDefl * 0.55);
 
   // stabs: elevator
   const elev = clampSym(g.userData.elevator ?? 0, 0.6);
@@ -56,12 +57,9 @@ export function animateJet(
   if (jet.tailRotor) jet.tailRotor.rotation.x = (s.time * 70) % (Math.PI * 2);
 
   // afterburner flame
-  const flameMat = jet.afterburner.material as THREE.MeshBasicMaterial;
   const flicker = 0.85 + 0.15 * Math.sin(s.time * 47.0) * Math.sin(s.time * 31.0);
   const ab = s.abLevel;
-  flameMat.opacity = ab * 0.85 * flicker;
-  jet.afterburner.scale.set(0.8 + ab * 0.5, 1, 1.6 * ab + 0.2);
-  jet.afterburner.visible = ab > 0.02;
+  animateExhaust(jet, ab, s.time);
 
   // subtle exhaust shimmer: nozzle glow light follows AB
   if (g.userData.exhaustLight) {

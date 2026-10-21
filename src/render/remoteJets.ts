@@ -1,6 +1,7 @@
 // Remote meshes consume a dedicated visual timeline; combat reads motion history.
 import * as THREE from "three";
-import { buildAircraft, type TomcatMesh } from "./geometry";
+import { animateExhaust } from "./aircraftDetails";
+import { buildAircraft, disposeAircraft, type TomcatMesh } from "./geometry";
 import type { AircraftId } from "../sim/aircraft";
 import { MotionTimeline, motionSample, MAX_REWIND_MS } from "../net/motion";
 import { headingOfQuat } from "../sim/world";
@@ -156,7 +157,6 @@ export class RemoteFleet {
       this.remove(id);
     }
     const mesh = buildAircraft(aircraft, "gray");
-    mesh.afterburner.material = (mesh.afterburner.material as THREE.Material).clone();
     mesh.group.position.set(0, -8000, 0); // parked below the water until the first frame
     this.root.add(mesh.group);
     const { tag, texture } = makeTag(name, this.combatPilots !== null);
@@ -201,12 +201,7 @@ export class RemoteFleet {
     const r = this.remotes.get(id);
     if (!r) return;
     r.mesh.group.removeFromParent();
-    // Release geometry only: the airframe materials are module-shared.
-    r.mesh.group.traverse((o) => {
-      const mesh = o as THREE.Mesh;
-      mesh.geometry?.dispose();
-    });
-    (r.mesh.afterburner.material as THREE.Material).dispose();
+    disposeAircraft(r.mesh);
     r.tag.removeFromParent();
     (r.tag.material as THREE.SpriteMaterial).dispose();
     r.tagTex.dispose();
@@ -391,8 +386,7 @@ export class RemoteFleet {
       r.mesh.gear.visible = visual.gear > .02;
       r.mesh.gear.scale.y = Math.max(.08,visual.gear);
       r.mesh.gear.position.y = (1-visual.gear)*1.1;
-      r.mesh.afterburner.visible = visual.ab > .02;
-      (r.mesh.afterburner.material as THREE.MeshBasicMaterial).opacity = .8*visual.ab;
+      animateExhaust(r.mesh, visual.ab, nowMs / 1000);
       r.mesh.flaps[0].rotation.z = .4*visual.flap;
       r.mesh.flaps[1].rotation.z = -.4*visual.flap;
 

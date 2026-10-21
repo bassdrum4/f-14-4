@@ -1,9 +1,11 @@
-// F-14 Tomcat, built from tapered boxes. Iconic silhouette over poly count.
+// Procedural airframes with smooth lofted bodies and articulated airfoils.
 // Returns named parts the rig animates each frame (sweep, surfaces, gear, AB).
 
 import * as THREE from "three";
 import type { AircraftId } from "../sim/aircraft";
 import { addAirLights, type AirLightSpots } from "./lights";
+import { airfoil, aircraftMaterial, finGeometry, intakeDuct, loft, planform } from "./airframe";
+import { addAircraftDetails } from "./aircraftDetails";
 
 /**
  * Named parts every airframe exposes so the rig can animate it: wings (which
@@ -29,23 +31,10 @@ export interface TomcatMesh {
   gunBarrel?: THREE.Group;
 }
 
-const MAT_BODY = new THREE.MeshStandardMaterial({
-  color: 0x9aa3ad,
-  roughness: 0.55,
-  metalness: 0.35,
-});
-const MAT_DARK = new THREE.MeshStandardMaterial({
-  color: 0x23282e,
-  roughness: 0.85,
-  metalness: 0.2,
-});
-const MAT_GLASS = new THREE.MeshStandardMaterial({
-  color: 0x2a3d4a,
-  roughness: 0.15,
-  metalness: 0.6,
-  transparent: true,
-  opacity: 0.85,
-});
+// The destroyer retains its existing materials and bridge appearance.
+const MAT_BODY = new THREE.MeshStandardMaterial({ color: 0x9aa3ad, roughness: .55, metalness: .35 });
+const MAT_DARK = new THREE.MeshStandardMaterial({ color: 0x23282e, roughness: .85, metalness: .2 });
+const MAT_GLASS = new THREE.MeshStandardMaterial({ color: 0x2a3d4a, roughness: .15, metalness: .6, transparent: true, opacity: .85 });
 const MAT_FLAME = new THREE.MeshBasicMaterial({
   color: 0x7fc4ff,
   transparent: true,
@@ -54,22 +43,7 @@ const MAT_FLAME = new THREE.MeshBasicMaterial({
   depthWrite: false,
   side: THREE.DoubleSide,
 });
-const MAT_THIN = new THREE.MeshStandardMaterial({
-  color: 0x8f98a2,
-  roughness: 0.6,
-  metalness: 0.3,
-  side: THREE.DoubleSide,
-});
-
-/**
- * Box of length `len` along Z, cross-section tapering from (w0,h0) at the
- * front (z=-len/2) to (w1,h1) at the back, with the back offset by (cx,cy).
- * Winding stays valid, so computeVertexNormals keeps outward normals.
- */
-/** Bandit materials: standard material without the shared-instance pitfalls. */
-function std(color: number, roughness: number, metalness: number): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color, roughness, metalness });
-}
+for(const m of [MAT_BODY,MAT_DARK,MAT_GLASS]) m.userData.shared=true;
 
 interface ShipMats {
   matBody: THREE.Material;
@@ -83,17 +57,9 @@ interface ShipMats {
  * only); bandits get their own dark-red set so hostiles read at a glance.
  */
 function makeMats(paint: "gray" | "bandit"): ShipMats {
-  if (paint === "bandit") {
-    return {
-      matBody: std(0x8a4438, 0.6, 0.3),
-      matDark: std(0x2a2224, 0.85, 0.2),
-      matThin: std(0x743a30, 0.65, 0.25),
-      matGlass: new THREE.MeshStandardMaterial({
-        color: 0x3d2a2a, roughness: 0.15, metalness: 0.6, transparent: true, opacity: 0.85,
-      }),
-    };
-  }
-  return { matBody: MAT_BODY, matDark: MAT_DARK, matThin: MAT_THIN, matGlass: MAT_GLASS };
+  const bandit = paint === "bandit";
+  return { matBody: aircraftMaterial("body",bandit), matDark: aircraftMaterial("dark",bandit),
+    matThin: aircraftMaterial("wing",bandit), matGlass: aircraftMaterial("glass",bandit) };
 }
 
 /**
@@ -125,7 +91,7 @@ function finishShip(
       o.renderOrder = 4;
     }
   });
-  afterburner.castShadow = false;
+  afterburner.traverse(o => { (o as THREE.Mesh).castShadow = false; (o as THREE.Mesh).receiveShadow = false; });
 }
 
 /** Landing gear at the flight model's wheel stations, shared by every type. */
@@ -167,20 +133,20 @@ function buildWingPair(
 ): { pivot: THREE.Group; panel: THREE.Mesh; flap: THREE.Group } {
   const pivot = new THREE.Group();
   pivot.position.set(sx * root[0], root[1], root[2]);
-  const panelGeom = taperedBox(rootChord, 0.26, tipChord, 0.1, span);
-  panelGeom.translate(0, 0, span / 2);
+  const panelGeom = airfoil(rootChord, tipChord, span, .26, sx);
   const panel = new THREE.Mesh(panelGeom, matThin);
   panel.rotation.y = sx * (Math.PI / 2 - sweep);
   pivot.add(panel);
   const flapPivot = new THREE.Group();
-  flapPivot.position.set(-sx * rootChord * 0.42, 0, span * 0.42);
-  const flap = new THREE.Mesh(new THREE.BoxGeometry(rootChord * 0.45, 0.09, span * 0.42), matThin);
-  flap.position.x = -sx * rootChord * 0.22;
+  flapPivot.position.set(-sx * rootChord * 0.28, .025, span * 0.42);
+  const flap = new THREE.Mesh(new THREE.BoxGeometry(rootChord * 0.2, 0.06, span * 0.42), matThin);
+  flap.position.x = -sx * rootChord * 0.1;
   flapPivot.add(flap);
   panel.add(flapPivot);
   return { pivot, panel, flap: flapPivot };
 }
 
+/** A taper for small fairings; main aircraft surfaces use lofts or airfoils. */
 function taperedBox(
   w0: number,
   h0: number,
@@ -213,6 +179,10 @@ function add(
   y = 0,
   z = 0,
 ): THREE.Mesh {
+  if((mat as THREE.MeshStandardMaterial).vertexColors && !geom.hasAttribute("color")) {
+    geom.setAttribute("color",new THREE.Float32BufferAttribute(
+      new Float32Array(geom.getAttribute("position").count*3).fill(1),3));
+  }
   const m = new THREE.Mesh(geom, mat);
   m.position.set(x, y, z);
   parent.add(m);
@@ -231,33 +201,30 @@ function buildTomcatMesh(paint: "gray" | "bandit"): TomcatMesh {
   const { matBody, matDark, matThin, matGlass } = makeMats(paint);
 
   // --- fuselage segments (nose at -Z) ---
-  add(group, taperedBox(0.5, 0.45, 1.7, 1.5, 1.9, 0, -0.08), matBody, 0, 0.1, -8.6); // radome
-  add(group, taperedBox(1.7, 1.5, 3.0, 2.2, 3.9), matBody, 0, 0, -5.9); // forward
-  add(group, taperedBox(3.0, 2.2, 3.5, 2.45, 7.0), matBody, 0, 0, -0.5); // mid
-  add(group, taperedBox(3.5, 2.45, 3.1, 2.1, 4.6, 0, 0.1), matBody, 0, 0, 5.3); // aft
-  add(group, taperedBox(3.1, 2.1, 2.6, 1.6, 1.8, 0, -0.25), matBody, 0, 0, 8.5); // nozzle deck
-  add(group, taperedBox(2.0, 0.7, 2.3, 0.8, 6.0), matBody, 0, 1.1, 4.5); // spine
-  add(group, taperedBox(1.2, 0.6, 2.0, 0.8, 2.2), matBody, 0, 0.95, -2.9); // cockpit fairing
+  add(group, loft([[-9.55,.035,.035,.05],[-8.7,.32,.34,.03],[-7.6,.72,.65,0],
+    [-5.8,.94,.83,0],[-3.7,1.12,.91,0],[-1,1.7,.92,0],[2.5,1.8,.81,0],
+    [5.8,1.58,.65,.06],[8.7,1.3,.43,-.03],[9.2,.9,.32,-.1]],.82), matBody);
+  // Separated engine nacelles and the flat tunnel are characteristic of the F-14.
+  for (const sx of [-1,1]) add(group,loft([[-3.5,.55,.68,-.12],[-2.9,.7,.85,-.12],
+    [1.5,.74,.8,-.2],[5.8,.69,.71,-.2],[8.8,.65,.61,-.15],[9.3,.59,.58,-.15]],.8),matBody,sx*1.55);
 
   // gloves (fixed wing root ahead of pivot)
-  add(group, taperedBox(1.0, 0.34, 2.0, 0.22, 3.0), matThin, 1.9, 0.28, -1.2);
-  add(group, taperedBox(1.0, 0.34, 2.0, 0.22, 3.0), matThin, -1.9, 0.28, -1.2);
+  for(const sx of [-1,1]) add(group,planform([[sx*1,-3.5],[sx*1.7,-2.8],
+    [sx*3.1,1.5],[sx*1.1,2.1]],.16),matThin,0,.28);
 
   // intakes
   const intakes = new THREE.Group();
-  add(intakes, taperedBox(1.2, 1.7, 1.1, 1.9, 3.2), matBody, 2.25, -0.1, -3.0);
-  add(intakes, taperedBox(1.2, 1.7, 1.1, 1.9, 3.2), matBody, -2.25, -0.1, -3.0);
-  const inlet = new THREE.CylinderGeometry(0.52, 0.52, 0.3, 16);
-  const in1 = add(intakes, inlet, matDark, 2.25, 0.2, -4.65);
-  in1.rotation.x = Math.PI / 2;
-  const in2 = add(intakes, inlet, matDark, -2.25, 0.2, -4.65);
-  in2.rotation.x = Math.PI / 2;
+  for(const sx of [-1,1]) {
+    add(intakes,intakeDuct(1.3,1.5,2.8),matBody,sx*1.9,-.12,-4.55);
+    add(intakes,new THREE.BoxGeometry(1.1,1.25,.035),matDark,sx*1.9,-.12,-3.8);
+    add(intakes,new THREE.BoxGeometry(1.1,.08,.58),matThin,sx*1.9,.36,-4.3).rotation.x=-.25;
+  }
   group.add(intakes);
 
   // canopy
   const canopy = add(
     group,
-    new THREE.SphereGeometry(0.85, 16, 12), matGlass,
+    new THREE.SphereGeometry(0.85, 32, 20), matGlass,
     0,
     1.15,
     -5.6,
@@ -267,7 +234,7 @@ function buildTomcatMesh(paint: "gray" | "bandit"): TomcatMesh {
   // engines / nozzles
   const nozzle = new THREE.CylinderGeometry(0.58, 0.66, 1.2, 14, 1, true);
   for (const sx of [-1, 1]) {
-    const n = add(group, nozzle, matDark, sx * 0.85, -0.15, 9.4);
+    const n = add(group, nozzle, matDark, sx * 1.55, -0.15, 9.4);
     n.rotation.x = Math.PI / 2;
   }
 
@@ -287,8 +254,7 @@ function buildTomcatMesh(paint: "gray" | "bandit"): TomcatMesh {
     const pivot = new THREE.Group();
     pivot.position.set(sx * 1.55, 0.25, 0.8);
     // panel: built along +Z (span), then rotated so +Z -> outward ±X
-    const panelGeom = taperedBox(4.3, 0.3, 2.3, 0.12, 7.8);
-    panelGeom.translate(0, 0, 3.9);
+    const panelGeom = airfoil(4.3, 2.3, 7.8, .3, sx);
     const panel = new THREE.Mesh(panelGeom, matThin);
     panel.rotation.y = sx * (Math.PI / 2);
     pivot.add(panel);
@@ -296,10 +262,10 @@ function buildTomcatMesh(paint: "gray" | "bandit"): TomcatMesh {
     // 180° apart (rotation.y = ±90°), so local X points forward on the right
     // wing and aft on the left — the hinge and its offset mirror with the wing.
     const flapPivot = new THREE.Group();
-    flapPivot.position.set(-sx * 1.85, 0, 2.9);
-    const flapGeom = new THREE.BoxGeometry(1.0, 0.09, 3.6);
+    flapPivot.position.set(-sx * 1.3, .025, 2.9);
+    const flapGeom = new THREE.BoxGeometry(.5, 0.06, 3.2);
     const flap = new THREE.Mesh(flapGeom, matThin);
-    flap.position.x = -sx * 0.5;
+    flap.position.x = -sx * 0.25;
     flapPivot.add(flap);
     panel.add(flapPivot);
     group.add(pivot);
@@ -314,10 +280,9 @@ function buildTomcatMesh(paint: "gray" | "bandit"): TomcatMesh {
     const sx = i === 0 ? 1 : -1;
     const pivot = new THREE.Group();
     pivot.position.set(sx * 1.35, -0.45, 7.4);
-    const geom = taperedBox(2.0, 0.16, 1.1, 0.08, 3.4);
-    geom.translate(0, 0, 1.7);
+    const geom = airfoil(2.8, 1.1, 3.4, .16, sx);
     const panel = new THREE.Mesh(geom, matThin);
-    panel.rotation.y = sx * (Math.PI / 2);
+    panel.rotation.y = sx * (Math.PI / 2 - .4);
     pivot.add(panel);
     pivot.rotation.z = -sx * 0.06; // slight anhedral
     group.add(pivot);
@@ -328,8 +293,8 @@ function buildTomcatMesh(paint: "gray" | "bandit"): TomcatMesh {
   const rudders: [THREE.Mesh, THREE.Mesh] = [] as unknown as [THREE.Mesh, THREE.Mesh];
   for (let i = 0; i < 2; i++) {
     const sx = i === 0 ? 1 : -1;
-    const fin = add(group, taperedBox(0.18, 3.0, 0.14, 2.0, 3.0, 0.35, 0), matBody, sx * 1.7, 1.85, 7.9);
-    const rud = add(fin, new THREE.BoxGeometry(0.1, 2.0, 0.75), matThin, 0.2, -0.35, 1.75);
+    const fin = add(group, finGeometry(3.0,3.0,.14), matBody, sx * 1.55, 1.65, 7.6);
+    const rud = add(fin, new THREE.BoxGeometry(.09,2.3,.3).translate(0,0,.15), matThin, 0, -.05, 1.17);
     rudders[i] = rud;
   }
   // ventral fins
@@ -382,39 +347,37 @@ function buildHornetMesh(paint: "gray" | "bandit"): TomcatMesh {
   const { matBody, matDark, matThin, matGlass } = makeMats(paint);
   const group = new THREE.Group();
 
-  // --- fuselage (nose at -Z) ---
-  add(group, taperedBox(0.35, 0.35, 1.2, 1.05, 2.2, 0, -0.05), matBody, 0, 0.05, -6.6); // radome
-  add(group, taperedBox(1.2, 1.05, 2.2, 1.7, 4.0), matBody, 0, 0, -3.4); // forward
-  add(group, taperedBox(2.2, 1.7, 2.6, 1.9, 6.6), matBody, 0, 0, 2.0); // mid
-  add(group, taperedBox(2.6, 1.9, 2.2, 1.5, 2.4, 0, 0.1), matBody, 0, 0, 6.5); // aft
-  add(group, taperedBox(1.5, 0.5, 1.8, 0.55, 4.4), matBody, 0, 0.8, 1.0); // spine
-  add(group, taperedBox(1.0, 0.45, 1.5, 0.55, 1.6), matBody, 0, 0.72, -1.6); // cockpit fairing
+  add(group,loft([[-7.7,.025,.025,.05],[-6.7,.35,.32,.02],[-5.3,.66,.56,0],
+    [-3.4,.87,.72,0],[-1,1.12,.73,-.04],[2.8,1.27,.79,-.08],
+    [5.4,1.14,.64,-.12],[7.4,.94,.47,-.18]],.85),matBody);
+  for(const sx of [-1,1]) add(group,loft([[-2.4,.43,.53,-.2],[-1,.58,.68,-.2],
+    [3,.58,.62,-.2],[6.9,.51,.5,-.2],[7.6,.48,.48,-.2]]),matBody,sx*.78);
 
   // LERX strakes along the wing roots
   for (const sx of [-1, 1]) {
-    const lerx = add(group, taperedBox(0.85, 0.16, 1.7, 0.12, 3.2), matThin, sx * 1.55, 0.16, -1.5);
-    lerx.rotation.y = sx * 0.2;
+    add(group,planform([[sx*.75,-4.3],[sx*1.1,-3.8],[sx*2.55,.8],
+      [sx*1,1.5]],.12),matThin,0,.16);
   }
 
   // intakes (rectangular, under the LERX)
   const intakes = new THREE.Group();
   for (const sx of [-1, 1]) {
-    add(intakes, taperedBox(1.0, 1.25, 0.95, 1.4, 2.8), matBody, sx * 1.75, -0.2, -2.1);
-    add(intakes, new THREE.BoxGeometry(0.82, 1.05, 0.2), matDark, sx * 1.75, -0.1, -3.5);
+    add(intakes, intakeDuct(.9,1.1,2.7), matBody, sx * 1.45, -.25, -3.5);
+    add(intakes, new THREE.BoxGeometry(.74,.94,.035), matDark, sx * 1.45, -.25, -2.8);
   }
   group.add(intakes);
 
   // bubble canopy, set well forward
-  const canopy = add(group, new THREE.SphereGeometry(0.7, 16, 12), matGlass, 0, 0.9, -4.0);
+  const canopy = add(group, new THREE.SphereGeometry(0.7, 32, 20), matGlass, 0, 0.9, -4.0);
   canopy.scale.set(0.95, 0.85, 2.1);
 
   // canted twin tails with rudders
   const rudders: [THREE.Mesh, THREE.Mesh] = [] as unknown as [THREE.Mesh, THREE.Mesh];
   for (let i = 0; i < 2; i++) {
     const sx = i === 0 ? 1 : -1;
-    const fin = add(group, taperedBox(0.16, 2.2, 0.12, 1.4, 2.4, 0.3, 0), matBody, sx * 1.25, 1.5, 5.6);
+    const fin = add(group, finGeometry(2.2,2.4,.12), matBody, sx * 1.25, 1.5, 5.6);
     fin.rotation.z = -sx * 0.3;
-    rudders[i] = add(fin, new THREE.BoxGeometry(0.09, 1.4, 0.5), matThin, 0.16, -0.35, 1.1);
+    rudders[i] = add(fin, new THREE.BoxGeometry(.08,1.7,.24).translate(0,0,.12), matThin, 0, -.05, .94);
   }
 
   // twin nozzles + a single blended burner plume
@@ -447,8 +410,7 @@ function buildHornetMesh(paint: "gray" | "bandit"): TomcatMesh {
     const sx = i === 0 ? 1 : -1;
     const pivot = new THREE.Group();
     pivot.position.set(sx * 1.0, -0.35, 6.0);
-    const geom = taperedBox(1.7, 0.14, 0.9, 0.06, 2.6);
-    geom.translate(0, 0, 1.3);
+    const geom = airfoil(1.7,.9,2.6,.14,sx);
     const panel = new THREE.Mesh(geom, matThin);
     panel.rotation.y = sx * (Math.PI / 2);
     pivot.add(panel);
@@ -477,16 +439,12 @@ function buildIntruderMesh(paint: "gray" | "bandit"): TomcatMesh {
   const { matBody, matDark, matThin, matGlass } = makeMats(paint);
   const group = new THREE.Group();
 
-  // --- fuselage: rounded nose into a fat bomb-bay belly (nose at -Z) ---
-  const nose = add(group, new THREE.SphereGeometry(1.15, 16, 12), matBody, 0, 0, -6.9);
-  nose.scale.set(1.0, 0.95, 1.7);
-  add(group, taperedBox(2.3, 2.1, 2.6, 2.35, 4.6), matBody, 0, -0.05, -3.2);
-  add(group, taperedBox(2.6, 2.35, 2.7, 2.2, 5.8), matBody, 0, -0.05, 2.0);
-  add(group, taperedBox(2.7, 2.2, 2.1, 1.5, 3.2, 0, 0.2), matBody, 0, 0, 6.4);
-  add(group, taperedBox(1.7, 0.5, 2.0, 0.55, 4.0), matBody, 0, 1.05, 0.5);
+  add(group,loft([[-8.8,.06,.07,-.05],[-8,.66,.68,-.02],[-6.8,1.1,1.01,0],
+    [-4.5,1.29,1.13,-.05],[-1,1.35,1.13,-.05],[2.7,1.32,1.04,-.05],
+    [5.4,1.1,.8,.06],[7.8,.66,.48,.2],[8,.2,.2,.23]]),matBody);
 
   // wide side-by-side canopy
-  const canopy = add(group, new THREE.SphereGeometry(0.95, 16, 12), matGlass, 0, 1.25, -4.4);
+  const canopy = add(group, new THREE.SphereGeometry(0.95, 32, 20), matGlass, 0, 1.25, -4.4);
   canopy.scale.set(1.2, 0.72, 1.7);
 
   // round side intakes beside the crew
@@ -500,8 +458,8 @@ function buildIntruderMesh(paint: "gray" | "bandit"): TomcatMesh {
   group.add(intakes);
 
   // single tall tail with the rudder mounted on it (both rig slots share it)
-  const fin = add(group, taperedBox(0.22, 3.2, 0.18, 2.0, 2.8, 0.5, 0), matBody, 0, 2.0, 6.6);
-  const rud = add(fin, new THREE.BoxGeometry(0.12, 2.2, 0.6), matThin, 0.18, -0.5, 1.35);
+  const fin = add(group, finGeometry(3.2,2.8,.18), matBody, 0, 2.0, 6.6);
+  const rud = add(fin, new THREE.BoxGeometry(.1,2.5,.28).translate(0,0,.14), matThin, 0, -.05, 1.1);
   const rudders: [THREE.Mesh, THREE.Mesh] = [rud, rud];
 
   // small nozzles (no burner on the Intruder)
@@ -535,8 +493,7 @@ function buildIntruderMesh(paint: "gray" | "bandit"): TomcatMesh {
     const sx = i === 0 ? 1 : -1;
     const pivot = new THREE.Group();
     pivot.position.set(sx * 1.2, -0.15, 6.3);
-    const geom = taperedBox(2.2, 0.16, 1.2, 0.07, 3.0);
-    geom.translate(0, 0, 1.5);
+    const geom = airfoil(2.2, 1.2, 3.0, 0.16, sx);
     const panel = new THREE.Mesh(geom, matThin);
     panel.rotation.y = sx * (Math.PI / 2);
     pivot.add(panel);
@@ -566,12 +523,10 @@ function buildCrusaderMesh(paint: "gray" | "bandit"): TomcatMesh {
   const { matBody, matDark, matThin, matGlass } = makeMats(paint);
   const group = new THREE.Group();
 
-  // --- fuselage: a tube with a nose inlet (nose at -Z) ---
-  add(group, new THREE.CylinderGeometry(.775, .66, 1.5, 14).rotateX(Math.PI / 2), matBody, 0, -0.05, -7.35); // inlet lip
-  add(group, new THREE.CylinderGeometry(.86, .775, 4.6, 14).rotateX(Math.PI / 2), matBody, 0, 0, -4.3); // forward
-  add(group, new THREE.CylinderGeometry(.93, .86, 6.4, 14).rotateX(Math.PI / 2), matBody, 0, 0, 1.2); // mid
-  add(group, new THREE.CylinderGeometry(.75, .93, 3.6, 14).rotateX(Math.PI / 2), matBody, 0, 0, 6.2); // aft
-  add(group, taperedBox(1.1, 0.5, 1.35, 0.6, 2.2), matBody, 0, 0.78, -0.4); // dorsal spine
+  add(group,loft([[-8.1,.66,.62,-.1],[-7.3,.78,.73,-.05],[-4.6,.86,.84,0],
+    [-1,.92,.91,0],[2.8,.93,.9,0],[5.5,.84,.79,0],[7.7,.6,.61,0]]),matBody);
+  add(group,loft([[-3,.15,.14,.65],[-1,.53,.34,.76],[2,.55,.32,.75],
+    [5,.22,.2,.65]]),matBody);
 
   // Low intake and a rounded upper nose distinguish the Crusader silhouette.
   const ring = add(group, new THREE.CylinderGeometry(0.48, 0.48, 0.34, 16, 1, true), matDark, 0, -0.3, -8.1);
@@ -580,12 +535,12 @@ function buildCrusaderMesh(paint: "gray" | "bandit"): TomcatMesh {
   upperNose.scale.set(1, .65, 1.45);
 
   // canopy, set forward of the wing
-  const canopy = add(group, new THREE.SphereGeometry(0.78, 16, 12), matGlass, 0, 0.95, -4.0);
+  const canopy = add(group, new THREE.SphereGeometry(0.78, 32, 20), matGlass, 0, 0.95, -4.0);
   canopy.scale.set(0.95, 0.82, 2.2);
 
   // single tall fin with the rudder mounted on it
-  const fin = add(group, taperedBox(0.2, 2.9, 0.16, 1.9, 2.6, 0.55, 0), matBody, 0, 1.7, 6.35);
-  const rud = add(fin, new THREE.BoxGeometry(0.1, 2.0, 0.7), matThin, 0.2, -0.42, 1.35);
+  const fin = add(group, finGeometry(2.9,2.6,.16), matBody, 0, 1.7, 6.35);
+  const rud = add(fin, new THREE.BoxGeometry(.09,2.25,.26).translate(0,0,.13), matThin, 0, -.05, 1.02);
   const rudders: [THREE.Mesh, THREE.Mesh] = [rud, rud];
   // ventral fins under the tail
   for (const sx of [-1, 1]) {
@@ -620,8 +575,7 @@ function buildCrusaderMesh(paint: "gray" | "bandit"): TomcatMesh {
     const sx = i === 0 ? 1 : -1;
     const pivot = new THREE.Group();
     pivot.position.set(sx * 0.95, -0.5, 6.0);
-    const geom = taperedBox(1.9, 0.15, 1.0, 0.07, 2.4);
-    geom.translate(0, 0, 1.2);
+    const geom = airfoil(1.9, 1.0, 2.4, 0.15, sx);
     const panel = new THREE.Mesh(geom, matThin);
     panel.rotation.y = sx * (Math.PI / 2);
     pivot.add(panel);
@@ -660,7 +614,7 @@ function buildSeahawkMesh(paint: "gray" | "bandit"): TomcatMesh {
   add(group, taperedBox(1.6, 0.4, 1.9, 0.5, 3.4), matBody, 0, 1.2, -0.4); // engine deck
 
   // canopy, set well forward
-  const canopy = add(group, new THREE.SphereGeometry(0.9, 16, 12), matGlass, 0, 0.7, -4.4);
+  const canopy = add(group, new THREE.SphereGeometry(0.9, 32, 20), matGlass, 0, 0.7, -4.4);
   canopy.scale.set(1.05, 0.7, 1.7);
 
   // engine cowl intakes on the upper deck
@@ -671,8 +625,8 @@ function buildSeahawkMesh(paint: "gray" | "bandit"): TomcatMesh {
   group.add(intakes);
 
   // --- single tall fin + tail rotor (two blades, vertical plane) ---
-  const fin = add(group, taperedBox(0.2, 2.6, 0.16, 1.6, 2.4, 0.5, 0), matBody, 0, 1.7, 8.2);
-  const rud = add(fin, new THREE.BoxGeometry(0.1, 1.7, 0.6), matThin, 0.18, -0.4, 1.25);
+  const fin = add(group, finGeometry(2.6,2.4,.16), matBody, 0, 1.7, 8.2);
+  const rud = add(fin, new THREE.BoxGeometry(.09,2,.24).translate(0,0,.12), matThin, 0, -.05, .94);
   const rudders: [THREE.Mesh, THREE.Mesh] = [rud, rud];
   const tailRotor = new THREE.Group();
   tailRotor.position.set(0.35, 2.0, 8.7);
@@ -808,7 +762,7 @@ function buildDestroyerMesh(): TomcatMesh {
 }
 
 /** Build the player's vehicle. Any unknown id falls back to the Tomcat. */
-export function buildAircraft(id: AircraftId, paint: "gray" | "bandit" = "gray"): TomcatMesh {
+function buildBaseAircraft(id: AircraftId, paint: "gray" | "bandit"): TomcatMesh {
   switch (id) {
     case "destroyer":
       return buildDestroyerMesh();
@@ -826,7 +780,26 @@ export function buildAircraft(id: AircraftId, paint: "gray" | "bandit" = "gray")
   }
 }
 
+export function buildAircraft(id: AircraftId, paint: "gray" | "bandit" = "gray"): TomcatMesh {
+  const mesh = buildBaseAircraft(id,paint);
+  if(id !== "destroyer") addAircraftDetails(mesh,id,paint === "bandit");
+  return mesh;
+}
+
 /** Back-compat: bandit AI always flies the Tomcat silhouette. */
 export function buildTomcat(paint: "gray" | "bandit" = "gray"): TomcatMesh {
-  return buildTomcatMesh(paint);
+  return buildAircraft("tomcat",paint);
+}
+
+/** Release instance-owned resources while preserving fleet-wide paint/lights. */
+export function disposeAircraft(jet:TomcatMesh):void {
+  const geometries=new Set<THREE.BufferGeometry>(),materials=new Set<THREE.Material>();
+  jet.group.traverse(o=>{
+    const mesh=o as THREE.Mesh;
+    if(mesh.geometry)geometries.add(mesh.geometry);
+    const list=Array.isArray(mesh.material)?mesh.material:[mesh.material];
+    for(const m of list)if(m && !m.userData.shared)materials.add(m);
+  });
+  for(const g of geometries)g.dispose();
+  for(const m of materials)m.dispose();
 }

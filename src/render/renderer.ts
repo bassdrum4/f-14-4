@@ -14,7 +14,8 @@ import {
   buildTerrain,
   type TerrainPaint,
 } from "./scene";
-import { buildAircraft, type TomcatMesh } from "./geometry";
+import { buildAircraft, disposeAircraft, type TomcatMesh } from "./geometry";
+import { aircraftEnvironment } from "./airframe";
 import { isSharedMaterial, updateAirLights, updateShipLights } from "./lights";
 import { ScaleCues } from "./scale";
 import { makeEnvironmentSample, sampleEnvironment, type EnvironmentSample } from "./environment";
@@ -68,6 +69,7 @@ export class WorldRenderer {
   private swellAxisZ = new THREE.Vector3(0, 0, 1);
   private swellAxisX = new THREE.Vector3(1, 0, 0);
   private overcast = new THREE.Color(0x8e98a4);
+  private reflection: THREE.WebGLRenderTarget;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -86,6 +88,9 @@ export class WorldRenderer {
 
     this.scene = new THREE.Scene();
     this.scene.fog = new THREE.Fog(0xbfd3e0, 6000, 58000);
+    this.reflection = aircraftEnvironment(this.renderer);
+    this.scene.environment = this.reflection.texture;
+    this.scene.environmentIntensity = .55;
 
     // Far plane past the fog: the chain runs 60 km, and the sea haze should
     // close the horizon before the frustum does. The near plane is 1 m rather
@@ -164,11 +169,11 @@ export class WorldRenderer {
 
   /**
    * Swap the player's airframe, e.g. when the aircraft is changed on the menu.
-   * Only geometry is released — the airframe materials are module-shared.
+   * Release instance geometry and exhaust; fleet-wide materials stay alive.
    */
   setAircraft(id: AircraftId): void {
     this.jetGroup.removeFromParent();
-    disposeGeometryTree(this.jetGroup);
+    disposeAircraft(this.jet);
     this.jet = buildAircraft(id);
     this.jetGroup = this.jet.group;
     this.scene.add(this.jetGroup);
@@ -230,6 +235,7 @@ export class WorldRenderer {
     // stay flyable instead of being a black deck against black water. The same
     // darkness drives the ships' own lamps and every aircraft's nav lights.
     this.dark = clamp01((6 - sun.elevationDeg) / 12);
+    this.scene.environmentIntensity = (.55 * (1 - this.dark) + .015) * (1 - (w?.cloudCover ?? 0) * .35);
     this.nightLights.emissiveIntensity = this.dark * 2.4;
     // Cloud decks, ground shadow and masts read off the same sun and focus.
     this.scaleCues.update(focus, this.camera.position, this.sunDir, this.dark);
@@ -339,6 +345,7 @@ export class WorldRenderer {
     this.weatherFx.dispose();
     this.scaleCues.dispose();
     disposeTree(this.scene);
+    this.reflection.dispose();
     this.sun.shadow.dispose();
     this.renderer.dispose();
   }
@@ -389,14 +396,6 @@ function disposeMaterial(m: THREE.Material): void {
   ref.roughnessMap?.dispose();
   ref.normalMap?.dispose();
   m.dispose();
-}
-
-/** Release only geometries under a node, leaving shared materials intact. */
-function disposeGeometryTree(root: THREE.Object3D): void {
-  root.traverse((o) => {
-    const mesh = o as THREE.Mesh;
-    mesh.geometry?.dispose();
-  });
 }
 
 function disposeTree(root: THREE.Object3D): void {

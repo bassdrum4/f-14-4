@@ -1,7 +1,7 @@
 {
   "name": "f14-tomcat-simulator",
   "private": true,
-  "version": "2.10.0",
+  "version": "2.11.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port ${PORT:-5173}",
@@ -60,7 +60,9 @@
     "test:motion:scheduling": "bun scripts/diag-motion-scheduling.ts",
     "test:destroyer": "bun scripts/diag-destroyer.ts",
     "test:destroyer:regressions": "bun scripts/diag-destroyer-regressions.ts",
-    "test:destroyer:browser": "node scripts/diag-destroyer-browser.mjs"
+    "test:destroyer:browser": "node scripts/diag-destroyer-browser.mjs",
+    "test:aircraft:visuals": "bun scripts/diag-aircraft-visuals.ts",
+    "test:aircraft:browser": "node scripts/diag-aircraft-browser.mjs"
   },
   "dependencies": {
     "peerjs": "^1.5.5",
