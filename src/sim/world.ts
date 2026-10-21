@@ -586,8 +586,12 @@ export function applyLayoutOps(
   h = h + (af.elevation - h) * runwayFlat;
 
   // --- ensure carrier areas are open water (at least 40 m deep) ---
-  for (const c of cs) {
-    const cd = Math.hypot(x - c.x, z - c.z);
+  for (let i = 0; i < cs.length; i++) {
+    const c = cs[i];
+    const cdx = x - c.x;
+    const cdz = z - c.z;
+    if (cdx * cdx + cdz * cdz >= 2560000) continue; // 1600m squared
+    const cd = Math.hypot(cdx, cdz);
     const keep = 1 - smoothstep(700, 1600, cd);
     if (keep > 0) {
       const target = Math.min(h, -40);
@@ -609,6 +613,38 @@ function makeProceduralSampler(seed: number): (x: number, z: number) => number {
   const { landmasses, peaks, noise } = generateWorld(seed);
   const af = ARCHIPELAGO.airfield;
 
+  // Precompute bounds and derived constants to accelerate per-sample terrain queries
+  const prepLand = landmasses.map(m => {
+    const shore = m.r + m.falloff * (m.coastSharp ?? 1);
+    const shoreNear = shore + 2600;
+    // fbm(...) is in 0..1, so coastWarp = (fbm - 0.5) * 2600 is in range [-1300, +1300].
+    // d + coastWarp < shoreNear => d < shoreNear + 1300
+    const maxReach = shoreNear + 1300;
+    return {
+      x: m.x,
+      z: m.z,
+      r: m.r,
+      shore,
+      shoreNear,
+      maxReachSq: maxReach * maxReach,
+      ridgeAmp: m.ridgeAmp,
+      hillAmp: m.hillAmp,
+      baseH: m.base ?? LAND_BASE,
+    };
+  });
+
+  const prepPeaks = peaks.map(p => {
+    const maxR = p.r * 1.8;
+    return {
+      x: p.x,
+      z: p.z,
+      h: p.h,
+      maxRSq: maxR * maxR,
+      r03: p.r * 0.3,
+      r15: p.r * 1.5,
+    };
+  });
+
   return (x: number, z: number) => {
     // --- domain warp: meandering ridgelines, ragged coastlines ---
     const wxo = fbm(x * 0.00008, z * 0.00008, noise + 3, 3) - 0.5;
@@ -623,17 +659,21 @@ function makeProceduralSampler(seed: number): (x: number, z: number) => number {
     let ridgeAmp = 0;
     let hillAmp = 0;
     let baseH = LAND_BASE;
-    for (const m of landmasses) {
-      const d = Math.hypot(x - m.x, z - m.z);
-      const shore = m.r + m.falloff * (m.coastSharp ?? 1);
-      const mask = 1 - smoothstep(m.r, shore, d + coastWarp);
+    for (let i = 0; i < prepLand.length; i++) {
+      const m = prepLand[i];
+      const dx = x - m.x;
+      const dz = z - m.z;
+      const dSq = dx * dx + dz * dz;
+      if (dSq >= m.maxReachSq) continue;
+      const d = Math.sqrt(dSq);
+      const mask = 1 - smoothstep(m.r, m.shore, d + coastWarp);
       if (mask > land) {
         land = mask;
         ridgeAmp = m.ridgeAmp;
         hillAmp = m.hillAmp;
-        baseH = m.base ?? LAND_BASE;
+        baseH = m.baseH;
       }
-      nearCoast = Math.max(nearCoast, 1 - smoothstep(m.r, shore + 2600, d));
+      nearCoast = Math.max(nearCoast, 1 - smoothstep(m.r, m.shoreNear, d));
     }
 
     // --- relief: ranges in bands, hills, fine detail, plus named summits ---
@@ -642,12 +682,15 @@ function makeProceduralSampler(seed: number): (x: number, z: number) => number {
     const hills = fbm(wx * 0.0007, wz * 0.0007, noise + 9, 5);
     const detail = fbm(x * 0.004, z * 0.004, noise + 23, 3);
     let peak = 0;
-    for (const p of peaks) {
-      const d = Math.hypot(x - p.x, z - p.z);
-      if (d < p.r * 1.8) {
-        const t = 1 - smoothstep(p.r * 0.3, p.r * 1.5, d);
-        peak = Math.max(peak, p.h * t * t);
-      }
+    for (let i = 0; i < prepPeaks.length; i++) {
+      const p = prepPeaks[i];
+      const dx = x - p.x;
+      const dz = z - p.z;
+      const dSq = dx * dx + dz * dz;
+      if (dSq >= p.maxRSq) continue;
+      const d = Math.sqrt(dSq);
+      const t = 1 - smoothstep(p.r03, p.r15, d);
+      peak = Math.max(peak, p.h * t * t);
     }
     const upland =
       Math.pow(rid, 1.5) * ridgeAmp * (0.35 + 0.65 * rangeMask) +
