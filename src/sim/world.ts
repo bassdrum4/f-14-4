@@ -476,13 +476,23 @@ export function isRunway(x: number, z: number): boolean {
   return dx <= af.runwayLength / 2 + 60 && dz <= af.runwayWidth / 2 + 60;
 }
 
-/** Deck-local axes: fwd = ship bow direction, right = starboard. */
+const axesCache = new Map<number, { fwd: [number, number]; right: [number, number] }>();
+
+/** Deck-local axes: fwd = ship bow direction, right = starboard. Cached by heading. */
 export function deckAxes(headingDeg: number): { fwd: [number, number]; right: [number, number] } {
-  const h = (headingDeg * Math.PI) / 180;
-  // Ship forward in world XZ (bow direction): heading 0 = north = -Z
-  const fwd: [number, number] = [Math.sin(h), -Math.cos(h)];
-  const right: [number, number] = [Math.cos(h), Math.sin(h)];
-  return { fwd, right };
+  const key = Math.round(headingDeg * 100) / 100;
+  let cached = axesCache.get(key);
+  if (!cached) {
+    const h = (key * Math.PI) / 180;
+    // Ship forward in world XZ (bow direction): heading 0 = north = -Z
+    cached = {
+      fwd: [Math.sin(h), -Math.cos(h)],
+      right: [Math.cos(h), Math.sin(h)],
+    };
+    if (axesCache.size > 64) axesCache.clear();
+    axesCache.set(key, cached);
+  }
+  return cached;
 }
 
 /**
@@ -512,13 +522,19 @@ export function worldToDeck(c: CarrierDef, x: number, z: number): [number, numbe
 
 /** Is this world point over the given carrier's flight deck? */
 export function isOnDeck(c: CarrierDef, x: number, z: number): boolean {
-  const [along, across] = worldToDeck(c, x, z);
+  const { fwd, right } = deckAxes(c.headingDeg);
+  const dx = x - c.x;
+  const dz = z - c.z;
+  const along = dx * fwd[0] + dz * fwd[1];
+  const across = dx * right[0] + dz * right[1];
   return Math.abs(along) <= c.deckLength / 2 && Math.abs(across) <= c.deckWidth / 2;
 }
 
 /** The carrier whose deck covers (x,z), if any. */
 export function carrierAt(x: number, z: number): CarrierDef | null {
   for (const c of activeWorld.carriers) {
+    // Fast AABB pre-filter: carrier half-diagonal is ~225m. Rejects >99.9% of queries.
+    if (Math.abs(x - c.x) > 230 || Math.abs(z - c.z) > 230) continue;
     if (isOnDeck(c, x, z)) return c;
   }
   return null;
