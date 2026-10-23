@@ -46,6 +46,7 @@ export function requestFlares(ctx: Dogfight, player: AircraftState): void {
   }
   const n = Math.min(FLARE_SALVO, ctx.flaresLeft);
   ctx.deployFlares(player, n);
+  ctx.onFlare?.();
   ctx.flaresLeft -= n;
   ctx.flareCd = FLARE_CD;
   ctx.banner(

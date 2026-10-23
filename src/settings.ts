@@ -146,6 +146,9 @@ export interface Settings {
   /** Local clock hour 0..24, used by "fixed" mode. */
   timeOfDay: number;
   minimap: boolean;
+  /** True once this pilot has flown a sortie. A brand-new pilot is offered the
+   *  tutorial; after that it stays a menu option rather than a prompt. */
+  hasFlown?: boolean;
   /** Green angle ladder + flight-path marker over the middle of the view. */
   hudLadder: boolean;
   /** Green gunsight cross, its tracer ladder and the range readout. */
@@ -188,6 +191,7 @@ export function defaultSettings(): Settings {
     weather: "clear",
     timeOfDay: 9,
     minimap: true,
+    hasFlown: false,
     hudLadder: true,
     hudGunCross: true,
     bindings: { ...DEFAULT_BINDINGS },
@@ -273,6 +277,9 @@ export function loadSettings(): Settings {
       timeOfDay:
         typeof parsed.timeOfDay === "number" ? clampNum(parsed.timeOfDay, 0, 24) : base.timeOfDay,
       minimap: typeof parsed.minimap === "boolean" ? parsed.minimap : base.minimap,
+      // A saved profile that predates the field belongs to someone who has
+      // already flown; only a genuinely fresh pilot is offered the tutorial.
+      hasFlown: typeof parsed.hasFlown === "boolean" ? parsed.hasFlown : true,
       hudLadder: typeof parsed.hudLadder === "boolean" ? parsed.hudLadder : base.hudLadder,
       hudGunCross: typeof parsed.hudGunCross === "boolean" ? parsed.hudGunCross : base.hudGunCross,
       bindings: { ...base.bindings, ...(parsed.bindings ?? {}) },

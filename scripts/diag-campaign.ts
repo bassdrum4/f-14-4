@@ -246,7 +246,7 @@ function engineFor(mode: "campaign" | "strike") {
     renderer: { setAircraft() {}, setAdaptiveResolution() {}, applyQuality() {} },
     net: { setAircraft() {}, setMode() {}, setMissionStyle() {}, setWeather() {}, dispose() {} },
     remoteFleet: { clear() {}, setLinkDelay() {}, dispose() {} },
-    battle: { match: 0, pilots: [] }, chatLog: [],
+    battle: { match: 0, pilots: [] }, chatLog: [], settingsListeners: new Set(),
     updateHud() {}, updateJetPose() {}, endPod() {}, updateAudio() {}, newState: () => player,
     setPhase(p: string) { sim.phase = p; },
   });

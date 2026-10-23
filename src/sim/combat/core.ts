@@ -68,8 +68,10 @@ import {
   playerHeading,
   removeBandit,
   spawnMirrorBandit,
+  spawnTutorialDrone,
   stepBandit,
   stepCollisions,
+  stepTutorialDrone,
   stepDamageSmoke,
   stepMirrorBandit,
   stepWaves,
@@ -184,6 +186,9 @@ export class Dogfight {
 
   authored = false;
 
+  /** A tutorial sortie: one passive practice drone, no waves, no launches. */
+  tutorial = false;
+
   operationSeed = 1;
 
   operationOrigin: { x: number; z: number; heading: number; carrier?: number } | undefined;
@@ -267,6 +272,15 @@ export class Dogfight {
   feedbackSoundCd = 0;
 
   onCombatFeedback?: (kind: "hit" | "destroyed") => void;
+
+  /** Every round leaving a muzzle, so the audio layer can make it audible. */
+  onShot?: (hostile: boolean, at: THREE.Vector3) => void;
+
+  /** A missile leaving the rail, hostile or ours. */
+  onMissileLaunch?: (hostile: boolean, at: THREE.Vector3) => void;
+
+  /** A countermeasure salvo popping out of the belly. */
+  onFlare?: () => void;
 
   damageT = 0;
 
@@ -592,6 +606,25 @@ export class Dogfight {
 
 
   /**
+   * Put the tutorial's single practice drone in the air before wheels-up. No
+   * carrier fight, no waves, no missiles: one passive target circling ahead of
+   * the boat, waiting for the pilot to climb and shoot it.
+   */
+  prepareTutorial(player: AircraftState): void {
+    this.setAircraft(player);
+    this.clear();
+    this.authored = false;
+    this.scenario = "dogfight";
+    this.tutorial = true;
+    this.active = true;
+    this.refill();
+    this.kills = 0;
+    this.wave = 1;
+    spawnTutorialDrone(this, player);
+  }
+
+
+  /**
    * A recovery: the racks and the hull come back full. The sim calls this when
    * the jet touches down again on a friendly deck or runway, so a landing is a
    * chance to re-arm rather than the end of the fight.
@@ -822,6 +855,7 @@ export class Dogfight {
   /** Drop bandits, ordnance, flashes and timers — but leave the boat afloat. */
   clearFight(): void {
     this.active = false;
+    this.tutorial = false;
     while (this.enemyBombs.length) this.retireEnemyBomb(this.enemyBombs.length - 1);
     this.operation = null; this.roleQueue = []; this.recoveryBonus = 0; this.recoveryWire = 0; this.storesUsed = 0; this.defenseWarning = false; this.enemyFire = []; this.hitsOut = []; this.carrierHitOut = 0;
     this.scenario = "dogfight";
@@ -1000,6 +1034,12 @@ export class Dogfight {
       // the spot, and splicing the current index is only safe that way.
       for (let i = this.bandits.length - 1; i >= 0; i--) {
         const b = this.bandits[i];
+        // The tutorial drone is a target, not a fighter: it neither shoots nor
+        // steers for a merge, and it stays on its own lazy orbit.
+        if (b.tutorial) {
+          stepTutorialDrone(this, b, dt, player);
+          continue;
+        }
         if (this.operation && (b.role !== "escort" || b.retreat || b.hp <= 9 || (b.ammo ?? 0) + b.missiles <= 0 || (b.sortieTime ?? 0) > 240)) {
           this.stepRoleAircraft(b, dt, player); continue;
         }
@@ -1015,7 +1055,7 @@ export class Dogfight {
     this.stepFlashes(dt);
     if (!this.mirror) {
       if (this.operation) this.stepOperation(dt, player);
-      else this.stepWaves(dt, player);
+      else if (!this.tutorial) this.stepWaves(dt, player);
     }
     return false;
   }

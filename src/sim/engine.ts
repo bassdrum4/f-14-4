@@ -50,6 +50,7 @@ import { seaStateFor, weatherPreset, windFor, type WeatherPreset } from "./weath
 import { HOME_SITE, dayPhase, sunPosition, sunVector, type DayPhase } from "../sim/sun";
 import { Dogfight, type CarrierStatus, type GunCue } from "../sim/dogfight";
 import { ExplosionField } from "../render/effects";
+import { advanceTutorialStep, tutorialHud, type TutorialHud } from "../tutorial";
 import { pickDesignation, screenRay } from "../sim/targeting";
 import {
   FLAG_AB,
@@ -215,6 +216,8 @@ export interface HudSnapshot {
   pings: TacticalPingHud[];
   /** Airframe subsystems: battle damage the pilot has to fly around. */
   subsystems?: SubsystemDamage;
+  /** The first-flight coach card. Null outside the tutorial sortie. */
+  tutorial?: TutorialHud | null;
   /** Paddles' last call on the approach, if one is being flown. */
   lsoCall?: string | null;
   /** The LSO's grade for the last pass (wire or bolter). */
@@ -381,6 +384,7 @@ function defaultHud(): HudSnapshot {
     weather: "clear", weatherLabel: "CLEAR",
     spectating: false, spectateTarget: "", spectateKind: "", spectateIndex: 0, spectateCount: 0,
     pings: [], lsoCall: null, lsoGrade: null,
+    tutorial: null,
     remotes: [], netStatus: "idle", netRoom: "", netHost: false, netPilots: 0,
   };
 }
@@ -411,6 +415,16 @@ export class Sim {
   private settings: Settings;
   private state: AircraftState;
   private mission: MissionKind = "carrier";
+  /** First-flight tutorial: the pending launch, the active sortie and its step. */
+  private tutorialPending = false;
+  private tutorialActive = false;
+  private tutorialStep = 0;
+  /** Edge detectors for the audio pass (phase changes, warnings, touchdown). */
+  private lastCatPhase = "";
+  private lastGear = true;
+  private lastFlaps = false;
+  private lastResultKind: string | null = null;
+  private lastWarningAt = 0;
   private acc = 0;
   private last = 0;
   private raf = 0;
@@ -557,10 +571,24 @@ export class Sim {
     // runs when the user touches a setting, so the constructor must seed it.
     this.audio.setVolume(settings.volume);
     this.explosions = new ExplosionField(this.renderer.scene, settings.quality);
+    this.explosions.onBlast = (kind, scale, at) => {
+      if (this.phase === "flying" || this.phase === "result") {
+        this.audio.explosion(kind, scale, at.distanceTo(this.state.pos));
+      }
+    };
     this.applyWeatherWorld();
     this.df = new Dogfight(this.renderer.scene, this.explosions);
     this.df.onCombatFeedback = kind => {
       if (this.phase === "flying") this.audio.combatFeedback(kind);
+    };
+    this.df.onShot = (hostile, at) => {
+      if (this.phase === "flying") this.audio.gunfire(hostile, at.distanceTo(this.state.pos));
+    };
+    this.df.onMissileLaunch = (hostile, at) => {
+      if (this.phase === "flying") this.audio.missileLaunch(hostile, at.distanceTo(this.state.pos));
+    };
+    this.df.onFlare = () => {
+      if (this.phase === "flying") this.audio.flarePop();
     };
     // Multiplayer: wingman meshes live in the same scene; the P2P session
     // stays idle (and costs nothing) until the pilot opens or joins a room.
@@ -820,11 +848,33 @@ export class Sim {
   }
 
   startMission(mission: MissionKind): void {
+    this.tutorialPending = false;
     // Always the pilot's own boat: the launch point follows where they last
     // flew from (see rememberRecovery), so a sortie picks up where it left off
     // instead of hopping to the next ship in the fleet.
     if (!this.mintAttempt()) this.operationOrigin = undefined;
     this.beginMission(mission, this.spawnCarrier);
+  }
+
+  /**
+   * The first-flight tutorial: a normal deck launch with one passive practice
+   * drone circling ahead and a coach card on the glass. Deliberately not a new
+   * mission mode — it is a sortie shape, always available from the menu and
+   * never started for a pilot who has already flown unless they ask for it.
+   */
+  startTutorial(): void {
+    this.tutorialPending = true;
+    this.operationOrigin = undefined;
+    this.operationId = Math.max(Date.now(), this.operationId + 1);
+    this.operationDebrief = false;
+    if (this.settings.aircraft === "destroyer" || this.settings.aircraft === "seahawk") {
+      // The lesson is a cat shot in a fixed-wing jet; a surface or rotary pick
+      // in the setup screen should not turn it into a different tutorial.
+      this.settings = { ...this.settings, aircraft: "tomcat" };
+      this.renderer.setAircraft("tomcat");
+      for (const fn of this.settingsListeners) fn(this.settings);
+    }
+    this.beginMission("carrier", this.spawnCarrier);
   }
 
   /**
@@ -834,6 +884,7 @@ export class Sim {
    * in the lobby follow along; anyone already airborne keeps their own sortie.
    */
   startRoomMission(mission: MissionKind, fresh = false): void {
+    this.tutorialPending = false;
     if (!this.netState.host) return;
     if (this.settings.missionMode === "versus") {
       if (!this.netState.pilots.some(p => p.linked && !p.spectator)) { this.pushBanner("HEAD-TO-HEAD — WAIT FOR ANOTHER PILOT"); return; }
@@ -873,6 +924,10 @@ export class Sim {
   private beginMission(mission: MissionKind, carrierIndex: number): void {
     this.shipRearmHold = 0;
     this.operationDebrief = false; this.allPilotsDown = 0; this.combatSentAt = -Infinity;
+    const tutorial = this.tutorialPending;
+    this.tutorialPending = false;
+    this.tutorialActive = tutorial;
+    if (tutorial) this.tutorialStep = 0;
     this.mission = mission;
     this.recoveryPending = false;
     this.spawnCarrier = clampCarrier(carrierIndex);
@@ -902,7 +957,13 @@ export class Sim {
     const campaign = this.settings.missionMode === "campaign";
     const combat = this.settings.missionMode === "dogfight" || this.settings.missionMode === "strike" || campaign;
     const resumeCampaign = campaign && this.df.operationState?.kind === "campaign" && this.df.operationState.id === this.operationId;
-    if (this.settings.missionMode === "versus" && this.netState.status === "online") {
+    if (tutorial) {
+      // One passive drone, already circling ahead while the pilot runs up the
+      // engines. No operation, no waves and no hostile boat to fight.
+      this.dfArmed = false;
+      this.df.prepareTutorial(this.state);
+      this.state.banner = null;
+    } else if (this.settings.missionMode === "versus" && this.netState.status === "online") {
       this.dfArmed = false;
       this.spawnBattleAircraft();
     } else if (combat) {
@@ -936,11 +997,24 @@ export class Sim {
     // snap the camera to the new jet instead of gliding in from the old scene
     this.rig.resetFollow();
     this.setPhase("flying");
+    // The first sortie — tutorial included — marks this pilot as having flown.
+    // The first-flight offer is only for a genuinely new pilot; the tutorial
+    // itself stays on the Sortie Setup screen from then on.
+    if (this.settings.hasFlown !== true) {
+      const next = { ...this.settings, hasFlown: true };
+      this.settings = next;
+      for (const fn of this.settingsListeners) fn(next);
+    }
     // A keyboard-activated launch button must not keep intercepting flight keys.
     if (typeof document !== "undefined") (document.activeElement as HTMLElement | null)?.blur?.();
     this.acc = 0;
     this.last = performance.now() / 1000;
     this.input.clearEdges();
+    this.lastCatPhase = this.state.catPhase;
+    this.lastGear = this.state.gearDown;
+    this.lastFlaps = this.state.flapsDown;
+    this.lastResultKind = null;
+    this.lastWarningAt = 0;
     this.audio.start();
     this.audio.resume();
     // Where this sortie began is now where the next one will begin: park the
@@ -1161,6 +1235,7 @@ export class Sim {
   }
 
   restart(): void {
+    if (this.tutorialActive) { this.startTutorial(); return; }
     // retry the same mission from the same carrier
     if (this.netState.status === "online") {
       if (this.netState.host) this.startRoomMission(this.mission, true);
@@ -1213,6 +1288,8 @@ export class Sim {
 
   quitToMenu(): void {
     this.settingsRequest = false;
+    this.tutorialPending = false;
+    this.tutorialActive = false;
     this.dfArmed = false;
     this.endPod();
     this.crashSeq = null;
@@ -2188,6 +2265,7 @@ export class Sim {
       this.acc -= FIXED_DT;
       steps++;
     }
+    this.stepTutorial();
     if (this.battleActive && (this.state.result?.kind === "wire" || this.state.result?.kind === "landing")) this.completeBattleRecovery();
     if (this.state.result) this.endPod();
     // A fatal crash starts the replay instead of cutting straight to the
@@ -2200,6 +2278,22 @@ export class Sim {
     this.updateJetPose(alpha);
     this.updateAudio();
     this.updateHud();
+  }
+
+  /** Advance the first-flight lesson from the jet's own state. */
+  private stepTutorial(): void {
+    if (!this.tutorialActive) return;
+    this.tutorialStep = advanceTutorialStep(this.tutorialStep, {
+      onGround: this.state.onGround,
+      gearDown: this.state.gearDown,
+      altitudeM: this.state.pos.y,
+      kills: this.df.kills,
+    });
+  }
+
+  /** The coach card, or null when this is not a tutorial sortie. */
+  private tutorialSnapshot(): TutorialHud | null {
+    return this.tutorialActive ? tutorialHud(this.tutorialStep, this.settings.bindings) : null;
   }
 
   /** Return a recovered aircraft to launch while retaining the current mission. */
@@ -2418,6 +2512,46 @@ export class Sim {
     // bed is silent and the wingmen passing by carry the whole picture.
     if (this.spectating) this.audio.update(0, 0, 0, false, true, this.weather.turbulence, 1);
     else this.audio.update(st.rpm, st.abLevel, st.speed, st.stalled && !st.onGround, muted, this.weather.turbulence, st.gLoad);
+
+    // --- event layers ---
+    // Catapult: the steam and the shove, the moment the shuttle fires.
+    const cat = st.catPhase;
+    if (cat === "firing" && this.lastCatPhase !== "firing") this.audio.catapult();
+    this.lastCatPhase = cat;
+    if (!muted) {
+      if (st.gearDown !== this.lastGear) {
+        this.audio.servo("gear");
+        this.lastGear = st.gearDown;
+      }
+      if (st.flapsDown !== this.lastFlaps) {
+        this.audio.servo("flap");
+        this.lastFlaps = st.flapsDown;
+      }
+    }
+    // The stall horn is a state, not an event: it stays on while the wing is
+    // not flying and stops the instant it is.
+    this.audio.stall(!muted && st.stalled && !st.onGround);
+
+    if (!muted) {
+      const now = performance.now();
+      const incoming = this.hud.dfIncoming;
+      if (incoming && now - this.lastWarningAt > 650) {
+        this.audio.warning("missile");
+        this.lastWarningAt = now;
+      } else if (!incoming && this.df.threatT > 0 && now - this.lastWarningAt > 900) {
+        this.audio.warning("guns");
+        this.lastWarningAt = now;
+      }
+    }
+
+    // A trap or a runway landing gets its own sound even though the phase has
+    // already flipped to the result screen by the time this runs.
+    const landed = st.result?.kind;
+    if (landed && landed !== this.lastResultKind && (landed === "wire" || landed === "landing")) {
+      this.audio.touchdown(landed, st.speed);
+    }
+    this.lastResultKind = landed ?? null;
+
     // Doppler, as heard: a wingman passing close gets louder and brighter, and
     // the pitch follows how fast the gap is closing.
     const near = this.nearestRemotePass();
@@ -2583,6 +2717,7 @@ export class Sim {
       spectateCount: this.spectateList.length,
       pings: this.pingHud(),
       subsystems: st.subsystems,
+      tutorial: this.tutorialSnapshot(),
       lsoCall: st.lsoCall ?? null,
       lsoGrade: st.lsoGrade ?? null,
       ...this.dfHud(),

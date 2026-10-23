@@ -11,6 +11,7 @@ import type { AircraftState } from "../flight";
 import { groundAt, isOnDeck } from "../world";
 import type { Bandit, EnemyPose } from "./types";
 import {
+  AGGRESSOR_WAVE_RESPAWN,
   AIM_CONE,
   ARENA,
   BANDIT_AB_TIME,
@@ -38,7 +39,6 @@ import {
   RAM_CARRIER_HP,
   THREAT_HOLD,
   WAVE_MAX,
-  WAVE_RESPAWN,
   fighterSkill,
 } from "./tuning";
 import {
@@ -121,6 +121,91 @@ export function spawnMirrorBandit(ctx: Dogfight, p: EnemyPose): Bandit {
   };
   ctx.bandits.push(b);
   return b;
+}
+
+
+/**
+ * The tutorial's practice drone: one Tomcat turning a lazy circle ahead of the
+ * carrier. It never fires, never evades and never counts as a wave — the pilot
+ * only has to find it, hold the gun cross on it and squeeze.
+ */
+export function spawnTutorialDrone(ctx: Dogfight, player: AircraftState): Bandit {
+  const mesh = buildAircraft("tomcat", "bandit");
+  mesh.gear.visible = false;
+  mesh.afterburner.visible = false;
+  mesh.wings[0].rotation.y = -0.45;
+  mesh.wings[1].rotation.y = 0.45;
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(player.quat);
+  const radius = 620;
+  const cx = player.pos.x + forward.x * 1700;
+  const cz = player.pos.z + forward.z * 1700;
+  const angle = Math.atan2(player.pos.z - cz, player.pos.x - cx);
+  const pos = new THREE.Vector3(
+    cx + Math.cos(angle) * radius,
+    Math.max(player.pos.y + 550, groundAt(cx, cz).y + 650),
+    cz + Math.sin(angle) * radius,
+  );
+  mesh.group.position.copy(pos);
+  ctx.root.add(mesh.group);
+  const b: Bandit = {
+    id: ctx.nextId++,
+    hp: BANDIT_HP,
+    pos,
+    quat: new THREE.Quaternion(),
+    bank: 0,
+    speed: radius * 0.11,
+    fireCd: Infinity,
+    burst: 0,
+    evadeT: 0,
+    evadeCd: 0,
+    missiles: 0,
+    missileCd: Infinity,
+    phase: 0.4,
+    mesh,
+    catT: -1,
+    catStart: pos.clone(),
+    catDir: forward.clone(),
+    climbT: 0,
+    sweepT: 0.5,
+    abOn: false,
+    abT: 0,
+    abCool: 2,
+    remote: false,
+    netPos: pos.clone(),
+    netQuat: new THREE.Quaternion(),
+    netVel: new THREE.Vector3(),
+    tutorial: true,
+    tutorialOrbit: { cx, cz, radius, angle, alt: pos.y, rate: 0.11 },
+  };
+  const sign = Math.sign(b.tutorialOrbit!.rate) || 1;
+  ctx.aimQuat(b, DESIRED.set(-Math.sin(angle) * sign, 0, Math.cos(angle) * sign), 0.3 * sign);
+  mesh.group.quaternion.copy(b.quat);
+  b.netQuat.copy(b.quat);
+  ctx.bandits.push(b);
+  return b;
+}
+
+
+/** Fly the practice drone around its orbit; it has no guns and no seeker. */
+export function stepTutorialDrone(ctx: Dogfight, b: Bandit, dt: number, player: AircraftState): void {
+  const orbit = b.tutorialOrbit;
+  if (!orbit) return;
+  orbit.angle += orbit.rate * dt;
+  const x = orbit.cx + Math.cos(orbit.angle) * orbit.radius;
+  const z = orbit.cz + Math.sin(orbit.angle) * orbit.radius;
+  // The circle is normally over open water, but a tutorial started at a boat
+  // near the islands can sweep a headland: climb over it instead of clipping.
+  const floor = groundAt(x, z).y + 220;
+  if (floor > orbit.alt) orbit.alt = floor;
+  b.pos.set(x, orbit.alt, z);
+  const sign = Math.sign(orbit.rate) || 1;
+  DESIRED.set(-Math.sin(orbit.angle) * sign, 0, Math.cos(orbit.angle) * sign).normalize();
+  b.bank += (0.3 * sign - b.bank) * (1 - Math.exp(-dt * 2));
+  ctx.aimQuat(b, DESIRED, b.bank);
+  b.mesh.group.position.copy(b.pos);
+  b.mesh.group.quaternion.copy(b.quat);
+  animateExhaust(b.mesh, 0, player.time);
+  ctx.stepDamageSmoke(b, dt);
 }
 
 
@@ -517,7 +602,7 @@ export function stepWaves(ctx: Dogfight, dt: number, player: AircraftState): voi
     return;
   }
   if (ctx.waveTimer <= 0) {
-    ctx.waveTimer = WAVE_RESPAWN;
+    ctx.waveTimer = AGGRESSOR_WAVE_RESPAWN;
     if (ctx.wave > 0) ctx.banner(player, `WAVE ${ctx.wave} CLEARED — ${ctx.kills} TAGGED`);
     return;
   }

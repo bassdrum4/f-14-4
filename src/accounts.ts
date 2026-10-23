@@ -182,6 +182,7 @@ export function profileOf(s: Settings): GamestateProfile {
     quality: s.quality,
     adaptiveResolution: s.adaptiveResolution,
     minimap: s.minimap,
+    hasFlown: s.hasFlown === true,
     hudLadder: s.hudLadder,
     hudGunCross: s.hudGunCross,
     bindings: { ...s.bindings },
@@ -223,6 +224,9 @@ export function applyGamestate(current: Settings, profile: GamestateProfile): Se
   }
   if (typeof profile.adaptiveResolution === "boolean") next.adaptiveResolution = profile.adaptiveResolution;
   if (typeof profile.minimap === "boolean") next.minimap = profile.minimap;
+  // A profile written before the field existed is a pilot who has flown; do
+  // not greet a returning pilot with the first-flight tutorial.
+  next.hasFlown = typeof profile.hasFlown === "boolean" ? profile.hasFlown : true;
   if (typeof profile.hudLadder === "boolean") next.hudLadder = profile.hudLadder;
   if (typeof profile.hudGunCross === "boolean") next.hudGunCross = profile.hudGunCross;
   // The launch point comes home too: land on a boat, sign in elsewhere, lift off

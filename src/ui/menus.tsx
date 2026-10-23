@@ -3,7 +3,7 @@
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { Sim, Phase } from "../sim/engine";
-import { AIRCRAFT_LIST } from "../sim/aircraft";
+import { AIRCRAFT_LIST, DEFAULT_AIRCRAFT } from "../sim/aircraft";
 import { carriers, worldSeedForRoom } from "../sim/world";
 import {
   USERNAME_MAX,
@@ -314,9 +314,20 @@ function MainMenu({ sim, settings, onSettings, openMultiplayer, onOpenedMultipla
   // still has no name parks its action here and asks first. Answering it — by
   // entering a name or flying as a guest — marks it answered for good.
   const [pending, setPending] = useState<{ run: () => void } | null>(null);
+  const [tutorialDismissed, setTutorialDismissed] = useState(false);
   const gate = (run: () => void) => {
     if (onboardingSeen()) run();
     else setPending({ run });
+  };
+  // The lesson is a fixed-wing cat shot, so a surface or rotary pick is swapped
+  // for the Tomcat before the tutorial starts. The option itself is available
+  // forever; only the first-flight card is limited to a new pilot.
+  const startTutorial = () => {
+    const craft = AIRCRAFT_LIST.find(a => a.id === settings.aircraft);
+    const fixed = !!craft && !craft.surfaceVessel && !craft.rotorcraft;
+    if (!fixed) onSettings({ ...settings, aircraft: DEFAULT_AIRCRAFT });
+    sim?.leaveRoom();
+    sim?.startTutorial();
   };
   return (
     <div className="ui-root menu-bg dispatch-bg">
@@ -333,6 +344,17 @@ function MainMenu({ sim, settings, onSettings, openMultiplayer, onOpenedMultipla
         </div>
         {screen === "main" && <>
           <div className="dispatch-heading"><span>READY ON THE DECK</span><h1>Your aircraft.<br />Your sortie.</h1></div>
+          {settings.hasFlown === false && !tutorialDismissed && (
+            <div className="first-flight">
+              <span className="first-flight-kicker">NEW PILOT · FIRST FLIGHT</span>
+              <strong>Two minutes, one kill.</strong>
+              <p>Cat shot, gear, guns: a guided first sortie with the prompts on the glass.</p>
+              <div className="first-flight-actions">
+                <Btn primary onClick={() => gate(startTutorial)}>FLY THE TUTORIAL</Btn>
+                <Btn onClick={() => setTutorialDismissed(true)}>NOT YET</Btn>
+              </div>
+            </div>
+          )}
           <div className="dispatch-actions">
             <button className="dispatch-action lead" onClick={() => {
               sim?.leaveRoom();
@@ -343,6 +365,7 @@ function MainMenu({ sim, settings, onSettings, openMultiplayer, onOpenedMultipla
             <button className="dispatch-action" onClick={() => chooseRoom(true)}><span className="dispatch-number">03</span><span><strong>HEAD-TO-HEAD</strong><small>Live pilots, guns and missiles.</small></span><b aria-hidden="true">↗</b></button>
           </div>
           <nav className="dispatch-nav" aria-label="Flight tools">
+            <button onClick={() => gate(startTutorial)}>TUTORIAL</button>
             <button onClick={() => setScreen("settings")}>SETTINGS</button>
             <button onClick={() => setScreen("controls")}>CONTROLS</button>
             <button onClick={() => setScreen("account")}>PILOT</button>
@@ -383,6 +406,10 @@ function FlightSetup({ sim, settings, onSettings, onBack, gate }: {
     if (settings.missionMode === "versus") onSettings({ ...settings, missionMode: mode });
     sim?.startMission(mission);
   };
+  const startTutorial = () => {
+    if (craft.surfaceVessel || craft.rotorcraft) onSettings({ ...settings, aircraft: DEFAULT_AIRCRAFT });
+    sim?.startTutorial();
+  };
   return <div className="menu-screen">
     <h3 className="menu-h3">SORTIE SETUP</h3>
     <span className="menu-world-label">VEHICLE</span>
@@ -395,7 +422,7 @@ function FlightSetup({ sim, settings, onSettings, onBack, gate }: {
     <label className="menu-row"><span>Weather</span><select value={settings.weather ?? "clear"} onChange={e => onSettings({ ...settings, weather: e.target.value as WeatherMode })}>{(Object.keys(WEATHER_LABELS) as WeatherMode[]).map(w => <option key={w} value={w}>{WEATHER_LABELS[w]}</option>)}</select></label>
     <p className="menu-note">{craft.surfaceVessel ? `Take station near ${homeCarrier(settings)}. Stop within 1 km of a friendly carrier and hold ${keyLabel(settings.bindings.cat)} for 3 seconds to repair and rearm.` : `Home deck: ${homeCarrier(settings)} — land on another boat and it becomes home.`}</p>
     {craft.surfaceVessel && <p className="menu-note">{keyLabel(settings.bindings.throttleUp)}/{keyLabel(settings.bindings.throttleDown)} engines · {keyLabel(settings.bindings.yawLeft)}/{keyLabel(settings.bindings.yawRight)} steer · Arrow controls train gun · {keyLabel(settings.bindings.fire)} fire · {keyLabel(settings.bindings.missile)} VLS · {keyLabel(settings.bindings.bomb)} gun director</p>}
-    <div className="menu-buttons"><Btn primary onClick={() => gate(() => launch("carrier"))}>{craft.surfaceVessel ? "TAKE STATION — DESTROYER" : craft.rotorcraft ? "LIFT OFF — CARRIER" : "CAT SHOT — CARRIER"}</Btn>{!craft.surfaceVessel && <Btn onClick={() => gate(() => launch("airfield"))}>TAKEOFF — RUNWAY</Btn>}<Btn onClick={onBack}>BACK</Btn></div>
+    <div className="menu-buttons"><Btn primary onClick={() => gate(() => launch("carrier"))}>{craft.surfaceVessel ? "TAKE STATION — DESTROYER" : craft.rotorcraft ? "LIFT OFF — CARRIER" : "CAT SHOT — CARRIER"}</Btn>{!craft.surfaceVessel && <Btn onClick={() => gate(() => launch("airfield"))}>TAKEOFF — RUNWAY</Btn>}<Btn onClick={() => gate(startTutorial)}>FLY THE TUTORIAL</Btn><Btn onClick={onBack}>BACK</Btn></div>
   </div>;
 }
 

@@ -254,6 +254,7 @@ export function spawnTracer(ctx: Dogfight,
   inherit: THREE.Vector3 | null,
 ): void {
   if (ctx.tracers.length >= MAX_TRACERS || ctx.tracerPool.length === 0) return;
+  ctx.onShot?.(hostile, origin);
   const mesh = ctx.tracerPool.pop()!;
   mesh.material = hostile ? ctx.matBandit : ctx.matPlayer;
   // Our own rounds are drawn fat and long on purpose: a slim 20 mm slug is

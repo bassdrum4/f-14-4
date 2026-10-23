@@ -129,6 +129,7 @@ export function putHostileRound(ctx: Dogfight, pos: THREE.Vector3, vel: THREE.Ve
   ctx.blasts.spawnSpark(pos, false);
   ctx.blasts.trail(pos, 1.3, 1.6);
   ctx.flash(pos);
+  ctx.onMissileLaunch?.(true, pos);
   ctx.missiles.push({
     id: ++ctx.missileSerial,
     pos,
@@ -267,6 +268,7 @@ export function fireMissile(ctx: Dogfight, player: AircraftState): void {
   ctx.blasts.trail(pos, 1.3, 1.6);
   ctx.flash(pos);
   ctx.pushReleaseMarker(pos);
+  ctx.onMissileLaunch?.(false, pos);
   ctx.missiles.push({
     id: ++ctx.missileSerial,
     pos,

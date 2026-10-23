@@ -55,6 +55,8 @@ export class ExplosionField {
   private blasts = 0;
   private last: BlastKind | null = null;
   private quality: Quality;
+  /** Every fireball or splash, so the audio layer can add the bang. */
+  onBlast?: (kind: BlastKind, scale: number, at: THREE.Vector3) => void;
 
   constructor(scene: THREE.Scene, quality: Quality = "medium") {
     this.quality = quality;
@@ -157,6 +159,7 @@ export class ExplosionField {
   spawn(at: THREE.Vector3, kind: BlastKind, scale = 1): void {
     this.blasts++;
     this.last = kind;
+    this.onBlast?.(kind, scale, at);
     if (kind === "water") {
       this.splash(at, scale);
       return;

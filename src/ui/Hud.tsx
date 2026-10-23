@@ -47,6 +47,7 @@ const EMPTY: HudSnapshot = {
   weather: "clear", weatherLabel: "CLEAR",
   spectating: false, spectateTarget: "", spectateKind: "", spectateIndex: 0, spectateCount: 0,
   pings: [], lsoCall: null, lsoGrade: null,
+  tutorial: null,
   remotes: [], netStatus: "idle", netRoom: "", netHost: false, netPilots: 0,
 };
 
@@ -63,6 +64,13 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
   return (
     <div className={hud.pod ? "hud-root pod" : "hud-root"}>
       {hud.operation && <OperationPanel key={hud.operation.state.id} sim={sim} hud={hud} operation={hud.operation} />}
+      {hud.tutorial && (
+        <div className={"tutorial-coach" + (hud.tutorial.complete ? " complete" : "")}>
+          <span className="tutorial-kicker">TUTORIAL · {hud.tutorial.step}/{hud.tutorial.count}</span>
+          <strong>{hud.tutorial.title}</strong>
+          <p>{hud.tutorial.body}</p>
+        </div>
+      )}
       {hud.battle && <div className="battle-board">
         <strong>HEAD-TO-HEAD <span>ROOM {hud.netRoom}</span></strong>
         <div className="battle-columns"><span>PILOT</span><span>K / D</span><span>HULL</span></div>
@@ -749,6 +757,7 @@ const HIT_TICKS = [[-1, -1], [1, -1], [1, 1], [-1, 1]] as const;
 /** Scratch for the HUD projections (one HUD canvas draws at a time). */
 const CUE_P = { x: 0, y: 0 };
 const ORD_P = { x: 0, y: 0 };
+const ARROW_P = { x: 0, y: 0 };
 
 /**
  * Ordnance symbology for the chase/cockpit view: a diamond on every store still
@@ -994,6 +1003,35 @@ function drawGunCrosshair(
   ctx.fillStyle = `rgba(${color},${cue.live ? 0.9 : 0.55})`;
   ctx.fillText(`${(cue.range / 1000).toFixed(1)} KM`, x + r * 2 + 5, y + 3);
   ctx.restore();
+
+  // --- nearest-aggressor pointer ---
+  // A small arrow orbits the sight and points at the closest bandit, so the
+  // next fight can be found without hunting the screen. It parks on the frame
+  // edge when the contact is outside the view (or behind the jet), leaving the
+  // arrow pointing along the bearing rather than hiding the cue entirely.
+  if (hud.dfActive && !hud.dfStrike && !hud.battle) {
+    let closest: HudSnapshot["dfSpots"][number] | null = null;
+    for (const s of hud.dfSpots) if (!closest || s.km < closest.km) closest = s;
+    if (closest) {
+      const view = sim.projectOffscreen(closest.x, closest.y, closest.z, ARROW_P, 20);
+      const bearing = Math.atan2(ARROW_P.y - y, ARROW_P.x - x);
+      const orbit = r * 2.35;
+      ctx.save();
+      ctx.translate(x + Math.cos(bearing) * orbit, y + Math.sin(bearing) * orbit);
+      ctx.rotate(bearing);
+      // Bright while the contact is in the frame; dimmed when it is a bearing
+      // only, so the arrow never promises a target the pilot cannot see.
+      ctx.fillStyle = view.front && view.inside ? "rgba(255,138,110,0.98)" : "rgba(255,138,110,0.6)";
+      ctx.beginPath();
+      ctx.moveTo(8, 0);
+      ctx.lineTo(-5, -5.5);
+      ctx.lineTo(-2.5, 0);
+      ctx.lineTo(-5, 5.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

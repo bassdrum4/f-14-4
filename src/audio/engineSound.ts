@@ -10,6 +10,7 @@
 export class AudioEngine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
+  private compressor: DynamicsCompressorNode | null = null;
   private started = false;
 
   private whine: OscillatorNode | null = null;
@@ -33,6 +34,13 @@ export class AudioEngine {
   private flybyGain: GainNode | null = null;
   private flybyFilter: BiquadFilterNode | null = null;
   private noiseBuffer: AudioBuffer | null = null;
+  private whiteBuffer: AudioBuffer | null = null;
+  /** The stall horn: a plain square tone, gated when the wing lets go. */
+  private horn: OscillatorNode | null = null;
+  private hornGain: GainNode | null = null;
+  /** Throttles: guns and explosions can arrive faster than the ear wants. */
+  private lastShotAt = -1;
+  private lastBoomAt = -1;
 
   volume = 0.7;
 
@@ -53,7 +61,15 @@ export class AudioEngine {
 
     this.master = ctx.createGain();
     this.master.gain.value = this.volume;
-    this.master.connect(ctx.destination);
+    // A compressor on the master bus keeps a bomb salvo and a gun burst from
+    // clipping over the engine bed, without the pilot touching the volume.
+    this.compressor = ctx.createDynamicsCompressor();
+    this.compressor.threshold.value = -16;
+    this.compressor.knee.value = 18;
+    this.compressor.ratio.value = 5;
+    this.compressor.attack.value = 0.004;
+    this.compressor.release.value = 0.25;
+    this.master.connect(this.compressor).connect(ctx.destination);
 
     // --- turbine whine (two detuned saws through a lowpass) ---
     this.whine = ctx.createOscillator();
@@ -84,6 +100,12 @@ export class AudioEngine {
       last = (last + 0.02 * white) / 1.02;
       data[i] = last * 3.5;
     }
+    // A one-second white buffer feeds the transient effects — guns, impacts,
+    // steam and whooshes — which need a brighter source than the brown bed.
+    const whiteBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+    const whiteData = whiteBuf.getChannelData(0);
+    for (let i = 0; i < whiteData.length; i++) whiteData[i] = Math.random() * 2 - 1;
+    this.whiteBuffer = whiteBuf;
     const makeLoop = (): AudioBufferSourceNode => {
       const src = ctx.createBufferSource();
       src.buffer = buf;
@@ -122,6 +144,18 @@ export class AudioEngine {
     this.strainGain.gain.value = 0;
     this.strain.connect(this.strainGain).connect(this.master);
     this.strain.start();
+
+    // --- stall horn: the one warning the pilot cannot mistake for a system ---
+    this.horn = ctx.createOscillator();
+    this.horn.type = "square";
+    this.horn.frequency.value = 420;
+    const hornFilter = ctx.createBiquadFilter();
+    hornFilter.type = "lowpass";
+    hornFilter.frequency.value = 1100;
+    this.hornGain = ctx.createGain();
+    this.hornGain.gain.value = 0;
+    this.horn.connect(hornFilter).connect(this.hornGain).connect(this.master);
+    this.horn.start();
 
     // --- flyby: a whoosh whose pitch tracks a wingman's closing speed ---
     this.flybySrc = makeLoop();
@@ -168,6 +202,273 @@ export class AudioEngine {
       osc.start(start);
       osc.stop(start + duration);
     }
+  }
+
+  /**
+   * A burst of gunfire. Our own gun is close and bright; a bandit's is quieter
+   * and darker with range. Throttled, because a 10-rounds-a-second burst is one
+   * mechanical event, not ten separate sounds.
+   */
+  gunfire(hostile: boolean, rangeM = 0): void {
+    const ctx = this.ctx, master = this.master, white = this.whiteBuffer;
+    if (!ctx || !master || !white || ctx.state !== "running" || this.volume <= 0) return;
+    const near = hostile ? Math.max(0, 1 - rangeM / 1500) : 1;
+    if (near <= 0.02) return;
+    const t = ctx.currentTime;
+    if (t - this.lastShotAt < (hostile ? 0.06 : 0.035)) return;
+    this.lastShotAt = t;
+    const level = (hostile ? 0.14 * near * near : 0.2) * this.volume;
+
+    const src = ctx.createBufferSource();
+    src.buffer = white;
+    const band = ctx.createBiquadFilter();
+    band.type = "bandpass";
+    band.frequency.value = hostile ? 850 : 1650;
+    band.Q.value = 0.85;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.linearRampToValueAtTime(level, t + 0.003);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.075);
+    src.connect(band).connect(gain).connect(master);
+    src.start(t);
+    src.stop(t + 0.09);
+    src.onended = () => { src.disconnect(); band.disconnect(); gain.disconnect(); };
+
+    // The chest thump under the crack, which is most of what a cannon sounds
+    // like from inside the jet.
+    const thump = ctx.createOscillator();
+    const thumpGain = ctx.createGain();
+    thump.type = "triangle";
+    thump.frequency.setValueAtTime(hostile ? 85 : 125, t);
+    thump.frequency.exponentialRampToValueAtTime(45, t + 0.07);
+    thumpGain.gain.setValueAtTime(level * 0.55, t);
+    thumpGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+    thump.connect(thumpGain).connect(master);
+    thump.start(t);
+    thump.stop(t + 0.1);
+    thump.onended = () => { thump.disconnect(); thumpGain.disconnect(); };
+  }
+
+  /**
+   * A fireball or a water column: a low boom on a short delay by distance, plus
+   * the crack that makes it read as an explosion rather than a door slamming.
+   */
+  explosion(kind: "ground" | "air" | "water", scale: number, rangeM: number): void {
+    const ctx = this.ctx, master = this.master, white = this.whiteBuffer;
+    if (!ctx || !master || !white || ctx.state !== "running" || this.volume <= 0) return;
+    if (rangeM > 9000) return;
+    const near = Math.max(0, 1 - rangeM / 9000);
+    if (near <= 0.01) return;
+    const t = ctx.currentTime;
+    if (t - this.lastBoomAt < 0.035) return;
+    this.lastBoomAt = t;
+    const size = Math.min(2.4, Math.max(0.5, scale));
+    const start = t + Math.min(0.35, rangeM / 343);
+    const level = Math.min(0.8, (0.16 + 0.16 * size) * Math.pow(near, 0.8)) * this.volume;
+
+    const src = ctx.createBufferSource();
+    src.buffer = white;
+    const filter = ctx.createBiquadFilter();
+    if (kind === "water") {
+      filter.type = "bandpass";
+      filter.frequency.value = 620;
+      filter.Q.value = 0.7;
+    } else {
+      filter.type = "lowpass";
+      filter.frequency.value = 180 + 160 * size;
+    }
+    const gain = ctx.createGain();
+    const tail = kind === "water" ? 0.55 : 0.85 + size * 0.45;
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.linearRampToValueAtTime(level, start + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + tail);
+    src.connect(filter).connect(gain).connect(master);
+    src.start(start);
+    src.stop(start + tail + 0.05);
+    src.onended = () => { src.disconnect(); filter.disconnect(); gain.disconnect(); };
+
+    if (kind === "water") return;
+    const sub = ctx.createOscillator();
+    const subGain = ctx.createGain();
+    sub.type = "sine";
+    sub.frequency.setValueAtTime(64, start);
+    sub.frequency.exponentialRampToValueAtTime(28, start + 0.5);
+    subGain.gain.setValueAtTime(level * 0.7, start);
+    subGain.gain.exponentialRampToValueAtTime(0.0001, start + 0.65);
+    sub.connect(subGain).connect(master);
+    sub.start(start);
+    sub.stop(start + 0.7);
+    sub.onended = () => { sub.disconnect(); subGain.disconnect(); };
+  }
+
+  /** A missile clearing the rail: a whoosh and a few seconds of motor roar. */
+  missileLaunch(hostile: boolean, rangeM = 0): void {
+    const ctx = this.ctx, master = this.master, white = this.whiteBuffer;
+    if (!ctx || !master || !white || ctx.state !== "running" || this.volume <= 0) return;
+    const near = hostile ? Math.max(0, 1 - rangeM / 5000) : 1;
+    if (near <= 0.02) return;
+    const t = ctx.currentTime;
+    const level = (hostile ? 0.09 : 0.13) * near * this.volume;
+    const src = ctx.createBufferSource();
+    src.buffer = white;
+    const band = ctx.createBiquadFilter();
+    band.type = "bandpass";
+    band.Q.value = 0.9;
+    band.frequency.setValueAtTime(320, t);
+    band.frequency.exponentialRampToValueAtTime(1400, t + 0.55);
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.linearRampToValueAtTime(level, t + 0.04);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.75);
+    src.connect(band).connect(gain).connect(master);
+    src.start(t);
+    src.stop(t + 0.8);
+    src.onended = () => { src.disconnect(); band.disconnect(); gain.disconnect(); };
+
+    const motor = ctx.createOscillator();
+    const motorGain = ctx.createGain();
+    motor.type = "sawtooth";
+    motor.frequency.setValueAtTime(55, t);
+    motorGain.gain.setValueAtTime(0.0001, t);
+    motorGain.gain.linearRampToValueAtTime(level * 0.45, t + 0.08);
+    motorGain.gain.exponentialRampToValueAtTime(0.0001, t + 1.3);
+    motor.connect(motorGain).connect(master);
+    motor.start(t);
+    motor.stop(t + 1.35);
+    motor.onended = () => { motor.disconnect(); motorGain.disconnect(); };
+  }
+
+  /** Steam, shuttle and a hard shove: the catapult, from the cockpit. */
+  catapult(): void {
+    const ctx = this.ctx, master = this.master, white = this.whiteBuffer;
+    if (!ctx || !master || !white || ctx.state !== "running" || this.volume <= 0) return;
+    const t = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = white;
+    const hp = ctx.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = 600;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.linearRampToValueAtTime(0.22 * this.volume, t + 0.03);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 1.1);
+    src.connect(hp).connect(gain).connect(master);
+    src.start(t);
+    src.stop(t + 1.15);
+    src.onended = () => { src.disconnect(); hp.disconnect(); gain.disconnect(); };
+
+    const shove = ctx.createOscillator();
+    const shoveGain = ctx.createGain();
+    shove.type = "sine";
+    shove.frequency.setValueAtTime(58, t);
+    shove.frequency.exponentialRampToValueAtTime(32, t + 0.7);
+    shoveGain.gain.setValueAtTime(0.3 * this.volume, t);
+    shoveGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.8);
+    shove.connect(shoveGain).connect(master);
+    shove.start(t);
+    shove.stop(t + 0.85);
+    shove.onended = () => { shove.disconnect(); shoveGain.disconnect(); };
+  }
+
+  /** A salvo of countermeasure cartridges popping out of the belly. */
+  flarePop(): void {
+    const ctx = this.ctx, master = this.master, white = this.whiteBuffer;
+    if (!ctx || !master || !white || ctx.state !== "running" || this.volume <= 0) return;
+    const t = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = white;
+    const band = ctx.createBiquadFilter();
+    band.type = "bandpass";
+    band.frequency.value = 2400;
+    band.Q.value = 1.4;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.06 * this.volume, t);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+    src.connect(band).connect(gain).connect(master);
+    src.start(t);
+    src.stop(t + 0.16);
+    src.onended = () => { src.disconnect(); band.disconnect(); gain.disconnect(); };
+  }
+
+  /** RWR / guns-break beeps. Throttling the repeat is the caller's job. */
+  warning(kind: "missile" | "guns"): void {
+    const ctx = this.ctx, master = this.master;
+    if (!ctx || !master || ctx.state !== "running" || this.volume <= 0) return;
+    const tones = kind === "missile" ? [1280, 960] : [760];
+    for (let i = 0; i < tones.length; i++) {
+      const t = ctx.currentTime + i * 0.085;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "square";
+      osc.frequency.value = tones[i];
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.linearRampToValueAtTime(0.035 * this.volume, t + 0.005);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.065);
+      osc.connect(gain).connect(master);
+      osc.start(t);
+      osc.stop(t + 0.075);
+      osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+    }
+  }
+
+  /** Gear and flap motors: a short servo whine and a mechanical clunk. */
+  servo(kind: "gear" | "flap"): void {
+    const ctx = this.ctx, master = this.master, white = this.whiteBuffer;
+    if (!ctx || !master || !white || ctx.state !== "running" || this.volume <= 0) return;
+    const t = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = white;
+    const band = ctx.createBiquadFilter();
+    band.type = "bandpass";
+    band.frequency.value = kind === "gear" ? 380 : 760;
+    band.Q.value = 2.2;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.linearRampToValueAtTime(0.045 * this.volume, t + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + (kind === "gear" ? 0.35 : 0.2));
+    src.connect(band).connect(gain).connect(master);
+    src.start(t);
+    src.stop(t + 0.4);
+    src.onended = () => { src.disconnect(); band.disconnect(); gain.disconnect(); };
+  }
+
+  /** Tyres, wire and a deck plate taking the jet's weight. */
+  touchdown(kind: "wire" | "landing", speedMS: number): void {
+    const ctx = this.ctx, master = this.master, white = this.whiteBuffer;
+    if (!ctx || !master || !white || ctx.state !== "running" || this.volume <= 0) return;
+    const t = ctx.currentTime;
+    const level = Math.min(0.3, 0.08 + speedMS * 0.005) * this.volume;
+    const src = ctx.createBufferSource();
+    src.buffer = white;
+    const band = ctx.createBiquadFilter();
+    band.type = "bandpass";
+    band.frequency.value = kind === "wire" ? 1800 : 1200;
+    band.Q.value = 0.9;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(level, t);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + (kind === "wire" ? 0.35 : 0.22));
+    src.connect(band).connect(gain).connect(master);
+    src.start(t);
+    src.stop(t + 0.4);
+    src.onended = () => { src.disconnect(); band.disconnect(); gain.disconnect(); };
+
+    const thud = ctx.createOscillator();
+    const thudGain = ctx.createGain();
+    thud.type = "sine";
+    thud.frequency.setValueAtTime(72, t);
+    thud.frequency.exponentialRampToValueAtTime(38, t + 0.2);
+    thudGain.gain.setValueAtTime(level * 0.8, t);
+    thudGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
+    thud.connect(thudGain).connect(master);
+    thud.start(t);
+    thud.stop(t + 0.3);
+    thud.onended = () => { thud.disconnect(); thudGain.disconnect(); };
+  }
+
+  /** The stall horn. A steady tone while the wing is not flying. */
+  stall(on: boolean): void {
+    if (!this.ctx || !this.hornGain) return;
+    this.hornGain.gain.setTargetAtTime(on ? 0.05 * this.volume : 0, this.ctx.currentTime, 0.05);
   }
 
   resume(): void {
@@ -270,7 +571,9 @@ export class AudioEngine {
     this.windSrc?.stop();
     this.buffetSrc?.stop();
     this.strain?.stop();
+    this.horn?.stop();
     this.flybySrc?.stop();
+    this.compressor?.disconnect();
     void this.ctx?.close();
     this.started = false;
   }

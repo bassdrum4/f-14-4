@@ -78,7 +78,12 @@ export const ASSIST_RANGE = 1500; // m: no assist beyond this
 export const BULLET_MASS = 0.1; // kg (20 mm class)
 export const BULLET_CDA = 0.000025; // drag coefficient x frontal area, m^2
 export const CARRIER_GUN_DAMAGE = 1; // per round on a 100 hp hull — strafing takes ~10 s
-export const WAVE_RESPAWN = 6; // s between waves
+export const WAVE_RESPAWN = 6; // s between endless strike waves
+// Aggressor sorties get a longer breath between launch cycles: clearing a wave
+// is the moment to check fuel, ordnance and the boat, not the start of the next
+// one. Endless Practice and Fleet Defense use their own gaps below.
+export const AGGRESSOR_WAVE_RESPAWN = 16; // s between aggressor waves (Endless Practice)
+export const OPERATION_LAUNCH_GAP = 12; // s between aircraft launches in Fleet Defense
 export const WAVE_MAX = 5;
 
 // --- the hostile carrier (the bandits' home deck) ---
@@ -93,7 +98,7 @@ export const CV_STANDOFF = 2800; // m — hold this far off the player
 export const CV_TURN_DEG = 0.45; // deg/s rudder (a 300 m hull does not pivot)
 export const CV_FRIENDLY_CLEAR = 2200; // m — never steam into a friendly anchorage
 export const CV_FIRST_LAUNCH = 2.2; // s after a wave is called that the first jet rolls
-export const CV_LAUNCH_GAP = 3.4; // s between aircraft off the two cats
+export const CV_LAUNCH_GAP = 6; // s between aircraft off the two cats in an aggressor wave
 export const CV_CAT_LATERAL = 20; // |CarrierDef.catapultOffsetX| — one cat each side
 export const CV_CLIMB_TIME = 3.5; // s of nose-up after a shot before it starts hunting
 

@@ -81,6 +81,9 @@ export interface Bandit {
   /** Wingman mirroring: this bandit is flown by the room host, not by us. It
    *  still shoots (a mirrored fight bites) but its pose comes off the wire. */
   remote: boolean;
+  /** Tutorial practice drone: flies a slow orbit and never fires back. */
+  tutorial?: boolean;
+  tutorialOrbit?: { cx: number; cz: number; radius: number; angle: number; alt: number; rate: number };
   /** Newest streamed pose, the velocity two packets imply, and the orientation
    *  they arrived with — the mesh is eased onto these between packets. */
   netPos: THREE.Vector3;

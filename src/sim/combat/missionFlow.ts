@@ -11,7 +11,7 @@ import type { EnemyFire } from "../combatSnapshot";
 import type { AircraftState } from "../flight";
 import { carriers, groundAt, isOnDeck } from "../world";
 import type { Bandit, EnemyBomb, FleetDefender } from "./types";
-import { MUZZLE_V, THREAT_HOLD } from "./tuning";
+import { MUZZLE_V, OPERATION_LAUNCH_GAP, THREAT_HOLD } from "./tuning";
 import { AHEAD, AXIS, DESIRED, FWD, NOSE_Z, disposeSubtree, terrainBlocks } from "./scratch";
 
 import type { Dogfight } from "./core";
@@ -146,7 +146,7 @@ export function stepOperation(ctx: Dogfight, dt: number, player: AircraftState):
 export function stepOperationLaunches(ctx: Dogfight, dt: number, player: AircraftState): void {
   if (!ctx.cv || ctx.operation?.state.status !== "active" || ctx.operation.state.suppressed || ctx.roleQueue.length === 0) return;
   ctx.launchTimer -= dt; if (ctx.launchTimer > 0) return;
-  ctx.launchTimer = 8;
+  ctx.launchTimer = OPERATION_LAUNCH_GAP;
   ctx.launchOne(player, ctx.cv, ctx.roleQueue.shift()!);
 }
 

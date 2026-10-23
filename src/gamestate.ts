@@ -31,6 +31,9 @@ export interface GamestateProfile {
   quality: string;
   adaptiveResolution?: boolean;
   minimap: boolean;
+  /** Whether this pilot has flown before. Optional: profiles saved before it
+   *  existed belong to pilots who have already flown. */
+  hasFlown?: boolean;
   /** HUD overlay preferences. Optional: profiles saved before they existed. */
   hudLadder?: boolean;
   hudGunCross?: boolean;

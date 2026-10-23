@@ -800,3 +800,69 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .vehicle-beta { display: inline-block; margin-left: 8px; padding: 2px 5px; border: 1px solid #e8b357; color: #ffce7c; font: 700 9px ui-monospace, monospace; letter-spacing: .08em; vertical-align: middle; }
 .ship-director { position: absolute; top: 20%; left: 50%; transform: translateX(-50%); color: #a1f5be; text-align: center; font: 12px ui-monospace, monospace; line-height: 1.8; text-shadow: 0 1px 3px #000; }
 .ship-reticle { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); color: #a1f5be; font: 30px ui-monospace, monospace; }
+
+/* --------------------------------------------------------------------------- */
+/* First-flight tutorial                                                       */
+/* --------------------------------------------------------------------------- */
+
+.first-flight {
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  border-left: 3px solid var(--accent);
+  background: rgba(246, 203, 81, 0.08);
+}
+.first-flight-kicker {
+  font: 9px ui-monospace, monospace;
+  letter-spacing: 0.16em;
+  color: var(--accent);
+}
+.first-flight strong {
+  display: block;
+  margin: 5px 0 4px;
+  color: #edeadf;
+  font: 800 16px 'Arial Narrow', 'Segoe UI', sans-serif;
+  letter-spacing: 0.03em;
+}
+.first-flight p {
+  margin: 0 0 10px;
+  color: #bdc7c8;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.first-flight-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.first-flight-actions .menu-btn { flex: 0 0 auto; }
+
+.tutorial-coach {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  width: min(460px, 62vw);
+  padding: 12px 15px;
+  background: rgba(4, 14, 22, 0.9);
+  border-left: 3px solid #f6cb51;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.45);
+  color: #e6eff1;
+  font: 11px/1.6 ui-monospace, monospace;
+  pointer-events: none;
+}
+.tutorial-coach .tutorial-kicker {
+  display: block;
+  color: #8fd8ff;
+  font-size: 9px;
+  letter-spacing: 0.16em;
+}
+.tutorial-coach strong {
+  display: block;
+  margin: 4px 0 3px;
+  color: #ffd250;
+  font: 800 15px 'Arial Narrow', 'Segoe UI', sans-serif;
+  letter-spacing: 0.08em;
+}
+.tutorial-coach p { margin: 0; color: #cfe0e6; }
+.tutorial-coach.complete { border-color: #92efad; }
+.tutorial-coach.complete strong { color: #92efad; }
+@media (max-width: 850px) {
+  .tutorial-coach { top: 90px; width: min(88vw, 460px); }
+}
