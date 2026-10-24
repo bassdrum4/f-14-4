@@ -358,21 +358,37 @@ function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
     // dpr carries the panel size as well as the display density: the drawing
     // below stays in 176 units and is simply rendered larger for the map view.
     const dpr = Math.min(window.devicePixelRatio, 2) * (side / n);
-    cv.width = Math.round(n * dpr);
-    cv.height = Math.round(n * dpr);
+    const targetDim = Math.round(n * dpr);
+    // Avoid resetting canvas dimensions on every 20 Hz HUD update if unchanged.
+    // Setting canvas.width/height clears the context state and triggers GPU buffer reallocation.
+    if (cv.width !== targetDim || cv.height !== targetDim) {
+      cv.width = targetDim;
+      cv.height = targetDim;
+    }
     const ctx = cv.getContext("2d");
     if (!ctx) return;
 
     // --- range: cover the furthest point of interest, with a little margin ---
-    let maxR = 4000;
+    // Accumulate squared distances in the loop to avoid calling Math.hypot repeatedly,
+    // taking Math.sqrt once at the end.
+    let maxR2 = 4000 * 4000;
     for (const m of hud.carrierMarkers) {
-      maxR = Math.max(maxR, Math.hypot(m.x - hud.playerX, m.z - hud.playerZ));
+      const dx = m.x - hud.playerX;
+      const dz = m.z - hud.playerZ;
+      const r2 = dx * dx + dz * dz;
+      if (r2 > maxR2) maxR2 = r2;
     }
-    maxR = Math.max(maxR, Math.hypot(hud.fieldX - hud.playerX, hud.fieldZ - hud.playerZ));
+    const fieldDx = hud.fieldX - hud.playerX;
+    const fieldDz = hud.fieldZ - hud.playerZ;
+    const fr2 = fieldDx * fieldDx + fieldDz * fieldDz;
+    if (fr2 > maxR2) maxR2 = fr2;
     if (hud.dfCarrier) {
-      maxR = Math.max(maxR, Math.hypot(hud.dfCarrier.x - hud.playerX, hud.dfCarrier.z - hud.playerZ));
+      const cx = hud.dfCarrier.x - hud.playerX;
+      const cz = hud.dfCarrier.z - hud.playerZ;
+      const cr2 = cx * cx + cz * cz;
+      if (cr2 > maxR2) maxR2 = cr2;
     }
-    const range = maxR * 1.15;
+    const range = Math.sqrt(maxR2) * 1.15;
     const scale = (n / 2 - 10) / range;
 
     // Rotate world positions into the pilot's heading frame; labels stay upright.
@@ -382,8 +398,8 @@ function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
     };
     const relativeHeading = (heading: number) => heading - hud.playerHeadingDeg;
 
+    ctx.clearRect(0, 0, cv.width, cv.height);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, n, n);
 
     // sea
     ctx.fillStyle = "rgba(6, 22, 34, 0.72)";
