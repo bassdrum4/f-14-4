@@ -43,8 +43,8 @@ export interface CarrierDef {
   headingDeg: number; // bow direction (0 = north)
   deckLength: number;
   deckWidth: number;
-  landingLength: number; // angled landing strip length
-  landingAngleDeg: number; // angled deck relative to ship axis
+  landingLength: number; // usable landing strip length
+  landingAngleDeg: number; // landing strip angle to hull axis (0 = straight)
   wireCount: number;
   wireSpacing: number; // meters between wires
   catapultOffsetX: number; // cat track lateral offset from deck centreline
@@ -68,7 +68,7 @@ function carrier(name: string, x: number, z: number, headingDeg: number): Carrie
     deckLength: 435,
     deckWidth: 112,
     landingLength: 348,
-    landingAngleDeg: 9.5,
+    landingAngleDeg: 0,
     wireCount: 4,
     wireSpacing: 18,
     catapultOffsetX: -20,
@@ -91,14 +91,14 @@ export interface WorldDef {
 }
 
 /**
- * Angled-deck landing strip frame, in deck coordinates (along = fore/aft,
+ * Landing strip frame, in deck coordinates (along = fore/aft,
  * across = starboard, origin at the ship's centre). Shared by the sim's trap
  * logic and the renderer so the painted deck and wire meshes sit exactly
  * where the sim checks them.
  */
 export const STRIP = {
   startAlong: -167, // aft end of the landing area, along the deck
-  startAcross: 8, //   centreline offset at the aft end (toward starboard)
+  startAcross: 0, //   centered on the hull axis for a straight-in approach
   halfWidth: 21, //    touchdown corridor half-width
   wireFirstS: 51, //   first arresting wire, metres from the strip start
   catchSMin: 38, //    earliest s that can catch a wire

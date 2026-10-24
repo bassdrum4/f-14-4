@@ -311,7 +311,7 @@ export function buildSky(): SkyDome {
 /**
  * Where the island sits, across the deck from the ship's centreline. It hugs the
  * starboard edge whatever the hull's beam is, which keeps it out of the landing
- * area and off the port side where the angled strip runs out.
+ * area and clear of the straight landing runway.
  */
 function islandAcrossOf(c: CarrierDef): number {
   return c.deckWidth / 2 - 8.5;
@@ -338,7 +338,7 @@ function deckTexture(c: CarrierDef): THREE.CanvasTexture {
   const pxY = 768 / c.deckWidth;
   const cx = (along: number) => (along + c.deckLength / 2) * pxX;
   const cy = (across: number) => (across + c.deckWidth / 2) * pxY;
-  // The landing area is an angled strip: s runs along the strip, d across it.
+  // The landing strip is straight along the hull: s runs fore/aft, d across it.
   // (s, d) -> canvas, using the same frame as flight.ts stripCoords.
   const th = (c.landingAngleDeg * Math.PI) / 180;
   const cos = Math.cos(th);
@@ -535,7 +535,7 @@ export function buildCarrier(c: CarrierDef): THREE.Group {
   // only the ships that happen to be in the active layout.
   g.add(buildShipDeckLights(c));
 
-  // Arresting wires, slung across the angled landing strip at the same deck
+  // Arresting wires, slung across the straight landing strip at the same deck
   // coordinates the sim uses to catch them (world.ts STRIP).
   //
   // These used to be 0x2b2b2b — three channels away from the #2a2f34 landing
@@ -608,7 +608,7 @@ export function buildCarrier(c: CarrierDef): THREE.Group {
 
 /**
  * Everything that lights a carrier at night, in the ship's own frame (+X bow,
- * +Z starboard): amber lights down the angled landing strip, green/red running
+ * +Z starboard): amber lights down the straight landing strip, green/red running
  * lights along the starboard and port deck edges, and floodlights on the island
  * so the deck and the superstructure are findable in the dark.
  *
@@ -621,7 +621,7 @@ function buildShipDeckLights(c: CarrierDef): THREE.Group {
   const cos = Math.cos(th);
   const sin = Math.sin(th);
 
-  // --- amber lights down both edges of the angled landing strip ---
+  // --- amber lights down both edges of the straight landing strip ---
   const strip: Array<[number, number, number]> = [];
   for (let s = 6; s <= c.landingLength - 6; s += 18) {
     for (const d of [-STRIP.halfWidth, STRIP.halfWidth]) {

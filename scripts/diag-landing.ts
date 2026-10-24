@@ -19,7 +19,7 @@ import {
 import { airfield, carriers, carrierAt, deckAxes, STRIP, worldToDeck, type CarrierDef } from "../src/sim/world";
 import { buildCarrier, WIRE_LIFT, WIRE_SHOE, WIRE_THICKNESS } from "../src/render/scene";
 
-/** s (down the angled strip) and d (off its centreline) for a world point. */
+/** s (down the straight strip) and d (off its centreline) for a world point. */
 function stripCoords(c: CarrierDef, x: number, z: number): { s: number; d: number } {
   const [along, across] = worldToDeck(c, x, z);
   const th = c.landingAngleDeg * RTD;
@@ -69,6 +69,26 @@ function stripPoint(c: CarrierDef, s: number, d: number): Vector3 {
   );
 }
 
+// Regression: the visible strip, approach geometry and trap wires all use this
+// same ship-aligned frame. Check every friendly boat (hostiles use makeCarrier).
+{
+  for (const c of carriers()) {
+    const aft = stripPoint(c, 0, 0);
+    const fore = stripPoint(c, c.landingLength, 0);
+    const [aftAlong, aftAcross] = worldToDeck(c, aft.x, aft.z);
+    const [foreAlong, foreAcross] = worldToDeck(c, fore.x, fore.z);
+    check(
+      `${c.name}: runway is centered, straight and entirely on deck`,
+      c.landingAngleDeg === 0 &&
+        Math.abs(aftAcross) < 1e-6 && Math.abs(foreAcross) < 1e-6 &&
+        Math.abs(foreAlong - aftAlong - c.landingLength) < 1e-6 &&
+        Math.max(Math.abs(aftAlong), Math.abs(foreAlong)) <= c.deckLength / 2 &&
+        STRIP.halfWidth <= c.deckWidth / 2,
+      `angle=${c.landingAngleDeg} aft=${aftAcross.toFixed(3)} fore=${foreAcross.toFixed(3)}`,
+    );
+  }
+}
+
 function pitchDeg(st: AircraftState): number {
   return Math.asin(clamp(new Vector3(0, 0, -1).applyQuaternion(st.quat).y, -1, 1)) * RAD;
 }
@@ -76,7 +96,7 @@ function bankDeg(st: AircraftState): number {
   return Math.asin(clamp(-new Vector3(1, 0, 0).applyQuaternion(st.quat).y, -1, 1)) * RAD;
 }
 
-/** Roll out 3 km astern on the centreline, on the 4 deg path, on-speed. */
+/** Roll out 3 km astern on the straight centreline, on the 4 deg path, on-speed. */
 function onApproach(): { st: AircraftState; c: CarrierDef } {
   const c: CarrierDef = carriers()[0];
   const aim = stripPoint(c, GLIDE_AIM_S, 0);
@@ -146,7 +166,7 @@ function flyApproach(seconds: number, speedTrimKt = 0, label = ""): {
     );
     const attTarget = fpaTarget + aoaNeeded;
     inp.pitch = clamp(6 * (attTarget - pitchDeg(st) * RTD) - 1.2 * st.omega.x, -1, 1);
-    // --- lateral: hold the angled centreline
+    // --- lateral: hold the straight centreline
     const { d } = stripCoords(c, st.pos.x, st.pos.z);
     const headingErr = 0;
     const bankTarget = clamp((-d * 0.02 - headingErr) * RAD, -20, 20);

@@ -226,14 +226,14 @@ const TRAP_MAX_CLIMB = 3;
 // --- approach guidance (the boat's own MEZ/IFLOLS, simulated) ---
 /** The glideslope the landing area expects: 4 degrees, carrier approach reference. */
 export const GLIDE_DEG = 4;
-/** Distance down the angled strip where the glideslope meets the deck. */
+/** Distance down the landing strip where the glideslope meets the deck. */
 export const GLIDE_AIM_S = 105;
 /** Ball-call window: the pilot must be on-speed and on-slope inside this. */
 export const GLIDE_START_KM = 3.2;
 
 /**
  * The carrier-approach snapshot: what the HUD's ball/ILS symbology needs to
- * fly a 4° glideslope onto the angled deck. Measured from the jet to the
+ * fly a 4° glideslope onto the straight landing deck. Measured from the jet to the
  * nearest friendly boat; meaningless (all NaN) when there is nothing to land
  * on within GLIDE_START_KM.
  */
@@ -242,7 +242,7 @@ export interface GlideState {
   rangeM: number;
   /** + above the 4° path, − below, metres. */
   deviationM: number;
-  /** Lateral offset from the angled centreline, metres (+ = right). */
+  /** Lateral offset from the straight runway centreline, metres (+ = right). */
   lineupM: number;
   /** Deck of the boat being flown onto. */
   carrier: CarrierDef;
@@ -565,7 +565,7 @@ function smooth01(t: number): number {
 
 /**
  * Compute the approach state onto the nearest friendly carrier. The glideslope
- * is the 4° line from a point GLIDE_AIM_S down the angled strip; the return is
+ * is the 4° line from a point GLIDE_AIM_S down the landing strip; the return is
  * null outside the ball-call window, when the jet is parked, or after a result.
  */
 export function glideStateFor(st: AircraftState): GlideState | null {
@@ -574,7 +574,7 @@ export function glideStateFor(st: AircraftState): GlideState | null {
   const { s, d } = stripCoords(c, st.pos.x, st.pos.z);
   // Behind the origin (s past the aim point) there is no slope left to read.
   if (s > GLIDE_AIM_S) return null;
-  // The glide-path origin sits GLIDE_AIM_S down the angled strip at deck
+  // The glide-path origin sits GLIDE_AIM_S down the straight runway at deck
   // height — at the wires, not at the ship centre — so the slope reads against
   // the strip the jet will actually touch.
   const th = (c.landingAngleDeg * Math.PI) / 180;
@@ -587,7 +587,7 @@ export function glideStateFor(st: AircraftState): GlideState | null {
   const rangeM = Math.hypot(groundRange, st.pos.y - c.deckY);
   if (rangeM > GLIDE_START_KM * 1000) return null;
   const pathY = c.deckY + groundRange * Math.tan((GLIDE_DEG * Math.PI) / 180);
-  // d is measured perpendicular to the angled centreline (the strip frame the
+  // d is measured perpendicular to the runway centreline (the strip frame the
   // deck paint and the wires use), so it *is* the lineup error; + = starboard.
   const speed = approachSpeed(st.spec, st.pos.y);
   return {
