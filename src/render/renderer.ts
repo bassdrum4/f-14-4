@@ -355,7 +355,18 @@ export class WorldRenderer {
     // ships, runway and combat aircraft visible at their full existing ranges.
     for (const child of this.scenery.children) {
       const bounds = (child as THREE.InstancedMesh).boundingSphere;
-      child.visible = !bounds || this.camera.position.distanceToSquared(bounds.center) < (bounds.radius + 5000) ** 2;
+      if (!bounds) {
+        child.visible = true;
+        continue;
+      }
+      // Cache the squared culling distance threshold to avoid redundant exponentiation and addition inside the render loop every frame.
+      let maxDistSq = child.userData.maxDistSq as number | undefined;
+      if (maxDistSq === undefined) {
+        const r = bounds.radius + 5000;
+        maxDistSq = r * r;
+        child.userData.maxDistSq = maxDistSq;
+      }
+      child.visible = this.camera.position.distanceToSquared(bounds.center) < maxDistSq;
     }
     // slow swell drift: gives motion cues when judging height over water
     const t = performance.now() / 1000;
