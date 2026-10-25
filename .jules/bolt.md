@@ -1,0 +1,3 @@
+## 2025-10-25 - Frame-rate Canvas HUD Overlay RAF Loops
+**Learning:** React state updates from `useSyncExternalStore` in `useHud` are throttled to 20 Hz (50ms). HUD canvas overlays (`TargetBoxes`, `TargetPod`, `PitchLadder`) that use `requestAnimationFrame` should read `sim.snapshot` directly inside their RAF callback rather than depending on React `hud` props in `useEffect`. Depending on `hud` props in `useEffect` causes the RAF loop to tear down and recreate 20 times/sec while rendering with stale 20 Hz data between React renders.
+**Action:** Pass `sim` directly to canvas overlay components and read `sim.snapshot` per frame inside RAF loops.
