@@ -1,7 +1,7 @@
 {
   "name": "f14-tomcat-simulator",
   "private": true,
-  "version": "2.11.0",
+  "version": "2.12.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port ${PORT:-5173}",
