@@ -1,3 +1,10 @@
+## 2.12.0 — Lightweight flight analytics
+
+- Shares Bored's protected insert-only Supabase gameplay telemetry for sorties, playtime, modes, aircraft, results, and limited performance milestones.
+- Reuses the real Bored account only when the browser already has a valid signed-in session; otherwise counts guest flights. No callsigns or room codes are collected.
+- Adds an Interface setting to opt out using the same browser preference as Bored.
+- Adds a build workflow to keep the standalone HTML synchronized with editable TypeScript.
+
 # Changelog
 
 Release labels are recorded below. Older entries preserve labels that were
