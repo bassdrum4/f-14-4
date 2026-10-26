@@ -112,7 +112,13 @@ export function createFlightAnalytics(sim: Sim, getSettings: () => Settings): { 
       while (pending.length && enabled) {
         const event = pending[0], auth = boredAuth();
         // Never post a departed account's activity as someone else's.
-        if (event.user_id && auth?.id !== event.user_id) break;
+        if (event.user_id && auth?.id !== event.user_id) {
+          // The original account signed out or its session expired. Discard
+          // stale account events instead of blocking later guest/new-user
+          // events behind an unsendable queue entry.
+          pending.shift();
+          continue;
+        }
         const response = await fetch(API, {
           method: "POST",
           headers: {
