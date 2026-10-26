@@ -1,0 +1,38 @@
+name: Publish standalone simulator
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "app/**"
+      - "package.json"
+      - "bun.lock"
+      - "vite.config.ts"
+      - ".github/workflows/build-standalone.yml"
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: f14-standalone-main
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run build
+      - run: bun run check:standalone
+      - name: Commit generated standalone files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html isolate/index.html src/restored/runtime.js src/restored/runtime.css src/restored/standalone.template.html
+          if ! git diff --cached --quiet; then
+            git commit -m "build: publish F-14 standalone"
+            git push
+          fi
