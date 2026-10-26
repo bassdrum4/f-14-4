@@ -1,0 +1,32 @@
+name: Build embedded F-14 telemetry on feature branch
+on:
+  push:
+    branches:
+      - feat/bored-embedded-telemetry-20261026
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run check:standalone
+      - name: Commit compiled simulator to the same feature branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html isolate/index.html src/restored/runtime.js src/restored/runtime.css src/restored/standalone.template.html
+          if ! git diff --cached --quiet; then
+            git commit -m "Build standalone F-14 HTML with embedded telemetry"
+            git push origin HEAD:feat/bored-embedded-telemetry-20261026
+          fi
