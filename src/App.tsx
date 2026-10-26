@@ -2,11 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { Sim } from "./sim/engine";
 import { UiRoot } from "./ui/menus";
 import { loadSettings, saveSettings, type Settings } from "./settings";
+import { createFlightAnalytics } from "./analytics";
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [sim, setSim] = useState<Sim | null>(null);
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
+  const latestSettings = useRef(settings);
+  latestSettings.current = settings;
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -15,8 +18,10 @@ export default function App() {
     // account name and callsign are applied where they are used (the lobby, the
     // roster and the feedback form), so there is nothing to restore here.
     const g = new Sim(canvasRef.current, settings);
+    const telemetry = createFlightAnalytics(g, () => latestSettings.current);
     setSim(g);
     return () => {
+      telemetry.dispose();
       g.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
