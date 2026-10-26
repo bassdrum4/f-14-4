@@ -20,6 +20,7 @@ import {
 import { gamestateConfigured } from "../gamestate";
 import type { NetState } from "../net/multiplayer";
 import { APP_VERSION } from "../version";
+import { analyticsEnabled, setAnalyticsEnabled } from "../analytics";
 import { Hud, useHud } from "./Hud";
 import { operationTitle, phaseObjective } from "../sim/operations";
 import {
@@ -620,6 +621,7 @@ function SettingsPanel({ sim = null, settings, onSettings, onBack }: {
   const net = useNet(sim);
   const set = (patch: Partial<Settings>) => onSettings({ ...settings, ...patch });
   const [tab, setTab] = useState("flight");
+  const [usage, setUsage] = useState(() => analyticsEnabled());
   return <div className="menu-screen settings-screen">
     <h3 className="menu-h3">SETTINGS</h3>
     {net.status === "online" && <p className="menu-note" role="status">ROOM {net.room} · {net.host ? "HOST" : "FLIGHT MEMBER"} · {net.allowLateJoin === false ? "JOINING AFTER LAUNCH DISABLED" : "JOINING AFTER LAUNCH ALLOWED"}</p>}
@@ -637,6 +639,8 @@ function SettingsPanel({ sim = null, settings, onSettings, onBack }: {
       <label className="menu-row"><span>Show minimap</span><input type="checkbox" checked={settings.minimap} onChange={e => set({ minimap: e.target.checked })} /></label>
       <label className="menu-row"><span>Angle ladder (green pitch/roll overlay)</span><input type="checkbox" checked={settings.hudLadder} onChange={e => set({ hudLadder: e.target.checked })} /></label>
       <label className="menu-row"><span>Gun cross (green sight, tracer line, range)</span><input type="checkbox" checked={settings.hudGunCross} onChange={e => set({ hudGunCross: e.target.checked })} /></label>
+       <label className="menu-row"><span>Share anonymous gameplay analytics</span><input type="checkbox" checked={usage} onChange={e => { setUsage(e.target.checked); setAnalyticsEnabled(e.target.checked); }} /></label>
+       <p className="menu-note">Lightweight sessions, playtime, mission, aircraft and outcomes. No room codes, callsigns, chat or keypress text. Shares Bored’s analytics preference and dashboard; turn this off at any time.</p>
       <p className="menu-note">In the air, {keyLabel(settings.bindings.settings ?? "KeyO")} pauses and opens this screen. Both overlays sit over the middle of the view.</p>
     </>}
     {tab !== "controls" && <Btn onClick={onBack}>BACK</Btn>}
