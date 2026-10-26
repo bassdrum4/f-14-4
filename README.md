@@ -1,6 +1,6 @@
 # F-14 Carrier Simulator
 
-Current published build label: **2.11.0**, including the aircraft visual overhaul and playable destroyer beta.
+Current build label: **2.12.0**, adding lightweight flight analytics in Bored's shared Supabase setup.
 See [CHANGELOG.md](CHANGELOG.md) for release notes and
 [the code history investigation](docs/VERSION-ARCHAEOLOGY.md)
 for the earlier development, recovered builds and missing release history.
