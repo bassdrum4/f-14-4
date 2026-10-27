@@ -25,6 +25,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
+      - run: bun run test:accounts
+      - run: bun run test:feedback
+      - run: node scripts/smoke-f14-backend.mjs
       - run: bun run build
       - run: bun run check:standalone
       - name: Commit generated standalone files
