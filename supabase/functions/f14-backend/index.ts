@@ -176,6 +176,15 @@ export async function handleRequest(req: Request): Promise<Response> {
     let body: unknown;
     try { body = JSON.parse(raw); } catch { return invalid("invalid JSON"); }
     if (!object(body)) return invalid("request body must be an object");
+    if (body.type === "health") {
+      // Read-only live storage probe for deployment/CI checks; never writes test data.
+      await Promise.all([
+        database("f14_profiles", "GET", "?select=callsign_key&limit=0"),
+        database("f14_feedback", "GET", "?select=id&limit=0"),
+        database("f14_flight_events", "GET", "?select=id&limit=0"),
+      ]);
+      return response({ ok: true, service: "f14-backend" });
+    }
     if (body.action === "get" || body.action === "save") return await profile(body);
     if (body.type === "feedback" && body.app === "f14sim") return await feedback(body);
     if (body.type === "event") return await flight(req, body);
