@@ -1,0 +1,3 @@
+## 2026-03-08 - Ground Contact Sampling Bottleneck in Flight Physics
+**Learning:** `applyGroundContact` was sampling terrain height (`groundAt`) 6 times per tick (120 Hz) for every contact point on the airframe/gear even when flying high above the surface. Evaluated terrain sampling involves expensive FBM/noise fractal calculations and carrier bounding checks.
+**Action:** Perform a single center ground height check (`groundAt(st.pos.x, st.pos.z)`). If `st.pos.y > gCenter.y + 30`, bypass checking individual contact points as no gear/belly point can penetrate the surface. This reduces terrain sampling calls during flight from 6 per tick to 1 per tick.
