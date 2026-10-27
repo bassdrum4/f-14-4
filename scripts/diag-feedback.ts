@@ -110,7 +110,7 @@ delete env.VITE_FEEDBACK_KEY;
 
 /** The shared backend the sim ships with (src/gamestate.ts). */
 const SHARED_BACKEND =
-  "https://script.google.com/macros/s/AKfycbwsrT3N6toVVVaQ4oxHFs6iWwzD3NrWbrhUe0pcqipuIm2x8gs31i-LSOWZKpVIlLnb/exec";
+  "https://djdpttltfmwkofdrvkem.supabase.co/functions/v1/f14-backend";
 
 const {
   buildEntry,
@@ -212,15 +212,12 @@ const {
     hits.some((h) => String(h.body.message).includes("Gear will not retract")));
 }
 
-// --- 4. the API key rides along when one is set ---------------------------
+// --- 4. no client-side shared secret is sent ------------------------------
 {
-  env.VITE_FEEDBACK_KEY = "test-key-123";
-  await submitFeedback({ kind: "other", message: "key check", includeContext: false }, null, "Viper");
+  await submitFeedback({ kind: "other", message: "no leaked secrets", includeContext: false }, null, "Viper");
   const last = hits[hits.length - 1];
-  check("the api key is sent as an api-key header", last.apiKey === "test-key-123", String(last.apiKey));
-  check("the api key also rides in the body for Web3Forms-style collectors",
-    last.body.access_key === "test-key-123", String(last.body.access_key));
-  delete env.VITE_FEEDBACK_KEY;
+  check("no api-key is sent", !last.apiKey, String(last.apiKey));
+  check("no client-shared access_key is sent", last.body.access_key === undefined);
 }
 
 // --- 5. the payload always matches what the collector appends to the sheet -

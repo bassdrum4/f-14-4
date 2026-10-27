@@ -1,22 +1,8 @@
-// Cloud gamestate: a pilot's settings follow their callsign.
-//
-// The backend is a free Apps Script web app (Gamestate.gs in the repo root):
-// POST { action:"save", callsign, gamestate } writes the profile, and
-// POST { action:"get", callsign } fetches it back. The same deployment also
-// takes the feedback form's reports (POST { type:"feedback", … }), so there is
-// one endpoint, one sheet and one thing to deploy — see feedback.ts.
-//
-// The endpoint is hardcoded on purpose (it is not a secret, and the sim is a
-// single file that runs anywhere): paste the /exec URL from the Apps Script
-// deployment over GAMESTATE_ENDPOINT below.
-
-/**
- * The Apps Script /exec URL for Gamestate.gs. Deploy the script, then paste
- * its URL here. While it is blank, cloud fetch/saves are skipped quietly and
- * the sim behaves exactly as before (localStorage only).
- */
-export const GAMESTATE_ENDPOINT = "https://script.google.com/macros/s/AKfycbwsrT3N6toVVVaQ4oxHFs6iWwzD3NrWbrhUe0pcqipuIm2x8gs31i-LSOWZKpVIlLnb/exec";
-
+// Cloud gamestate in the isolated f14_profiles table on Bored's Supabase project.
+// The same f14-backend function accepts F-14 feedback and flight events.
+// It imports missing legacy Apps Script profiles on demand, then reads/writes Supabase.
+// Callsigns are informal identities: anyone who knows one can overwrite its profile.
+export const GAMESTATE_ENDPOINT = "https://djdpttltfmwkofdrvkem.supabase.co/functions/v1/f14-backend";
 const TIMEOUT_MS = 9000;
 
 /** The parts of a pilot's settings that ride to the cloud and back. */
@@ -96,9 +82,8 @@ export async function saveGamestate(callsign: string, profile: GamestateProfile)
 }
 
 /**
- * The POST is sent as text/plain so the browser treats it as a CORS simple
- * request and skips the preflight that Apps Script handles inconsistently
- * (the same explanation, from the other side, is in Gamestate.gs).
+ * The request stays text/plain to work in a standalone file or embedded game;
+ * the Supabase function also supports CORS preflight when needed.
  */
 async function post(body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
   const ctrl = new AbortController();

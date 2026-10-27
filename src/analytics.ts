@@ -1,11 +1,10 @@
 // Lightweight gameplay telemetry, kept entirely off the render loop.
-// Shares Bored's insert-only Supabase play_events table and browser opt-out.
+// Uses isolated f14_flight_events via the F-14 Edge Function; shares Bored's browser opt-out.
 import type { Sim, Phase } from "./sim/engine";
 import type { Settings } from "./settings";
 import { APP_VERSION } from "./version";
 
-const API = "https://djdpttltfmwkofdrvkem.supabase.co/rest/v1/play_events";
-const KEY = "sb_publishable_Ayx7pzjm55vlzQ4u8se9KA_O97WK-QZ";
+const API = "https://djdpttltfmwkofdrvkem.supabase.co/functions/v1/f14-backend";
 const PREFERENCE = "bored.analytics.enabled";
 const VISITOR = "bored.analytics.visitor";
 const SESSION = "bored.session";
@@ -122,11 +121,10 @@ export function createFlightAnalytics(sim: Sim, getSettings: () => Settings): { 
         const response = await fetch(API, {
           method: "POST",
           headers: {
-            apikey: KEY,
-            Authorization: "Bearer " + (event.user_id ? auth!.token : KEY),
-            "Content-Type": "application/json", Prefer: "return=minimal",
+            ...(event.user_id ? { Authorization: "Bearer " + auth!.token } : {}),
+            "Content-Type": "application/json",
           },
-          body: JSON.stringify(event), keepalive,
+          body: JSON.stringify({ type: "event", event }), keepalive,
         });
         if (!response.ok) {
           const code = await response.json().then(x => x?.code).catch(() => null);

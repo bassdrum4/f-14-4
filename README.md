@@ -247,3 +247,37 @@ Air Defense adapts fleet defense to a naval air-defense station. Naval Strike of
 This is an arcade naval beta: simplified buoyancy, propulsion and countermeasures; the deck gun, rather than a full naval weapons suite. Remote hull movement uses the existing timestamped multiplayer transport; remote turret articulation is not transmitted.
 
 Checks: `npm run test:destroyer`, `npm run test:destroyer:regressions` (moving targets, target lives, mixed combat and naval service), `npm run test:destroyer:browser` (install Chromium with Playwright first), plus the existing aircraft, mission and multiplayer checks.
+
+
+## F-14 cloud backend (Supabase)
+
+The standalone game and its GitHub Pages location have **not moved**. F-14
+uses the **existing Bored Supabase project** (`djdpttltfmwkofdrvkem`),
+through the deployed `f14-backend` Edge Function at
+`https://djdpttltfmwkofdrvkem.supabase.co/functions/v1/f14-backend`.
+
+The function owns three F-14-specific tables: `public.f14_profiles`,
+`public.f14_feedback`, and `public.f14_flight_events`. Each has RLS enabled,
+with no direct access granted to anonymous or signed-in browser roles. The
+backend's service credentials are available only inside the Edge Function.
+Bored's `play_events`, `feedback`, and profile tables are not touched.
+
+The client keeps its existing callsign saves, local feedback queue, and
+lightweight analytics opt-out. There is no account authentication for callsigns;
+people knowing a callsign may read or overwrite its cloud profile, just as on
+the old Apps Script backend. Bored users are attributed only when an unexpired
+Bored session is independently verified by the backend.
+
+Legacy Google Sheet profiles migrate **on first fetch**: for missing callsigns,
+the Edge Function attempts one read of the old Apps Script deployment, and if
+successful writes the profile to Supabase. This best-effort bridge does not
+read the old sheet directly or import old feedback; inaccessible old profiles
+are not claimed to be migrated. Keep the archived `Gamestate.gs` and sheet
+available until legacy records have been accounted for.
+
+Backend source is at `supabase/functions/f14-backend/index.ts`. Deploy that
+file as the `f14-backend` Supabase Edge Function with gateway JWT verification
+**off** (its own handler validates inputs and verifies Bored JWTs for attributed
+events). The client does not need an API secret and no `VITE_*` secret should
+be added. Use `bun run test:feedback`, `bun run test:accounts`, and
+`bun run typecheck` for local diagnostics.

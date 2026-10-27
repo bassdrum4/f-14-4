@@ -1,17 +1,9 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  /** Optional: a *different* Google Apps Script web app to collect feedback
-   *  (https://script.google.com/macros/s/<SCRIPT_ID>/exec) instead of the
-   *  shared backend in gamestate.ts. Development builds honour it (the
-   *  headless checks point it at a local stand-in); production builds ignore it
-   *  so a stale host value cannot redirect live reports. */
+  /** Optional development-only URL for a feedback collector stand-in.
+   * Production always uses the F-14 Supabase Edge Function. */
   readonly VITE_FEEDBACK_ENDPOINT?: string;
-  /** Optional shared secret. Sent as an `api-key` header and `access_key` in
-   *  the body; set the same value as FEEDBACK_KEY in the script's Script
-   *  Properties and the backend will reject anything that does not match. A
-   *  wrapped (unusable) value is ignored rather than sent. */
-  readonly VITE_FEEDBACK_KEY?: string;
 
   /** Multiplayer signalling server override. The public PeerJS broker is the
    *  default, so these are only needed for a self-hosted one. */

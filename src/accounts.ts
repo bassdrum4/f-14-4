@@ -6,9 +6,9 @@
 // now just a callsign — which is what the roster, the feedback form and the
 // lobby always actually used.
 //
-// The profile (settings + keybinds) lives in localStorage. A free Apps Script
-// store (Gamestate.gs, endpoint in gamestate.ts) lets a pilot type their
-// callsign on a new machine and pull their gamestate back down: gamemode,
+// The profile (settings + keybinds) lives in localStorage. The F-14 Supabase
+// function lets a pilot type their callsign on a new machine and pull back
+// the same settings: gamemode,
 // time of day, sensitivity, keybinds and aircraft all come home. It is
 // informal by design — no passwords, no security boundary.
 

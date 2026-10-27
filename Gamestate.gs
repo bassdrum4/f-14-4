@@ -1,3 +1,4 @@
+// LEGACY READ-ONLY SOURCE FOR LAZY IMPORTS; live F-14 writes now use Supabase.
 /**
  * ============================================================================
  *  F-14 TOMCAT CARRIER SIMULATOR — BACKEND  (Gamestate.gs)

@@ -1,30 +1,7 @@
-// Feedback storage.
-//
-// The sim is a static site, so there is no server of its own to receive
-// feedback. Submissions are posted to the same Google Apps Script web app that
-// stores the pilot profiles (Gamestate.gs in the repo root, endpoint in
-// gamestate.ts) — a free, no-backend collector that appends each report to a
-// Feedback tab in the same spreadsheet.
-//
-// It used to post to a separate Code.gs collector, with its own URL to deploy
-// and keep in step with the profile store. When the two got crossed the form
-// posted profile-shaped JSON at the profile store and every report came back
-// "callsign is required". One URL, one deployment.
-//
-// Environment (Settings → Environment / .env.local):
-//   VITE_FEEDBACK_ENDPOINT  — optional. Only needed to send reports to a
-//                             *different* Apps Script deployment (the URL of
-//                             the form .../macros/s/<SCRIPT_ID>/exec). Blank
-//                             or unusable falls back to the shared backend.
-//   VITE_FEEDBACK_KEY       — optional shared secret. Sent as an `api-key`
-//                             header and as `access_key` in the body; set the
-//                             same value in the script's Script Properties as
-//                             FEEDBACK_KEY and the backend will reject
-//                             anything that does not match.
-//
-// Submissions are never dropped: the report is written to the local queue
-// first, then flushed to Apps Script, and a failed collector simply keeps
-// the report queued for the next retry until the collector is back up.
+// F-14 feedback goes to the same isolated Supabase Edge Function as gamestates.
+// Always enqueue locally before sending; offline/rejected reports remain retryable.
+// A development build may override VITE_FEEDBACK_ENDPOINT to test a collector.
+// Production ignores that setting to prevent stale host environment values.
 
 import { GAMESTATE_ENDPOINT } from "../gamestate";
 
@@ -66,7 +43,7 @@ const VERSION = 1;
 const POST_TIMEOUT_MS = 10_000;
 
 /**
- * The deployed Apps Script web app URL, or null when the resolved value is not
+ * The deployed Supabase web app URL, or null when the resolved value is not
  * a usable one (see feedbackEndpointStatus).
  */
 export function feedbackEndpoint(): string | null {
@@ -98,7 +75,7 @@ function looksLikeWrappedValue(value: string): boolean {
 /**
  * The collector the reports go to.
  *
- * One URL for the whole backend, taken from the profile store (Gamestate.gs
+ * One URL for the whole backend, taken from the profile store (f14-backend
  * answers both halves — see its header), so a report can never be posted at a
  * deployment that does not understand it. That crossed wire is exactly how the
  * form broke: it shipped its own collector URL in VITE_FEEDBACK_ENDPOINT, that
@@ -139,7 +116,7 @@ function validateEndpoint(value: string): EndpointStatus {
   } catch {
     return {
       ok: false,
-      reason: "VITE_FEEDBACK_ENDPOINT is not a URL — paste the full Apps Script /exec address.",
+      reason: "VITE_FEEDBACK_ENDPOINT must be an absolute http(s) URL.",
     };
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") {
@@ -153,23 +130,6 @@ function validateEndpoint(value: string): EndpointStatus {
 
 export function feedbackConfigured(): boolean {
   return feedbackEndpoint() !== null;
-}
-
-/** The script id embedded in an Apps Script deployment URL, for display. */
-export function scriptIdFromEndpoint(url: string): string | null {
-  const m = /\/macros\/s\/([A-Za-z0-9_-]+)/.exec(url.trim());
-  return m ? m[1] : null;
-}
-
-function feedbackKey(): string | null {
-  const key = (import.meta.env.VITE_FEEDBACK_KEY as string | undefined) ?? "";
-  const trimmed = key.trim();
-  if (!trimmed) return null;
-  // A platform-wrapped value would be sent verbatim and fail the script's
-  // check on every POST. Sending no key is the honest option: the backend only
-  // demands one when FEEDBACK_KEY is set in its Script Properties.
-  if (looksLikeWrappedValue(trimmed)) return null;
-  return trimmed;
 }
 
 function newId(): string {
@@ -227,19 +187,7 @@ export function buildEntry(input: FeedbackInput, context: FeedbackContext | null
   return entry;
 }
 
-/**
- * One POST to the deployed Apps Script web app.
- *
- * The body is JSON, but the Content-Type is deliberately `text/plain`: that
- * makes the request a CORS *simple request*, so the browser skips the OPTIONS
- * preflight that Apps Script web apps handle inconsistently. The backend reads
- * `e.postData.contents`, which is content-type agnostic, so the payload is
- * unchanged.
- *
- * Apps Script answers a web-app POST with a 302 to script.googleusercontent.com;
- * fetch follows it, and the final 200 carries the ContentService output.
- * Throws on network or HTTP failure so the caller can keep the report queued.
- */
+/** Send a queued report to the F-14 Edge Function; only acknowledged JSON dequeues it. */
 const deliveries = new Map<string, Promise<void>>();
 function postEntry(entry: FeedbackEntry): Promise<void> {
   const existing = deliveries.get(entry.id);
@@ -251,18 +199,9 @@ function postEntry(entry: FeedbackEntry): Promise<void> {
 
 async function sendEntry(entry: FeedbackEntry): Promise<void> {
   const url = feedbackEndpoint();
-  if (!url) throw new Error("no Apps Script endpoint configured");
-  const key = feedbackKey();
-
+  if (!url) throw new Error("no F-14 backend endpoint configured");
   const headers: Record<string, string> = { "Content-Type": "text/plain;charset=utf-8" };
-  if (key) headers["api-key"] = key;
-
-  const body = {
-    app: "f14sim",
-    type: "feedback",
-    ...(key ? { access_key: key } : {}),
-    ...entry,
-  };
+  const body = { app: "f14sim", type: "feedback", ...entry };
 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), POST_TIMEOUT_MS);
@@ -274,10 +213,7 @@ async function sendEntry(entry: FeedbackEntry): Promise<void> {
       signal: ctrl.signal,
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    // ContentService cannot set status codes: Apps Script answers 200 whether
-    // the report was appended or turned away, and the outcome travels in the
-    // body. Trusting the status alone would report "delivered" for a rejection
-    // (wrong key, bad payload) while nothing was stored.
+    // Never trust HTTP 200 alone; require the backend's {ok:true} acknowledgment.
     let reply: { ok?: unknown; error?: unknown } | null = null;
     try {
       reply = JSON.parse(await res.text()) as { ok?: unknown; error?: unknown };
@@ -298,7 +234,7 @@ async function sendEntry(entry: FeedbackEntry): Promise<void> {
 
 /**
  * Submit one feedback item. The entry is always appended to the local queue
- * first, then flushed to Apps Script — so a slow or failing collector can
+ * first, then flushed to Supabase — so a slow or failing collector can
  * never lose a submission.
  */
 export async function submitFeedback(
