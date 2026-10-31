@@ -1518,6 +1518,16 @@ function applyGroundContact(
   let hitTerrain = false;
   let hitWater = false;
 
+  // Bolt optimization: early-exit when high above terrain.
+  // CONTACT_POINTS spans at most ~7m horizontally and ~2m vertically around CG.
+  // Sampling ground height once at CG position avoids 6 expensive terrain sampling
+  // calls (FBM fractal noise & carrier collision checks) per tick during flight.
+  const gCenter = groundAt(st.pos.x, st.pos.z);
+  if (st.pos.y > gCenter.y + 30) {
+    st.wheelPen = 0;
+    return { contacts: 0, kind: gCenter.kind, torqueBody: null };
+  }
+
   for (const p of CONTACT_POINTS) {
     // wheel contact = bottom of the tyre; wheels tuck up as gear retracts
     const restY = p.wheel ? p.y + (BELLY_Y + 0.05 - p.y) * (1 - st.gearT) - p.r : p.y;
