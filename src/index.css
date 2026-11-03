@@ -866,3 +866,48 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 @media (max-width: 850px) {
   .tutorial-coach { top: 90px; width: min(88vw, 460px); }
 }
+
+/* Subtractive HUD: primary flight cues stay visible; secondary data is opt-in. */
+.hud-weapons { display: flex; gap: 12px; flex-wrap: wrap; }
+.hud-bottom { max-width: 90vw; gap: 12px; align-items: center; }
+.hud-nav { gap: 3px; min-width: 0; }
+.hud-toggles:empty { display: none; }
+.hud-details {
+  position: absolute; bottom: 13%; right: max(14px, 2vw);
+  width: min(350px, 42vw); z-index: 4;
+  color: #cfe8dc; font-size: 10px; line-height: 1.5;
+  text-shadow: none; pointer-events: auto;
+}
+.hud-details summary {
+  display: block; width: max-content; margin-left: auto;
+  padding: 5px 9px; border: 1px solid rgba(120,255,140,.25);
+  background: rgba(4,14,22,.68); color: #a4deb8;
+  cursor: pointer; letter-spacing: .08em; list-style: none;
+}
+.hud-details summary::-webkit-details-marker { display: none; }
+.hud-details[open] {
+  background: rgba(4,14,22,.92);
+  border: 1px solid rgba(120,255,140,.3); padding: 7px;
+}
+.hud-details[open] summary { margin-bottom: 7px; }
+.hud-details-body { display: flex; flex-direction: column; gap: 4px; }
+.hud-details-body strong { color: #a4f4c2; }
+.operation-more { margin-top: 3px; color: #a9c8d6; }
+.operation-more summary {
+  font-size: 9px; letter-spacing: .08em; color: #b3ced6;
+  cursor: pointer; width: fit-content;
+}
+.operation-more[open] { margin-top: 8px; padding-top: 5px; border-top: 1px solid rgba(150,200,230,.15); }
+.battle-board { pointer-events: auto; width: min(310px, 38vw); }
+.battle-board summary { display: flex; align-items: center; justify-content: space-between; gap: 9px; cursor: pointer; list-style: none; }
+.battle-board summary::-webkit-details-marker { display: none; }
+.battle-board summary strong { padding: 0; }
+.battle-board summary span { font-size: 10px; color: #afc5d0; }
+.battle-board[open] summary { padding-bottom: 10px; }
+@media (max-width: 850px), (max-height: 620px) {
+  .hud-details { bottom: 18%; width: min(290px, 65vw); font-size: 9px; }
+  .hud-details summary { font-size: 9px; }
+  .battle-board { right: 8px; top: 10px; width: min(255px, 44vw); }
+  .hud-weapons { gap: 7px; }
+  .hud-bottom { gap: 8px; }
+}
