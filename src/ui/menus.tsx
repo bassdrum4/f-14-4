@@ -305,9 +305,9 @@ function MainMenu({ sim, settings, onSettings, openMultiplayer, onOpenedMultipla
   }, [openMultiplayer, onOpenedMultiplayer]);
   const net = useNet(sim);
   const account = useAccount();
-  const chooseRoom = (versus: boolean) => {
+  const chooseRoom = () => {
     if (net.status !== "online" && net.status !== "connecting") {
-      onSettings({ ...settings, missionMode: versus ? "versus" : "dogfight" });
+      onSettings({ ...settings, missionMode: "dogfight" });
     }
     setScreen("multiplayer");
   };
@@ -362,27 +362,20 @@ function MainMenu({ sim, settings, onSettings, openMultiplayer, onOpenedMultipla
               if (settings.missionMode === "versus") onSettings({ ...settings, missionMode: "cruise" });
               setScreen("solo");
             }}><span className="dispatch-number">01</span><span><strong>FLY SOLO</strong><small>Pick your aircraft.</small></span><b aria-hidden="true">↗</b></button>
-            <button className="dispatch-action" onClick={() => chooseRoom(false)}><span className="dispatch-number">02</span><span><strong>FLY TOGETHER</strong><small>{net.status === "online" ? `Room ${net.room} · ${net.pilots.length} linked` : "Open a room. Bring a wingman."}</small></span><b aria-hidden="true">↗</b></button>
-            <button className="dispatch-action" onClick={() => chooseRoom(true)}><span className="dispatch-number">03</span><span><strong>HEAD-TO-HEAD</strong><small>Live pilots, guns and missiles.</small></span><b aria-hidden="true">↗</b></button>
+            <button className="dispatch-action" onClick={chooseRoom}><span className="dispatch-number">02</span><span><strong>MULTIPLAYER</strong><small>{net.status === "online" ? `Room ${net.room} · ${net.pilots.length} linked` : "Fly together or head-to-head."}</small></span><b aria-hidden="true">↗</b></button>
           </div>
           <nav className="dispatch-nav" aria-label="Flight tools">
             <button onClick={() => gate(startTutorial)}>TUTORIAL</button>
             <button onClick={() => setScreen("settings")}>SETTINGS</button>
-            <button onClick={() => setScreen("controls")}>CONTROLS</button>
-            <button onClick={() => setScreen("account")}>PILOT</button>
             <button onClick={() => setScreen("feedback")}>FEEDBACK</button>
           </nav>
-          <div className="dispatch-stamp">CLEAR FOR LAUNCH <span>///</span></div>
         </>}
         {screen === "solo" && <FlightSetup sim={sim} settings={settings} onSettings={onSettings} gate={gate} onBack={() => setScreen("main")} />}
         {screen === "settings" && <SettingsPanel sim={sim} settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />}
-        {screen === "controls" && <ControlsPanel settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />}
         {screen === "multiplayer" && <MultiplayerPanel sim={sim} settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />}
         {screen === "feedback" && <FeedbackPanel sim={sim} settings={settings} onBack={() => setScreen("main")} />}
         {screen === "account" && <AccountPanel account={account} settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />}
       </div>
-      <div className="dispatch-side" aria-hidden="true"><span>LAUNCH / RECOVER / REPEAT</span><strong>KEEP<br />THE SKY<br />YOURS.</strong><span>BROWSER FLIGHT SIMULATOR</span></div>
-      <div className="menu-footer">{keyLabel(settings.bindings.camera)} — camera · {keyLabel(settings.bindings.throttleUp)} — throttle · {keyLabel(settings.bindings.cat)} — catapult · {keyLabel(settings.bindings.bomb)} — target pod · {keyLabel(settings.bindings.missile)} — missile · {keyLabel(settings.bindings.fire)} — guns · {keyLabel(settings.bindings.map)} — map · {keyLabel(settings.bindings.settings)} — settings · Enter — radio · {keyLabel(settings.bindings.pause)} — pause</div>
       {pending && (
         <CallsignGate
           onGo={() => {
@@ -407,10 +400,6 @@ function FlightSetup({ sim, settings, onSettings, onBack, gate }: {
     if (settings.missionMode === "versus") onSettings({ ...settings, missionMode: mode });
     sim?.startMission(mission);
   };
-  const startTutorial = () => {
-    if (craft.surfaceVessel || craft.rotorcraft) onSettings({ ...settings, aircraft: DEFAULT_AIRCRAFT });
-    sim?.startTutorial();
-  };
   return <div className="menu-screen">
     <h3 className="menu-h3">SORTIE SETUP</h3>
     <span className="menu-world-label">VEHICLE</span>
@@ -423,7 +412,7 @@ function FlightSetup({ sim, settings, onSettings, onBack, gate }: {
     <label className="menu-row"><span>Weather</span><select value={settings.weather ?? "clear"} onChange={e => onSettings({ ...settings, weather: e.target.value as WeatherMode })}>{(Object.keys(WEATHER_LABELS) as WeatherMode[]).map(w => <option key={w} value={w}>{WEATHER_LABELS[w]}</option>)}</select></label>
     <p className="menu-note">{craft.surfaceVessel ? `Take station near ${homeCarrier(settings)}. Stop within 1 km of a friendly carrier and hold ${keyLabel(settings.bindings.cat)} for 3 seconds to repair and rearm.` : `Home deck: ${homeCarrier(settings)} — land on another boat and it becomes home.`}</p>
     {craft.surfaceVessel && <p className="menu-note">{keyLabel(settings.bindings.throttleUp)}/{keyLabel(settings.bindings.throttleDown)} engines · {keyLabel(settings.bindings.yawLeft)}/{keyLabel(settings.bindings.yawRight)} steer · Arrow controls train gun · {keyLabel(settings.bindings.fire)} fire · {keyLabel(settings.bindings.missile)} VLS · {keyLabel(settings.bindings.bomb)} gun director</p>}
-    <div className="menu-buttons"><Btn primary onClick={() => gate(() => launch("carrier"))}>{craft.surfaceVessel ? "TAKE STATION — DESTROYER" : craft.rotorcraft ? "LIFT OFF — CARRIER" : "CAT SHOT — CARRIER"}</Btn>{!craft.surfaceVessel && <Btn onClick={() => gate(() => launch("airfield"))}>TAKEOFF — RUNWAY</Btn>}<Btn onClick={() => gate(startTutorial)}>FLY THE TUTORIAL</Btn><Btn onClick={onBack}>BACK</Btn></div>
+    <div className="menu-buttons"><Btn primary onClick={() => gate(() => launch("carrier"))}>{craft.surfaceVessel ? "TAKE STATION — DESTROYER" : craft.rotorcraft ? "LIFT OFF — CARRIER" : "CAT SHOT — CARRIER"}</Btn>{!craft.surfaceVessel && <Btn onClick={() => gate(() => launch("airfield"))}>TAKEOFF — RUNWAY</Btn>}<Btn onClick={onBack}>BACK</Btn></div>
   </div>;
 }
 
@@ -456,8 +445,6 @@ function PauseMenu({ sim, settings, onSettings }: {
               <button className="world-chip" onClick={() => setScreen("multiplayer")}>
                 {net.status === "online" ? `ROOM ${net.room}` : "MULTIPLAYER"}
               </button>
-              <button className="world-chip" onClick={() => setScreen("settings")}>SETTINGS</button>
-              <button className="world-chip" onClick={() => setScreen("controls")}>CONTROLS</button>
               <button className="world-chip" onClick={() => setScreen("feedback")}>FEEDBACK</button>
               <button className="world-chip" onClick={() => setScreen("account")}>
                 {account ? account.username.toUpperCase() : "PILOT"}
@@ -467,9 +454,6 @@ function PauseMenu({ sim, settings, onSettings }: {
         )}
         {screen === "settings" && (
           <SettingsPanel sim={sim} settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />
-        )}
-        {screen === "controls" && (
-          <ControlsPanel settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />
         )}
         {screen === "multiplayer" && (
           <MultiplayerPanel sim={sim} settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />
@@ -632,7 +616,7 @@ function SettingsPanel({ sim = null, settings, onSettings, onBack }: {
       <label className="menu-row"><span>Time / {String(Math.floor(settings.timeOfDay)).padStart(2, "0")}:{String(Math.round(settings.timeOfDay % 1 * 60)).padStart(2, "0")}</span><input type="range" min={0} max={23.75} step={0.25} disabled={settings.daylight !== "fixed"} value={settings.timeOfDay} onChange={e => set({ timeOfDay: Number(e.target.value) })} /></label>
       <p className="menu-note">Aircraft and mission are set in Sortie Setup; room hosts pick the shared mission.</p>
     </>}
-    {tab === "controls" && <><label className="menu-row"><span>Sensitivity / {settings.sensitivity.toFixed(2)}</span><input type="range" min={0.4} max={3} step={0.05} value={settings.sensitivity} onChange={e => set({ sensitivity: Number(e.target.value) })} /></label><ControlsPanel settings={settings} onSettings={onSettings} onBack={onBack} /></>}
+    {tab === "controls" && <><label className="menu-row"><span>Sensitivity / {settings.sensitivity.toFixed(2)}</span><input type="range" min={0.4} max={3} step={0.05} value={settings.sensitivity} onChange={e => set({ sensitivity: Number(e.target.value) })} /></label><ControlsPanel settings={settings} onSettings={onSettings} onBack={() => setTab("flight")} /></>}
     {tab === "graphics" && <><label className="menu-row"><span>World detail</span><select value={settings.quality} onChange={e => set({ quality: e.target.value as Quality })}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><label className="menu-row"><span>Adaptive resolution</span><input type="checkbox" checked={settings.adaptiveResolution} onChange={e => set({ adaptiveResolution: e.target.checked })} /></label><p className="menu-note">Drops resolution to hold the frame rate; Low also thins scenery and effects.</p></>}
     {tab === "audio" && <label className="menu-row"><span>Volume / {Math.round(settings.volume * 100)}%</span><input type="range" min={0} max={1} step={0.05} value={settings.volume} onChange={e => set({ volume: Number(e.target.value) })} /></label>}
     {tab === "interface" && <>
@@ -687,7 +671,6 @@ export function ControlsPanel({ settings, onSettings, onBack }: {
   );
   return (
     <div className="menu-screen">
-      <h3 className="menu-h3">CONTROLS</h3>
       <div className="bindings-grid">
         {actions.map((a) => (
           <button
@@ -777,9 +760,11 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
   return (
     <div className="menu-screen mp-screen">
       <h3 className="menu-h3">{settings.missionMode === "versus" ? "HEAD-TO-HEAD" : "FLY TOGETHER"}</h3>
-      <p className="menu-note">
-        One pilot opens the room; everyone else joins with the code. Head-to-head starts airborne with separate spawns, a five-second shield, scores and automatic respawns.
-      </p>
+      <p className="menu-note">Open a room or join someone else's with a code.</p>
+      {!live && <div className="menu-world-chips" role="group" aria-label="Multiplayer mode">
+        <button className={"world-chip" + (settings.missionMode !== "versus" ? " on" : "")} onClick={() => onSettings({ ...settings, missionMode: "dogfight" })}>FLY TOGETHER</button>
+        <button className={"world-chip" + (settings.missionMode === "versus" ? " on" : "")} onClick={() => onSettings({ ...settings, missionMode: "versus" })}>HEAD-TO-HEAD</button>
+      </div>}
 
       <label className="menu-row">
         <span>Callsign</span>
@@ -821,9 +806,6 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
           </button>
         </span>
       </label>
-      <div className="menu-world-note">
-        Any word or code — everyone who types it flies the same islands with you.
-      </div>
 
       <div className="mp-status">
         <span className={"dot " + net.status} />
@@ -877,10 +859,7 @@ function MultiplayerPanel({ sim, settings, onSettings, onBack }: {
               {net.spectator ? "TAKE A SEAT IN THE COCKPIT" : "SWITCH TO SPECTATOR"}
             </Btn>}
           </div>
-          <div className="menu-world-note">
-            Room {net.room} joined — leave to open or join another.
-            {net.spectator && " You are watching this room: no aircraft of yours is in the fight."}
-          </div>
+          {net.spectator && <div className="menu-world-note">SPECTATING — YOU ARE NOT IN THE FIGHT.</div>}
         </>
       )}
 

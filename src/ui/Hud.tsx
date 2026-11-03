@@ -71,17 +71,17 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
           <p>{hud.tutorial.body}</p>
         </div>
       )}
-      {hud.battle && <div className="battle-board">
-        <strong>HEAD-TO-HEAD <span>ROOM {hud.netRoom}</span></strong>
+      {hud.battle && <details className="battle-board">
+        <summary><strong>HEAD-TO-HEAD</strong><span>ROOM {hud.netRoom} · {hud.battle.pilots.find(p => p.id === hud.battleSelf)?.kills ?? 0} K / {hud.battle.pilots.find(p => p.id === hud.battleSelf)?.deaths ?? 0} D</span></summary>
         <div className="battle-columns"><span>PILOT</span><span>K / D</span><span>HULL</span></div>
         {[...hud.battle.pilots].sort((a,b) => b.kills - a.kills).map(p => <div key={p.id} className={"battle-row" + (p.id === hud.battleSelf ? " self" : "")}><span>{p.name.toUpperCase()}{p.shield ? " ◇" : ""}</span><span>{p.kills} / {p.deaths}</span><span>{p.ready ? p.hp > 0 ? `${p.hp}%` : `${Math.ceil(p.respawnIn)}s` : "LOBBY"}</span></div>)}
-        {hud.battle.pilots.find(p => p.id === hud.battleSelf)?.shield && <small>SPAWN SHIELD — weapons unlock after 5 seconds</small>}
-        {hud.battle.pilots.find(p => p.id === hud.battleSelf)?.hp === 0 && <small>DOWN — automatic airborne respawn</small>}
-      </div>}
+        {hud.battle.pilots.find(p => p.id === hud.battleSelf)?.shield && <small>SPAWN SHIELD — WEAPONS LOCKED</small>}
+        {hud.battle.pilots.find(p => p.id === hud.battleSelf)?.hp === 0 && <small>DOWN — RESPAWNING</small>}
+      </details>}
       {hud.spectating && <div className="spectate-bar">
         <strong>SPECTATOR</strong>
         <span>{hud.spectateKind} · {hud.spectateTarget}</span>
-        <small>VIEW {hud.spectateIndex}/{hud.spectateCount} · [N] NEXT VIEW · [C] CAMERA {hud.cameraMode.toUpperCase()} · [P] PING THE ROOM</small>
+        <small>VIEW {hud.spectateIndex}/{hud.spectateCount} · [N] NEXT</small>
       </div>}
       {!hud.pod && !hud.surfaceVessel && ladder && <PitchLadder hud={hud} />}
       {(!hud.pod || hud.surfaceVessel) && <TargetBoxes sim={sim} gunCross={gunCross} />}
@@ -93,110 +93,68 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
       {sim?.phase === "flying" && hud.netStatus === "online" && <RadioOverlay sim={sim} />}
       <div className="hud-left">
         <Gauge label={hud.surfaceVessel ? "SHIP SPEED" : "AIRSPEED"} value={Math.round(hud.speedKt)} unit="KT" big />
-        {!hud.surfaceVessel && <>
-        <Gauge label="MACH" value={hud.mach.toFixed(2)} />
-        <Gauge label="AOA" value={hud.aoaDeg.toFixed(1)} unit="°" warn={Math.abs(hud.aoaDeg) > 13} />
-        <Gauge label="G" value={hud.gLoad.toFixed(1)} warn={hud.gLoad > 7.5 || hud.gLoad < -1} />
-        </>}
-        {hud.dfActive && (
-          <Gauge label="HULL" value={hud.dfHull} unit="%" warn={hud.dfHull <= 30} />
-        )}
-        {hud.dfCarrier && hud.dfCarrier.status !== "sunk" && (
-          <Gauge
-            label={`CV ${hud.dfCarrier.name}`}
-            value={hud.dfCarrier.hp}
-            unit="%"
-            warn={hud.dfCarrier.hp <= 34}
-          />
-        )}
+        {!hud.surfaceVessel && Math.abs(hud.aoaDeg) > 13 &&
+          <Gauge label="HIGH AOA" value={hud.aoaDeg.toFixed(1)} unit="°" warn />}
+        {!hud.surfaceVessel && (hud.gLoad > 7.5 || hud.gLoad < -1) &&
+          <Gauge label="G LIMIT" value={hud.gLoad.toFixed(1)} warn />}
+        {hud.dfActive && <Gauge label="HULL" value={hud.dfHull} unit="%" warn={hud.dfHull <= 30} />}
+        {hud.dfCarrier && hud.dfCarrier.status !== "sunk" && hud.dfCarrier.hp <= 34 &&
+          <Gauge label="CARRIER DAMAGE" value={hud.dfCarrier.hp} unit="%" warn />}
       </div>
       <div className="hud-right">
-        {!hud.surfaceVessel && <>
-        <Gauge label="ALT" value={Math.round(hud.altFt).toLocaleString()} unit="FT" big />
-        <Gauge
-          label="RALT"
-          value={Math.round(hud.radarAltFt).toLocaleString()}
-          unit="FT"
-          warn={hud.radarAltFt < 500}
-        />
-        <Gauge label="V/S" value={(hud.vsFpm > 0 ? "+" : "") + Math.round(hud.vsFpm)} unit="FPM" />
-        </>}
+        {!hud.surfaceVessel && <Gauge label="ALT" value={Math.round(hud.altFt).toLocaleString()} unit="FT" big />}
         <Gauge label="HDG" value={String(Math.round(hud.headingDeg)).padStart(3, "0")} unit="°" />
-        {/* Only the variable-geometry Tomcat sweeps; for the others it is a
-            constant number that would just be cockpit furniture. */}
-        {hud.sweepable && <Gauge label="W-SWEEP" value={String(hud.sweepDeg)} unit="°" />}
+        {!hud.surfaceVessel && !hud.onGround && hud.radarAltFt < 500 &&
+          <Gauge label="LOW ALT" value={Math.round(hud.radarAltFt)} unit="FT" warn />}
       </div>
       <div className="hud-bottom">
-        <div className="hud-eng">
-          {/* One throttle readout: the bar carries the percentage and the AB
-              flag, so a separate RPM line would just repeat it. */}
-          <ThrottleBar pct={hud.throttlePct} ab={hud.ab} collective={hud.rotorcraft} />
-        </div>
+        <div className="hud-eng"><ThrottleBar pct={hud.throttlePct} ab={hud.ab} collective={hud.rotorcraft} /></div>
         <div className="hud-toggles">
           {!hud.surfaceVessel && <>
-          <Tag on={hud.gear} text="GEAR" warn={!hud.gear && !hud.onGround} />
-          {!hud.rotorcraft && <>
-            <Tag on={hud.flaps} text="FLAPS" />
-            <Tag on={hud.speedbrake} text="S-BRAKE" />
-            <Tag on={hud.trim > 0.52 || hud.trim < 0.48} text="TRIM" />
-          </>}
-          {/* Armed but not lit reads amber: the switch is up, the throttle
-              is not yet at max, so there is no burner yet. */}
-          {(hud.abOn || hud.ab > 0.05) && (
-            <Tag on={hud.ab > 0.05} warn={hud.abOn && hud.ab <= 0.05} text="AB" />
-          )}
+            {!hud.onGround && hud.gear && <Tag on text="GEAR" />}
+            {!hud.rotorcraft && <>
+              {hud.flaps && <Tag on text="FLAPS" />}
+              {hud.speedbrake && <Tag on text="S-BRAKE" />}
+              {(hud.trim > 0.52 || hud.trim < 0.48) && <Tag on text="TRIM" />}
+              {(hud.abOn || hud.ab > 0.05) && <Tag on={hud.ab > 0.05} warn={hud.abOn && hud.ab <= 0.05} text="AB" />}
+            </>}
           </>}
         </div>
         <div className="hud-nav">
-          <div>CARRIER {hud.carrierName} · {hud.distCarrierKm.toFixed(1)} KM · {Math.round(hud.bearingCarrierDeg)}°</div>
-          <div>FIELD {hud.distFieldKm.toFixed(1)} KM · {Math.round(hud.bearingFieldDeg)}°</div>
-          {hud.dfActive && !hud.battle && (
-            <div>
-              {hud.dfStrike ? "TARGETS" : "BANDITS"} {hud.dfBandits} · {hud.dfStrike ? "CLEARED" : "TAGGED"} {hud.dfKills} · {hud.operation ? operationTitle(hud.operation.state) : `WAVE ${hud.dfWave}`} · NEAR {hud.dfNearestKm.toFixed(1)} KM {Math.round(hud.dfNearestBrgDeg)}°
-            </div>
-          )}
-          {hud.dfCarrier && (
-            <div className="hud-cv">
-              OPFOR CV {hud.dfCarrier.name} · {hud.dfCarrier.status.toUpperCase()} · {hud.dfCarrier.distKm.toFixed(1)} KM {Math.round(hud.dfCarrier.brgDeg)}°
-              {hud.dfCarrier.inbound > 0 ? ` · ${hud.dfCarrier.inbound} TO LAUNCH` : ""}
-            </div>
-          )}
-          {hud.netStatus === "online" && (
-            <div className="hud-net">
-              {hud.remotes.length === 0
-                ? `ROOM ${hud.netRoom} · WAITING FOR WINGMEN`
-                : hud.remotes
-                    .slice(0, 3)
-                    .map((r) => `WING ${r.name.toUpperCase()} ${r.km.toFixed(1)} KM ${Math.round(r.brgDeg)}°`)
-                    .join(" · ")}
-            </div>
-          )}
-          {!hud.spectating && !hud.surfaceVessel && <div>
-            {hud.dfBombs > 0
-              ? `LGB ${hud.dfBombs}/${hud.dfBombsMax}${hud.dfBombsAway > 0 ? ` · ${hud.dfBombsAway} AWAY` : ""}${hud.dfBombsTracking > 0 ? ` · ${hud.dfBombsTracking} TRACKING` : ""} · [R] POD`
-              : "STORES EMPTY"}
+          {!hud.operation && !hud.battle && hud.dfActive &&
+            <div>{hud.dfStrike ? "TARGETS" : "BANDITS"} {hud.dfBandits} · {hud.dfStrike ? "CLEARED" : "KILLS"} {hud.dfKills} · NEAREST {hud.dfNearestKm.toFixed(1)} KM · {Math.round(hud.dfNearestBrgDeg)}°</div>}
+          {!hud.operation && !hud.dfActive && !hud.battle &&
+            <div>{hud.distCarrierKm <= hud.distFieldKm ? `CARRIER ${hud.carrierName} · ${hud.distCarrierKm.toFixed(1)} KM · ${Math.round(hud.bearingCarrierDeg)}°` : `AIRFIELD · ${hud.distFieldKm.toFixed(1)} KM · ${Math.round(hud.bearingFieldDeg)}°`}</div>}
+          {!hud.spectating && <div className="hud-weapons">
+            {hud.dfMissilesMax > 0 && <span>{hud.surfaceVessel ? "VLS" : "MSL"} {hud.dfMissiles}/{hud.dfMissilesMax}</span>}
+            {!hud.surfaceVessel && hud.dfBombsMax > 0 && <span>LGB {hud.dfBombs}/{hud.dfBombsMax}</span>}
+            {hud.dfFlaresMax > 0 && <span>FLR {hud.dfFlares}/{hud.dfFlaresMax}</span>}
           </div>}
-          {!hud.spectating && hud.dfMissilesMax > 0 && (
-            <div className={hud.dfMissiles > 0 ? "hud-laser" : undefined}>
-              {hud.surfaceVessel ? "VLS" : "MSL"} {hud.dfMissiles}/{hud.dfMissilesMax} · [E] FIRE · {hud.surfaceVessel ? "DIRECTOR LOCK" : "SEEKS NEAREST"}
-            </div>
-          )}
-          {!hud.spectating && hud.dfFlaresMax > 0 && (
-            <div className={hud.dfFlares > 0 ? "hud-flare" : "hud-flare empty"}>
-              FLARE {hud.dfFlares}/{hud.dfFlaresMax} · [Z] DEPLOY — DECOYS INBOUND MISSILES
-            </div>
-          )}
-          {hud.dfDesignated && (
-            <div className="hud-laser">
-              LASER {hud.dfDesignated.km.toFixed(1)} KM · RELEASE AGAIN TO RE-ENGAGE
-            </div>
-          )}
-          <div className="hud-cam">[ENTER] RADIO · [M] MAP · [P] PING</div>
-          <div className="hud-cam">
-            {hud.aircraftName} · {hud.cameraMode.toUpperCase()} · {hud.weatherLabel} · {formatClock(hud.localHour)} {daylight === "live" ? "HST" : "LOCAL"}
-          </div>
+          {hud.dfDesignated && <div className="hud-laser">LASER · {hud.dfDesignated.km.toFixed(1)} KM</div>}
+          {hud.netStatus === "online" && !hud.battle &&
+            <div className="hud-net">ROOM {hud.netRoom} · {hud.remotes.length} WINGMEN</div>}
         </div>
       </div>
+      {!hud.pod && <details className="hud-details">
+        <summary>FLIGHT DATA</summary>
+        <div className="hud-details-body">
+          <strong>{hud.aircraftName} · {hud.cameraMode.toUpperCase()}</strong>
+          {!hud.surfaceVessel && <>
+            <div>MACH {hud.mach.toFixed(2)} · AOA {hud.aoaDeg.toFixed(1)}° · G {hud.gLoad.toFixed(1)}</div>
+            <div>RADAR ALT {Math.round(hud.radarAltFt)} FT · V/S {Math.round(hud.vsFpm)} FPM</div>
+            {hud.sweepable && <div>WING SWEEP {hud.sweepDeg}°</div>}
+          </>}
+          <div>CARRIER {hud.carrierName} · {hud.distCarrierKm.toFixed(1)} KM · {Math.round(hud.bearingCarrierDeg)}°</div>
+          <div>FIELD {hud.distFieldKm.toFixed(1)} KM · {Math.round(hud.bearingFieldDeg)}°</div>
+          {hud.dfCarrier && <div>OPFOR CV {hud.dfCarrier.name} · {hud.dfCarrier.status.toUpperCase()} · {hud.dfCarrier.hp}% · {hud.dfCarrier.distKm.toFixed(1)} KM · {Math.round(hud.dfCarrier.brgDeg)}°{hud.dfCarrier.inbound > 0 ? ` · ${hud.dfCarrier.inbound} INBOUND` : ""}</div>}
+          {!hud.surfaceVessel && hud.dfBombsMax > 0 && <div>BOMBS {hud.dfBombs}/{hud.dfBombsMax} · {hud.dfBombsAway} AWAY · {hud.dfBombsTracking} TRACKING</div>}
+          {hud.dfActive && <div>WAVE {hud.dfWave} · CONTACTS {hud.dfBandits} · KILLS {hud.dfKills}</div>}
+          {hud.netStatus === "online" && hud.remotes.slice(0, 3).map(r =>
+            <div key={r.name}>WING {r.name.toUpperCase()} · {r.km.toFixed(1)} KM · {Math.round(r.brgDeg)}°</div>)}
+          <div>{hud.weatherLabel} · {formatClock(hud.localHour)} {daylight === "live" ? "HST" : "LOCAL"}</div>
+          <div>KEYS: [M] MAP · [ENTER] RADIO · [P] PING</div>
+        </div>
+      </details>}
       {hud.subsystems && <Subsystems subs={hud.subsystems} />}
       {hud.lsoCall && <div className="hud-paddles">{hud.lsoCall}</div>}
       {hud.pings.length > 0 && <div className="hud-pings">
@@ -221,24 +179,26 @@ function OperationPanel({ sim, hud, operation: op }: { sim: Sim | null; hud: Hud
   const s = op.state, resolved = s.status === "success" || s.status === "failure";
   const timer = op.eta === null ? "" : `${Math.floor(op.eta / 60)}:${String(Math.floor(op.eta % 60)).padStart(2, "0")}`;
   return <div className={"operation-panel " + s.status} aria-live="polite" style={{ pointerEvents: sim?.phase === "flying" ? "auto" : "none" }}>
-    <strong>{operationTitle(s)} <span>{operationProgress(s, hud.carrierMarkers[s.fleetCarrier]?.name)}</span></strong>
+    <strong>{operationTitle(s)}</strong>
     <div>{phaseObjective(s)}</div>
-    {timer && !resolved && <small>{s.kind === "convoy" ? "NEXT ARRIVAL" : s.phase === "forming" || s.phase === "counterattack" ? "NEXT LAUNCH" : "ESTIMATED CONTACT"} {timer}</small>}
+    {timer && !resolved && op.eta !== null && op.eta < 60 && <b className="operation-warning">CONTACT / ARRIVAL {timer}</b>}
     {op.warning && <b className="operation-warning">{s.kind === "bastion" || s.phase === "bastion" ? "THREAT TRACKING — MASK OR BREAK" : "ESCORT TRACKING — BREAK OR SUPPRESS"}</b>}
-    {(s.kind === "bastion" || (s.kind === "campaign" && s.phase === "bastion")) && <div className="iads-panel">
-      <span className={op.radarOnline ? "on" : "off"}>RADAR {op.radarOnline ? "ONLINE" : "SUPPRESSED"}</span>
-      <span className={op.terrainMasked ? "mask on" : "mask"}>{op.terrainMasked ? "TERRAIN MASKED" : "EXPOSED"}</span>
-      <span className="lock">
-        SAM LOCK
-        <i><b style={{ width: `${Math.round((op.samLockProgress ?? 0) * 100)}%` }} /></i>
-      </span>
+    {(s.kind === "bastion" || (s.kind === "campaign" && s.phase === "bastion")) && (op.samLockProgress ?? 0) > 0 && <div className="iads-panel">
+      <span className="lock">SAM LOCK <i><b style={{ width: `${Math.round((op.samLockProgress ?? 0) * 100)}%` }} /></i></span>
     </div>}
     {op.target && !resolved && <div className="operation-bearing">
       <span style={{ display: "inline-block", transform: `rotate(${op.target.bearing - hud.playerHeadingDeg}deg)` }}>▲</span>
       {op.target.label} · {op.target.km.toFixed(1)} KM · {Math.round(op.target.bearing)}°
-      {s.kind === "fleet" && ` · ${Math.round(op.target.altitudeFt).toLocaleString()} FT · CLOSURE ${Math.round(op.target.closureKt)} KT`}
     </div>}
-    {hud.banner && <small className="operation-radio-update">{hud.banner}</small>}
+    {!resolved && <details className="operation-more">
+      <summary>MISSION DETAILS</summary>
+      <div>{operationProgress(s, hud.carrierMarkers[s.fleetCarrier]?.name)}</div>
+      {timer && <div>CONTACT / ARRIVAL {timer}</div>}
+      {(s.kind === "bastion" || (s.kind === "campaign" && s.phase === "bastion")) &&
+        <div>RADAR {op.radarOnline ? "ONLINE" : "SUPPRESSED"} · {op.terrainMasked ? "TERRAIN MASKED" : "EXPOSED"}</div>}
+      {s.kind === "fleet" && op.target && <div>ALT {Math.round(op.target.altitudeFt).toLocaleString()} FT · CLOSURE {Math.round(op.target.closureKt)} KT</div>}
+      {hud.banner && <div>{hud.banner}</div>}
+    </details>}
     {resolved && !recovering && sim?.phase === "flying" && <div className="operation-actions">
       <button className="world-chip" onClick={() => sim?.finishOperation()}>FINISH OPERATION</button>
       {s.status === "success" && <button className="world-chip" onClick={() => setRecovering(true)}>RECOVER FOR BONUS</button>}
@@ -560,7 +520,7 @@ function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
       />
       {/* The world seed, visible in flight: two wingmen can confirm at a glance
           that they are looking at the same islands. */}
-      <div className="hud-map-label">SEED {hud.worldSeed}</div>
+      {big && <div className="hud-map-label">ROOM MAP</div>}
       {big && <div className="hud-map-label">[M] CLOSE · [ENTER] RADIO</div>}
     </div>
   );
@@ -1346,7 +1306,6 @@ function RadioOverlay({ sim }: { sim: Sim | null }) {
 
   if (!open) return recent ? <div className="hud-radio" aria-live="polite">
     <div className="hud-radio-log">{log.slice(-3).map((m, i) => <div key={i} className="hud-radio-line"><b>{m.from.toUpperCase()}</b> {m.text}</div>)}</div>
-    <div className="hud-radio-empty">Enter to reply</div>
   </div> : null;
 
   const send = () => {
