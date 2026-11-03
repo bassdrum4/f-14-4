@@ -93,6 +93,10 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
       {sim?.phase === "flying" && hud.netStatus === "online" && <RadioOverlay sim={sim} />}
       <div className="hud-left">
         <Gauge label={hud.surfaceVessel ? "SHIP SPEED" : "AIRSPEED"} value={Math.round(hud.speedKt)} unit="KT" big />
+        {!hud.surfaceVessel && Math.abs(hud.aoaDeg) > 13 &&
+          <Gauge label="HIGH AOA" value={hud.aoaDeg.toFixed(1)} unit="°" warn />}
+        {!hud.surfaceVessel && (hud.gLoad > 7.5 || hud.gLoad < -1) &&
+          <Gauge label="G LIMIT" value={hud.gLoad.toFixed(1)} warn />}
         {hud.dfActive && <Gauge label="HULL" value={hud.dfHull} unit="%" warn={hud.dfHull <= 30} />}
         {hud.dfCarrier && hud.dfCarrier.status !== "sunk" && hud.dfCarrier.hp <= 34 &&
           <Gauge label="CARRIER DAMAGE" value={hud.dfCarrier.hp} unit="%" warn />}
@@ -118,7 +122,7 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
         </div>
         <div className="hud-nav">
           {!hud.operation && !hud.battle && hud.dfActive &&
-            <div>{hud.dfStrike ? "TARGETS" : "BANDITS"} {hud.dfBandits} · {hud.dfStrike ? "CLEARED" : "KILLS"} {hud.dfKills} · NEAREST {hud.dfNearestKm.toFixed(1)} KM</div>}
+            <div>{hud.dfStrike ? "TARGETS" : "BANDITS"} {hud.dfBandits} · {hud.dfStrike ? "CLEARED" : "KILLS"} {hud.dfKills} · NEAREST {hud.dfNearestKm.toFixed(1)} KM · {Math.round(hud.dfNearestBrgDeg)}°</div>}
           {!hud.operation && !hud.dfActive && !hud.battle &&
             <div>{hud.distCarrierKm <= hud.distFieldKm ? `CARRIER ${hud.carrierName} · ${hud.distCarrierKm.toFixed(1)} KM · ${Math.round(hud.bearingCarrierDeg)}°` : `AIRFIELD · ${hud.distFieldKm.toFixed(1)} KM · ${Math.round(hud.bearingFieldDeg)}°`}</div>}
           {!hud.spectating && <div className="hud-weapons">
@@ -142,7 +146,8 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
           </>}
           <div>CARRIER {hud.carrierName} · {hud.distCarrierKm.toFixed(1)} KM · {Math.round(hud.bearingCarrierDeg)}°</div>
           <div>FIELD {hud.distFieldKm.toFixed(1)} KM · {Math.round(hud.bearingFieldDeg)}°</div>
-          {hud.dfCarrier && <div>OPFOR CV {hud.dfCarrier.name} · {hud.dfCarrier.status.toUpperCase()} · {hud.dfCarrier.hp}%</div>}
+          {hud.dfCarrier && <div>OPFOR CV {hud.dfCarrier.name} · {hud.dfCarrier.status.toUpperCase()} · {hud.dfCarrier.hp}% · {hud.dfCarrier.distKm.toFixed(1)} KM · {Math.round(hud.dfCarrier.brgDeg)}°{hud.dfCarrier.inbound > 0 ? ` · ${hud.dfCarrier.inbound} INBOUND` : ""}</div>}
+          {!hud.surfaceVessel && hud.dfBombsMax > 0 && <div>BOMBS {hud.dfBombs}/{hud.dfBombsMax} · {hud.dfBombsAway} AWAY · {hud.dfBombsTracking} TRACKING</div>}
           {hud.dfActive && <div>WAVE {hud.dfWave} · CONTACTS {hud.dfBandits} · KILLS {hud.dfKills}</div>}
           {hud.netStatus === "online" && hud.remotes.slice(0, 3).map(r =>
             <div key={r.name}>WING {r.name.toUpperCase()} · {r.km.toFixed(1)} KM · {Math.round(r.brgDeg)}°</div>)}
@@ -176,14 +181,10 @@ function OperationPanel({ sim, hud, operation: op }: { sim: Sim | null; hud: Hud
   return <div className={"operation-panel " + s.status} aria-live="polite" style={{ pointerEvents: sim?.phase === "flying" ? "auto" : "none" }}>
     <strong>{operationTitle(s)}</strong>
     <div>{phaseObjective(s)}</div>
+    {timer && !resolved && op.eta !== null && op.eta < 60 && <b className="operation-warning">CONTACT / ARRIVAL {timer}</b>}
     {op.warning && <b className="operation-warning">{s.kind === "bastion" || s.phase === "bastion" ? "THREAT TRACKING — MASK OR BREAK" : "ESCORT TRACKING — BREAK OR SUPPRESS"}</b>}
-    {(s.kind === "bastion" || (s.kind === "campaign" && s.phase === "bastion")) && <div className="iads-panel">
-      <span className={op.radarOnline ? "on" : "off"}>RADAR {op.radarOnline ? "ONLINE" : "SUPPRESSED"}</span>
-      <span className={op.terrainMasked ? "mask on" : "mask"}>{op.terrainMasked ? "TERRAIN MASKED" : "EXPOSED"}</span>
-      <span className="lock">
-        SAM LOCK
-        <i><b style={{ width: `${Math.round((op.samLockProgress ?? 0) * 100)}%` }} /></i>
-      </span>
+    {(s.kind === "bastion" || (s.kind === "campaign" && s.phase === "bastion")) && (op.samLockProgress ?? 0) > 0 && <div className="iads-panel">
+      <span className="lock">SAM LOCK <i><b style={{ width: `${Math.round((op.samLockProgress ?? 0) * 100)}%` }} /></i></span>
     </div>}
     {op.target && !resolved && <div className="operation-bearing">
       <span style={{ display: "inline-block", transform: `rotate(${op.target.bearing - hud.playerHeadingDeg}deg)` }}>▲</span>
@@ -193,6 +194,8 @@ function OperationPanel({ sim, hud, operation: op }: { sim: Sim | null; hud: Hud
       <summary>MISSION DETAILS</summary>
       <div>{operationProgress(s, hud.carrierMarkers[s.fleetCarrier]?.name)}</div>
       {timer && <div>CONTACT / ARRIVAL {timer}</div>}
+      {(s.kind === "bastion" || (s.kind === "campaign" && s.phase === "bastion")) &&
+        <div>RADAR {op.radarOnline ? "ONLINE" : "SUPPRESSED"} · {op.terrainMasked ? "TERRAIN MASKED" : "EXPOSED"}</div>}
       {s.kind === "fleet" && op.target && <div>ALT {Math.round(op.target.altitudeFt).toLocaleString()} FT · CLOSURE {Math.round(op.target.closureKt)} KT</div>}
       {hud.banner && <div>{hud.banner}</div>}
     </details>}
