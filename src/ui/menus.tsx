@@ -332,7 +332,7 @@ function MainMenu({ sim, settings, onSettings, openMultiplayer, onOpenedMultipla
   };
   return (
     <div className="ui-root menu-bg dispatch-bg">
-      <div className="menu-panel dispatch-panel">
+      <div className={"menu-panel dispatch-panel" + (screen === "main" ? "" : " dispatch-subpage")}>
         <div className="dispatch-top"><span>FLIGHT OPERATIONS / 01</span><span>v{APP_VERSION}</span></div>
         <button className="dispatch-brand" onClick={() => setScreen("main")} aria-label="Back to flight operations">
           <span className="dispatch-mark">F—14</span>
@@ -396,23 +396,68 @@ function FlightSetup({ sim, settings, onSettings, onBack, gate }: {
 }) {
   const mode = settings.missionMode === "versus" ? "cruise" : settings.missionMode;
   const craft = AIRCRAFT_LIST.find(a => a.id === settings.aircraft) ?? AIRCRAFT_LIST[0];
-  const launch = (mission: "carrier" | "airfield") => {
-    if (settings.missionMode === "versus") onSettings({ ...settings, missionMode: mode });
-    sim?.startMission(mission);
+  const [launchFrom, setLaunchFrom] = useState<"carrier" | "airfield">(() => settings.launchKind);
+  const selectedLaunch = craft.surfaceVessel ? "carrier" : launchFrom;
+  const missionHints: Record<"cruise" | "dogfight" | "strike" | "campaign", string> = {
+    cruise: craft.surfaceVessel ? "Navigate freely" : "Explore freely",
+    dogfight: "Defend the fleet",
+    strike: craft.surfaceVessel ? "Strike enemy ships and shore" : "Attack enemy targets",
+    campaign: "Three connected operations",
   };
-  return <div className="menu-screen">
-    <h3 className="menu-h3">SORTIE SETUP</h3>
-    <span className="menu-world-label">VEHICLE</span>
-    <div className="menu-world-chips">{AIRCRAFT_LIST.map(a => <button key={a.id} className={"world-chip" + (settings.aircraft === a.id ? " on" : "")} onClick={() => onSettings({ ...settings, aircraft: a.id })}>{a.name}{a.beta && <span className="vehicle-beta">BETA PHASE</span>}</button>)}</div>
-    <p className="menu-note">{craft.blurb} · {craft.surfaceVessel ? "Rapid-fire deck gun · 32 VLS missiles · 31 knots" : `${craft.bombs} bombs · ${craft.missiles} missiles`}</p>
-    <span className="menu-world-label">MISSION</span>
-    <div className="menu-world-chips">{(["cruise", "dogfight", "strike", "campaign"] as MissionMode[]).map(m => <button key={m} className={"world-chip" + (mode === m ? " on" : "")} onClick={() => onSettings({ ...settings, missionMode: m })}>{craft.surfaceVessel ? ({ cruise: "SEA TRIALS", dogfight: "AIR DEFENSE", strike: "NAVAL STRIKE", campaign: "TASK FORCE", versus: "HEAD-TO-HEAD" })[m] : MISSION_MODE_CHIPS[m]}</button>)}</div>
-    {(mode === "strike" || mode === "dogfight" || mode === "campaign") && <MissionBrief mode={mode} settings={settings} onSettings={onSettings} />}
-    <p className="menu-note">{craft.surfaceVessel ? ({ cruise: "Free navigation and weapons practice", dogfight: "Carrier air-defense station", strike: "Convoy interdiction or coastal bombardment", campaign: "Island, convoy, and fleet operations", versus: "Live players, guns and missiles" })[mode] : MISSION_MODE_LABELS[mode]}</p>
-    <label className="menu-row"><span>Weather</span><select value={settings.weather ?? "clear"} onChange={e => onSettings({ ...settings, weather: e.target.value as WeatherMode })}>{(Object.keys(WEATHER_LABELS) as WeatherMode[]).map(w => <option key={w} value={w}>{WEATHER_LABELS[w]}</option>)}</select></label>
-    <p className="menu-note">{craft.surfaceVessel ? `Take station near ${homeCarrier(settings)}. Stop within 1 km of a friendly carrier and hold ${keyLabel(settings.bindings.cat)} for 3 seconds to repair and rearm.` : `Home deck: ${homeCarrier(settings)} — land on another boat and it becomes home.`}</p>
-    {craft.surfaceVessel && <p className="menu-note">{keyLabel(settings.bindings.throttleUp)}/{keyLabel(settings.bindings.throttleDown)} engines · {keyLabel(settings.bindings.yawLeft)}/{keyLabel(settings.bindings.yawRight)} steer · Arrow controls train gun · {keyLabel(settings.bindings.fire)} fire · {keyLabel(settings.bindings.missile)} VLS · {keyLabel(settings.bindings.bomb)} gun director</p>}
-    <div className="menu-buttons"><Btn primary onClick={() => gate(() => launch("carrier"))}>{craft.surfaceVessel ? "TAKE STATION — DESTROYER" : craft.rotorcraft ? "LIFT OFF — CARRIER" : "CAT SHOT — CARRIER"}</Btn>{!craft.surfaceVessel && <Btn onClick={() => gate(() => launch("airfield"))}>TAKEOFF — RUNWAY</Btn>}<Btn onClick={onBack}>BACK</Btn></div>
+  const launch = () => {
+    if (settings.missionMode === "versus") onSettings({ ...settings, missionMode: mode });
+    sim?.startMission(selectedLaunch);
+  };
+
+  return <div className="menu-screen sortie-simple">
+    <h3 className="menu-h3">FLY SOLO</h3>
+
+    <label className="sortie-field" htmlFor="sortie-aircraft">
+      <span className="sortie-label">AIRCRAFT</span>
+      <select id="sortie-aircraft" value={settings.aircraft} onChange={e => onSettings({ ...settings, aircraft: e.target.value as Settings["aircraft"] })}>
+        {AIRCRAFT_LIST.map(a => <option key={a.id} value={a.id}>{a.name}{a.beta ? " (BETA)" : ""}</option>)}
+      </select>
+      <span className="sortie-caption">{craft.role} · {craft.blurb}</span>
+    </label>
+
+    <div className="sortie-field">
+      <span className="sortie-label">MISSION</span>
+      <div className="sortie-mission-grid" role="group" aria-label="Select a mission">
+        {(["cruise", "dogfight", "strike", "campaign"] as const).map(m =>
+          <button key={m} type="button" className={"sortie-mission" + (mode === m ? " selected" : "")}
+            aria-pressed={mode === m} onClick={() => onSettings({ ...settings, missionMode: m })}>
+            <strong>{craft.surfaceVessel ? ({ cruise: "SEA TRIALS", dogfight: "AIR DEFENSE", strike: "NAVAL STRIKE", campaign: "TASK FORCE" })[m] : ({ cruise: "FREE FLIGHT", dogfight: "DOGFIGHT", strike: "STRIKE", campaign: "CAMPAIGN" })[m]}</strong>
+            <small>{missionHints[m]}</small>
+          </button>)}
+      </div>
+    </div>
+
+    <details className="setup-disclosure">
+      <summary>MISSION OPTIONS & WEATHER</summary>
+      <div className="setup-disclosure-body">
+        {(mode === "strike" || mode === "dogfight") && <MissionBrief mode={mode} settings={settings} onSettings={onSettings} />}
+        <label className="menu-row"><span>Weather</span>
+          <select value={settings.weather ?? "clear"} onChange={e => onSettings({ ...settings, weather: e.target.value as WeatherMode })}>
+            {(Object.keys(WEATHER_LABELS) as WeatherMode[]).map(w => <option key={w} value={w}>{WEATHER_LABELS[w]}</option>)}
+          </select>
+        </label>
+      </div>
+    </details>
+
+    <div className="sortie-field sortie-launch">
+      <span className="sortie-label">LAUNCH FROM</span>
+      {craft.surfaceVessel
+        ? <span className="sortie-caption">Friendly fleet near {homeCarrier(settings)}</span>
+        : <div className="sortie-launch-choices" role="group" aria-label="Launch location">
+          <button type="button" className={selectedLaunch === "carrier" ? "selected" : ""} aria-pressed={selectedLaunch === "carrier"} onClick={() => setLaunchFrom("carrier")}>CARRIER</button>
+          <button type="button" className={selectedLaunch === "airfield" ? "selected" : ""} aria-pressed={selectedLaunch === "airfield"} onClick={() => setLaunchFrom("airfield")}>RUNWAY</button>
+        </div>}
+    </div>
+
+    <div className="sortie-actions">
+      <Btn primary onClick={() => gate(launch)}>{craft.surfaceVessel ? "TAKE STATION" : selectedLaunch === "airfield" ? "TAKE OFF" : "LAUNCH SORTIE"}</Btn>
+      <button type="button" className="subpage-back" onClick={onBack}>BACK</button>
+    </div>
   </div>;
 }
 
@@ -543,25 +588,30 @@ function MissionBrief({ mode, settings, onSettings, disabled = false }: {
   const authored = mode === "campaign" || settings.missionStyle !== "endless";
   const bastion = (settings.strikeVariant ?? "convoy") === "bastion";
   const ship = settings.aircraft === "destroyer";
-  return <div className="mission-brief">
-    {mode !== "campaign" && <div className="menu-world-chips">
-      <button disabled={disabled} className={"world-chip" + (authored ? " on" : "")} onClick={() => onSettings({ ...settings, missionStyle: "operation" })}>OPERATION</button>
-      <button disabled={disabled} className={"world-chip" + (!authored ? " on" : "")} onClick={() => onSettings({ ...settings, missionStyle: "endless" })}>ENDLESS PRACTICE</button>
-    </div>}
-    {authored && mode === "strike" && <div className="menu-world-chips">
-      <button disabled={disabled} className={"world-chip" + (!bastion ? " on" : "")} onClick={() => onSettings({ ...settings, strikeVariant: "convoy" })}>CONVOY</button>
-      <button disabled={disabled} className={"world-chip" + (bastion ? " on" : "")} onClick={() => onSettings({ ...settings, strikeVariant: "bastion" })}>{ship ? "COASTAL BOMBARDMENT" : "IRON BASTION"}</button>
-    </div>}
-    <strong>{!authored ? "ENDLESS WAVES" : mode === "campaign" ? "TASK FORCE ARCHON" : mode === "strike" ? (bastion ? "OPERATION IRON BASTION" : "STOP THE CONVOY") : "FLEET DEFENSE"}</strong>
-    <p className="menu-note">{!authored ? "Practice against repeating waves. Recover to repair and rearm." : mode === "campaign"
-      ? "Three ordered stages: island bastion, convoy, opposing fleet. Stage, wrecks and damage carry across sorties."
-      : mode === "strike"
-      ? bastion
-        ? ship ? "Launch terrain-clearing strike missiles at the bunker, hangars and fuel depot. Drag the director, then click a surface target to launch." : "Bunker, hangars and fuel depot, behind radar-cued SAMs and AAA."
-        : "Stop 2 of 3 transports before they unload."
-      : ship ? "Protect the carrier from the scout and two bomber raids. Use the gun director and VLS to engage aircraft." : "Scout, then two escorted bomber attacks. Bomb the flight deck to stop launches."}</p>
-    {ship && <p className="menu-note">Naval service: stop within 1 km of a friendly carrier; hold {keyLabel(settings.bindings.cat)} for 3 seconds to repair and replenish VLS.</p>}
-    {authored && !ship && <p className="menu-note">{mode === "campaign" ? "Recovery rearms without resetting the operation, so the war continues." : "Recovery rearms without resetting the operation."}</p>}
+  return <div className="mission-config">
+    {mode !== "campaign" && <label className="menu-row">
+      <span>Session</span>
+      <select disabled={disabled} value={authored ? "operation" : "endless"}
+        onChange={e => onSettings({ ...settings, missionStyle: e.target.value as "operation" | "endless" })}>
+        <option value="operation">Mission with objective</option>
+        <option value="endless">Endless practice</option>
+      </select>
+    </label>}
+    {authored && mode === "strike" && <label className="menu-row">
+      <span>Target</span>
+      <select disabled={disabled} value={bastion ? "bastion" : "convoy"}
+        onChange={e => onSettings({ ...settings, strikeVariant: e.target.value as "convoy" | "bastion" })}>
+        <option value="convoy">Convoy</option>
+        <option value="bastion">{ship ? "Coastal bombardment" : "Iron Bastion"}</option>
+      </select>
+    </label>}
+    <p className="menu-note">
+      {!authored ? "Repeating waves. Recover to repair and rearm."
+        : mode === "campaign" ? "Three linked battles: island, convoy, fleet."
+        : mode === "dogfight" ? "Protect the carrier from incoming raids."
+        : bastion ? "Attack a fortified island with SAM defenses."
+        : "Stop the transports before they unload."}
+    </p>
   </div>;
 }
 
@@ -604,30 +654,80 @@ function SettingsPanel({ sim = null, settings, onSettings, onBack }: {
 }) {
   const net = useNet(sim);
   const set = (patch: Partial<Settings>) => onSettings({ ...settings, ...patch });
-  const [tab, setTab] = useState("flight");
+  const [editingControls, setEditingControls] = useState(false);
   const [usage, setUsage] = useState(() => analyticsEnabled());
-  return <div className="menu-screen settings-screen">
+
+  if (editingControls) return <div className="menu-screen settings-screen settings-simple">
+    <h3 className="menu-h3">KEYBOARD CONTROLS</h3>
+    <ControlsPanel settings={settings} onSettings={onSettings} onBack={() => setEditingControls(false)} />
+  </div>;
+
+  return <div className="menu-screen settings-screen settings-simple">
     <h3 className="menu-h3">SETTINGS</h3>
-    {net.status === "online" && <p className="menu-note" role="status">ROOM {net.room} · {net.host ? "HOST" : "FLIGHT MEMBER"} · {net.allowLateJoin === false ? "JOINING AFTER LAUNCH DISABLED" : "JOINING AFTER LAUNCH ALLOWED"}</p>}
-    <nav className="settings-tabs" aria-label="Settings category">{["flight", "controls", "graphics", "audio", "interface"].map(t => <button key={t} aria-pressed={tab === t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>{t.toUpperCase()}</button>)}</nav>
-    {tab === "flight" && <>
-      <label className="menu-row"><span>Weather</span><select disabled={net.status === "online" && !net.host} value={settings.weather ?? "clear"} onChange={e => set({ weather: e.target.value as WeatherMode })}>{(Object.keys(WEATHER_LABELS) as WeatherMode[]).map(m => <option key={m} value={m}>{WEATHER_LABELS[m]}</option>)}</select></label>
-      <label className="menu-row"><span>Daylight</span><select value={settings.daylight} onChange={e => set({ daylight: e.target.value as DaylightMode })}>{(Object.keys(DAYLIGHT_LABELS) as DaylightMode[]).map(m => <option key={m} value={m}>{DAYLIGHT_LABELS[m]}</option>)}</select></label>
-      <label className="menu-row"><span>Time / {String(Math.floor(settings.timeOfDay)).padStart(2, "0")}:{String(Math.round(settings.timeOfDay % 1 * 60)).padStart(2, "0")}</span><input type="range" min={0} max={23.75} step={0.25} disabled={settings.daylight !== "fixed"} value={settings.timeOfDay} onChange={e => set({ timeOfDay: Number(e.target.value) })} /></label>
-      <p className="menu-note">Aircraft and mission are set in Sortie Setup; room hosts pick the shared mission.</p>
-    </>}
-    {tab === "controls" && <><label className="menu-row"><span>Sensitivity / {settings.sensitivity.toFixed(2)}</span><input type="range" min={0.4} max={3} step={0.05} value={settings.sensitivity} onChange={e => set({ sensitivity: Number(e.target.value) })} /></label><ControlsPanel settings={settings} onSettings={onSettings} onBack={() => setTab("flight")} /></>}
-    {tab === "graphics" && <><label className="menu-row"><span>World detail</span><select value={settings.quality} onChange={e => set({ quality: e.target.value as Quality })}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><label className="menu-row"><span>Adaptive resolution</span><input type="checkbox" checked={settings.adaptiveResolution} onChange={e => set({ adaptiveResolution: e.target.checked })} /></label><p className="menu-note">Drops resolution to hold the frame rate; Low also thins scenery and effects.</p></>}
-    {tab === "audio" && <label className="menu-row"><span>Volume / {Math.round(settings.volume * 100)}%</span><input type="range" min={0} max={1} step={0.05} value={settings.volume} onChange={e => set({ volume: Number(e.target.value) })} /></label>}
-    {tab === "interface" && <>
-      <label className="menu-row"><span>Show minimap</span><input type="checkbox" checked={settings.minimap} onChange={e => set({ minimap: e.target.checked })} /></label>
-      <label className="menu-row"><span>Angle ladder (green pitch/roll overlay)</span><input type="checkbox" checked={settings.hudLadder} onChange={e => set({ hudLadder: e.target.checked })} /></label>
-      <label className="menu-row"><span>Gun cross (green sight, tracer line, range)</span><input type="checkbox" checked={settings.hudGunCross} onChange={e => set({ hudGunCross: e.target.checked })} /></label>
-       <label className="menu-row"><span>Share anonymous gameplay analytics</span><input type="checkbox" checked={usage} onChange={e => { setUsage(e.target.checked); setAnalyticsEnabled(e.target.checked); }} /></label>
-       <p className="menu-note">Lightweight sessions, playtime, mission, aircraft and outcomes. No room codes, callsigns, chat or keypress text. Shares Bored’s analytics preference and dashboard; turn this off at any time.</p>
-      <p className="menu-note">In the air, {keyLabel(settings.bindings.settings ?? "KeyO")} pauses and opens this screen. Both overlays sit over the middle of the view.</p>
-    </>}
-    {tab !== "controls" && <Btn onClick={onBack}>BACK</Btn>}
+    {net.status === "online" && <p className="settings-room" role="status">
+      ROOM {net.room} · {net.host ? "HOST" : "PILOT"}
+    </p>}
+    <div className="settings-essentials">
+      <label className="menu-row"><span>Volume <small>{Math.round(settings.volume * 100)}%</small></span>
+        <input aria-label="Volume" type="range" min={0} max={1} step={0.05} value={settings.volume}
+          onChange={e => set({ volume: Number(e.target.value) })} />
+      </label>
+      <label className="menu-row"><span>Graphics</span>
+        <select value={settings.quality} onChange={e => set({ quality: e.target.value as Quality })}>
+          <option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
+        </select>
+      </label>
+      <label className="menu-row"><span>Flight sensitivity <small>{settings.sensitivity.toFixed(2)}</small></span>
+        <input aria-label="Flight sensitivity" type="range" min={0.4} max={3} step={0.05}
+          value={settings.sensitivity} onChange={e => set({ sensitivity: Number(e.target.value) })} />
+      </label>
+      <label className="menu-row"><span>Show minimap</span>
+        <input type="checkbox" checked={settings.minimap} onChange={e => set({ minimap: e.target.checked })} />
+      </label>
+    </div>
+
+    <button className="settings-open-controls" type="button" onClick={() => setEditingControls(true)}>
+      EDIT KEYBOARD CONTROLS <span aria-hidden="true">›</span>
+    </button>
+
+    <details className="setup-disclosure settings-advanced">
+      <summary>ADVANCED SETTINGS</summary>
+      <div className="setup-disclosure-body">
+        <label className="menu-row"><span>Weather</span>
+          <select disabled={net.status === "online" && !net.host} value={settings.weather ?? "clear"}
+            onChange={e => set({ weather: e.target.value as WeatherMode })}>
+            {(Object.keys(WEATHER_LABELS) as WeatherMode[]).map(w => <option key={w} value={w}>{WEATHER_LABELS[w]}</option>)}
+          </select>
+        </label>
+        <label className="menu-row"><span>Daylight</span>
+          <select value={settings.daylight} onChange={e => set({ daylight: e.target.value as DaylightMode })}>
+            {(Object.keys(DAYLIGHT_LABELS) as DaylightMode[]).map(d => <option key={d} value={d}>{DAYLIGHT_LABELS[d]}</option>)}
+          </select>
+        </label>
+        {settings.daylight === "fixed" && <label className="menu-row">
+          <span>Time <small>{String(Math.floor(settings.timeOfDay)).padStart(2, "0")}:{String(Math.round(settings.timeOfDay % 1 * 60)).padStart(2, "0")}</small></span>
+          <input aria-label="Time of day" type="range" min={0} max={23.75} step={0.25} value={settings.timeOfDay}
+            onChange={e => set({ timeOfDay: Number(e.target.value) })} />
+        </label>}
+        <label className="menu-row"><span>Adaptive resolution</span>
+          <input type="checkbox" checked={settings.adaptiveResolution}
+            onChange={e => set({ adaptiveResolution: e.target.checked })} />
+        </label>
+        <label className="menu-row"><span>Pitch ladder</span>
+          <input type="checkbox" checked={settings.hudLadder} onChange={e => set({ hudLadder: e.target.checked })} />
+        </label>
+        <label className="menu-row"><span>Gun sight</span>
+          <input type="checkbox" checked={settings.hudGunCross} onChange={e => set({ hudGunCross: e.target.checked })} />
+        </label>
+        <label className="menu-row"><span>Anonymous analytics</span>
+          <input type="checkbox" checked={usage} onChange={e => { setUsage(e.target.checked); setAnalyticsEnabled(e.target.checked); }} />
+        </label>
+        <p className="menu-note">Analytics includes playtime and outcomes, not callsigns, room codes, or chat.</p>
+      </div>
+    </details>
+    <div className="sortie-actions">
+      <Btn primary onClick={onBack}>DONE</Btn>
+    </div>
   </div>;
 }
 
