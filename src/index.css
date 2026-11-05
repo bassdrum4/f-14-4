@@ -739,7 +739,53 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 /* Objective and debrief surfaces share the flight board's restrained styling. */
 .mission-brief { margin: 12px 0; padding: 12px 0; border-top: 1px solid rgba(150,200,230,.2); }
 .mission-brief strong { display: block; margin-top: 10px; color: #ffd250; font-size: 12px; letter-spacing: .12em; }
-.operation-panel { z-index: 2; position: absolute; left: 50%; top: 22px; transform: translateX(-50%); width: min(530px, 56vw); padding: 12px 15px; background: rgba(4,14,22,.85); border-left: 3px solid #ffd250; color: #e6eff1; font-size: 11px; line-height: 1.65; pointer-events: auto; }
+/* Top centre: the mission panel and the threat calls stacked in one column, so
+   whichever is taller pushes the other down instead of hiding it. */
+.hud-top-center {
+  position: absolute; top: 22px; left: 50%; transform: translateX(-50%);
+  width: min(530px, 56vw); z-index: 3;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+}
+/* No mission running: the calls sit where the pilot is used to seeing them. */
+.hud-top-center.solo { top: 16%; }
+
+/* Missile warning: the brightest thing on the glass, and it pulses. */
+.hud-missile-alert {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 6px 20px 7px;
+  background: rgba(46, 0, 0, 0.6);
+  border: 2px solid #ff2a12;
+  color: #ff2a12;
+  text-shadow: 0 0 12px rgba(255, 42, 18, 0.95), 0 0 3px rgba(255, 120, 90, 0.9);
+  animation: hud-missile-pulse 0.7s ease-in-out infinite;
+}
+.hud-missile-alert strong { font-size: 21px; letter-spacing: 0.24em; }
+.hud-missile-alert span { font-size: 12px; letter-spacing: 0.06em; color: #ff8f72; }
+.hud-guns-alert {
+  padding: 4px 16px;
+  background: rgba(46, 0, 0, 0.45);
+  border: 1px solid rgba(255, 59, 34, 0.8);
+  color: #ff5b4d; font-size: 13px; letter-spacing: 0.2em;
+  text-shadow: 0 0 10px rgba(255, 59, 34, 0.85);
+}
+
+/* Landing cue hint: only while the carrier's glideslope is live, and only in
+   the corner, so the ladder itself stays off the glass until it is asked for. */
+.hud-glide-hint {
+  position: absolute; top: 14px; right: max(14px, 1.6vw);
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 210, 80, 0.55);
+  background: rgba(6, 14, 20, 0.55);
+  color: #ffd250; font-size: 10px; letter-spacing: 0.14em;
+}
+.hud-glide-hint.on { border-color: rgba(120, 255, 140, 0.7); color: #bfffd0; }
+
+@keyframes hud-missile-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.operation-panel { width: 100%; padding: 12px 15px; background: rgba(4,14,22,.85); border-left: 3px solid #ffd250; color: #e6eff1; font-size: 11px; line-height: 1.65; pointer-events: auto; }
 .operation-panel strong { display: flex; justify-content: space-between; gap: 12px; color: #ffd250; letter-spacing: .08em; }
 .operation-panel strong span, .operation-panel small { color: #a9c8d6; }
 .operation-panel.success { border-color: #92efad; }
@@ -750,7 +796,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .operation-actions .world-chip { font-size: 9px; padding: 7px; }
 .operation-stats { margin: 18px 0; color: #a9c8d6; font-size: 12px; line-height: 1.7; }
 .operation-debrief { max-width: 620px; }
-@media (max-width: 850px) { .operation-panel { top: 95px; width: 56vw; font-size: 9px; padding: 8px; } .operation-panel strong { flex-direction: column; gap: 0; } }
+@media (max-width: 850px) { .hud-top-center, .hud-top-center.solo { top: 95px; } .operation-panel { font-size: 9px; padding: 8px; } .operation-panel strong { flex-direction: column; gap: 0; } }
 
 .operation-radio-update { display: block; margin-top: 6px; padding-top: 5px; border-top: 1px solid rgba(150,200,230,.15); font-size: 10px; line-height: 1.5; }
 

@@ -29,6 +29,7 @@ export type Action =
   | "flares"
   | "settings"
   | "map"
+  | "glideCue"
   | "spectate"
   | "ping";
 
@@ -57,6 +58,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   flares: "Flares (countermeasures)",
   settings: "Settings (in flight)",
   map: "Tactical map (big / small)",
+  glideCue: "Landing glideslope cue (toggle)",
   spectate: "Spectator: next view (pilots, bandits, decks, LSO, free)",
   ping: "Tactical ping / task the flight (spectators & wingmen)",
 };
@@ -86,6 +88,7 @@ export const DEFAULT_BINDINGS: Record<Action, string> = {
   flares: "KeyZ",
   settings: "KeyO",
   map: "KeyM",
+  glideCue: "KeyL",
   spectate: "KeyN",
   ping: "KeyP",
 };

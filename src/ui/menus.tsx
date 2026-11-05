@@ -765,9 +765,9 @@ export function ControlsPanel({ settings, onSettings, onBack }: {
     throttleUp: "Collective up (climb)",
     throttleDown: "Collective down (descend)",
   };
-  const rotorUnused = new Set<Action>(["gear", "flaps", "speedbrake", "ab", "cat"]);
+  const rotorUnused = new Set<Action>(["gear", "flaps", "speedbrake", "ab", "cat", "glideCue"]);
   const actions = (Object.keys(ACTION_LABELS) as Action[]).filter(
-    (a) => !(rotor && rotorUnused.has(a)) && !(ship && ["gear", "flaps", "speedbrake", "ab", "trimUp", "trimDown"].includes(a)),
+    (a) => !(rotor && rotorUnused.has(a)) && !(ship && ["gear", "flaps", "speedbrake", "ab", "trimUp", "trimDown", "glideCue"].includes(a)),
   );
   return (
     <div className="menu-screen">

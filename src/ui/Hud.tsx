@@ -42,6 +42,7 @@ const EMPTY: HudSnapshot = {
   dfMissiles: 0, dfMissilesMax: 0,
   dfFlares: 0, dfFlaresMax: 0, dfIncoming: null,
   glide: null,
+  glideCue: false, glideCueKey: "L",
   dfBombsTracking: 0, dfBombTracks: [], dfDesignated: null,
   dfReleased: null, dfLanded: null, pod: false, bigMap: false,
   weather: "clear", weatherLabel: "CLEAR",
@@ -63,7 +64,10 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
   const hud = useHud(sim);
   return (
     <div className={hud.pod ? "hud-root pod" : "hud-root"}>
-      {hud.operation && <OperationPanel key={hud.operation.state.id} sim={sim} hud={hud} operation={hud.operation} />}
+      <div className={"hud-top-center" + (hud.operation ? "" : " solo")}>
+        {hud.operation && <OperationPanel key={hud.operation.state.id} sim={sim} hud={hud} operation={hud.operation} />}
+        {hud.dfActive && <ThreatAlert hud={hud} />}
+      </div>
       {hud.tutorial && (
         <div className={"tutorial-coach" + (hud.tutorial.complete ? " complete" : "")}>
           <span className="tutorial-kicker">TUTORIAL · {hud.tutorial.step}/{hud.tutorial.count}</span>
@@ -152,10 +156,15 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
           {hud.netStatus === "online" && hud.remotes.slice(0, 3).map(r =>
             <div key={r.name}>WING {r.name.toUpperCase()} · {r.km.toFixed(1)} KM · {Math.round(r.brgDeg)}°</div>)}
           <div>{hud.weatherLabel} · {formatClock(hud.localHour)} {daylight === "live" ? "HST" : "LOCAL"}</div>
-          <div>KEYS: [M] MAP · [ENTER] RADIO · [P] PING</div>
+          <div>KEYS: [M] MAP · [{hud.glideCueKey}] LANDING CUE · [ENTER] RADIO · [P] PING</div>
         </div>
       </details>}
       {hud.subsystems && <Subsystems subs={hud.subsystems} />}
+      {!hud.pod && hud.glide && (
+        <div className={"hud-glide-hint" + (hud.glideCue ? " on" : "")}>
+          {hud.glideCue ? "GLIDESLOPE CUE ON" : "GLIDESLOPE CUE"} · [{hud.glideCue ? "HIDE " : "PRESS "}{hud.glideCueKey}]
+        </div>
+      )}
       {hud.lsoCall && <div className="hud-paddles">{hud.lsoCall}</div>}
       {hud.pings.length > 0 && <div className="hud-pings">
         {hud.pings.slice(-3).map(p => <div key={p.id} className={"hud-ping " + p.kind}>
@@ -170,6 +179,29 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
         <div className="hud-cat charging">CAT TENSION {Math.round(hud.catProgress * 100)}%</div>
       )}
       {hud.banner && !hud.operation && <div className="hud-banner">{hud.banner}</div>}
+    </div>
+  );
+}
+
+/**
+ * The shoot-down calls. They are DOM, stacked under the mission panel, because
+ * the one line that matters most in a fight must not end up painted behind a
+ * campaign objective: a missile warning the pilot cannot read is not a warning.
+ */
+function ThreatAlert({ hud }: { hud: HudSnapshot }) {
+  const inc = hud.dfIncoming;
+  if (!inc) {
+    return hud.dfThreat
+      ? <div className="hud-guns-alert">{hud.battle ? "MISSILE INBOUND — BREAK" : "GUNS — BREAK"}</div>
+      : null;
+  }
+  return (
+    <div className="hud-missile-alert">
+      <strong>MISSILE INBOUND</strong>
+      <span>
+        {inc.km.toFixed(1)} KM · {((inc.brgDeg + 360) % 360).toFixed(0)}° ·{" "}
+        {inc.sec > 0 ? `~${Math.max(1, Math.ceil(inc.sec))} S TO IMPACT` : "OPENING"} · [Z] FLARES {hud.dfFlares}
+      </span>
     </div>
   );
 }
@@ -603,35 +635,8 @@ function TargetBoxes({ sim, gunCross }: { sim: Sim | null; gunCross: boolean }) 
         ctx.fillRect(0, 0, w, h);
       }
 
-      // a hostile round is in the air: range, bearing and the seconds left,
-      // with the countermeasure printed on it (the pilot's answer, on screen)
-      const inc = hud.dfIncoming;
-      if (inc) {
-        const pulse = 0.6 + 0.4 * Math.sin(performance.now() / 110);
-        ctx.textAlign = "center";
-        ctx.fillStyle = `rgba(255, 58, 44, ${pulse.toFixed(3)})`;
-        ctx.font = "700 18px ui-monospace, monospace";
-        ctx.fillText("MISSILE INBOUND", w / 2, h * 0.24);
-        ctx.font = "600 13px ui-monospace, monospace";
-        ctx.fillStyle = "rgba(255, 176, 120, 0.95)";
-        ctx.fillText(
-          `${inc.km.toFixed(1)} KM · ${((inc.brgDeg + 360) % 360).toFixed(0)}° · ` +
-            (inc.sec > 0 ? `~${Math.max(1, Math.ceil(inc.sec))} S TO IMPACT · ` : "OPENING · ") +
-            `[Z] FLARES ${hud.dfFlares}`,
-          w / 2,
-          h * 0.24 + 20,
-        );
-        ctx.textAlign = "left";
-      }
-
-      // rounds are in the air, from someone who has us in his cone
-      if (hud.dfThreat && !inc) {
-        ctx.fillStyle = "rgba(255, 91, 77, 0.95)";
-        ctx.font = "600 13px ui-monospace, monospace";
-        ctx.textAlign = "center";
-        ctx.fillText(hud.battle ? "MISSILE INBOUND — BREAK" : "GUNS - BREAK", w / 2, h * 0.33);
-        ctx.textAlign = "left";
-      }
+      // The inbound-missile and guns calls are drawn above the canvas, in the
+      // DOM, so a tall mission panel can never cover them.
 
       // the enemy boat: a bracket on the hull so it can be found and bombed
       const boat = hud.dfCarrier;
@@ -798,7 +803,9 @@ function drawOrdnance(
  * Carrier approach guidance: the boat's simulated IFLOLS, drawn as a HUD
  * glideslope ladder. Green (or amber/red) says where the 4° path is relative
  * to the jet — fly the nose onto the ladder and you arrive over the wires at
- * a trappable height. Lineup ticks sit on the horizon line.
+ * a trappable height. Lineup ticks sit on the horizon line. It is opt-in: the
+ * pilot switches it on with the cue key (a hint appears in the corner once the
+ * boat is in range), so the yellow rungs stay off a cruise leg.
  */
 function drawApproach(
   ctx: CanvasRenderingContext2D,
@@ -807,7 +814,7 @@ function drawApproach(
   hud: HudSnapshot,
 ): void {
   const g = hud.glide;
-  if (!g || hud.pod) return;
+  if (!g || hud.pod || !hud.glideCue) return;
   const rangeKm = g.rangeM / 1000;
   // The ladder grows with range, like the real optical glideslope: readable at
   // 3 km, still legible inside 500 m.

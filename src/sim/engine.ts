@@ -127,6 +127,11 @@ export interface HudSnapshot {
     onSpeedKt: number;
     onSpeedAoaDeg: number;
   } | null;
+  /** The pilot's landing-cue switch: the glideslope ladder only draws when
+   *  this is on, so it stays off the glass until it is asked for. */
+  glideCue: boolean;
+  /** The key that toggles the cue, for the in-range hint chip. */
+  glideCueKey: string;
   resultTitle?: string;
   resultDetail?: string;
   resultKind?: "wire" | "bolter" | "crash" | "landing";
@@ -366,6 +371,7 @@ function defaultHud(): HudSnapshot {
     trim: 0.5, sweepDeg: 20, sweepable: false, rotorcraft: false, stalled: false, onGround: true, catPhase: "ready",
     catProgress: 0, pitchDeg: 0, rollDeg: 0,    cameraMode: "chase", flightTime: 0,
     glide: null,
+    glideCue: false, glideCueKey: "L",
     distCarrierKm: 0, bearingCarrierDeg: 0, carrierName: "—", distFieldKm: 0,
     bearingFieldDeg: 0, worldLabel: "Procedural islands", worldSeed: DEFAULT_SEED,
     radarAltFt: 0,
@@ -464,6 +470,8 @@ export class Sim {
   private pod = false;
   /** Tactical map: the minimap, blown up to fill the view. */
   private bigMap = false;
+  /** Landing glideslope cue: off until the pilot asks for it (the cue key). */
+  private glideCueOn = false;
   /**
    * The crash replay, from the fatal hit to the screen: while `falling`, the
    * dead jet tumbles under the action camera; after impact the camera holds on
@@ -2071,6 +2079,9 @@ export class Sim {
     }
     // The tactical map is a view toggle, like the camera: one press, one state.
     if (this.input.take("map")) this.bigMap = !this.bigMap;
+    // The landing cue is a view toggle like the map: the glideslope ladder is
+    // noise on a cruise leg and the answer in the groove, so it starts hidden.
+    if (this.input.take("glideCue")) this.glideCueOn = !this.glideCueOn;
     if (this.input.take("camera")) {
       if (this.pod) this.endPod();
       // A spectator's camera also cycles onto the LSO platform and a free camera.
@@ -2666,6 +2677,8 @@ export class Sim {
             }
           : null;
       })(),
+      glideCue: this.glideCueOn,
+      glideCueKey: keyLabel(this.settings.bindings.glideCue),
       resultTitle: st.result?.title,
       resultDetail: st.result?.detail,
       resultKind: st.result?.kind,
