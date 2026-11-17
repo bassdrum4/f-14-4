@@ -47,6 +47,7 @@ import {
   type CarrierDef,
 } from "../sim/world";
 import type { TerrainPaint } from "../render/scene";
+import { earthImageryTexture, preloadEarthImagery } from "./earthImagery";
 import { CYCLE_MINUTES_PER_DAY, keyLabel, withLaunchPoint, type LaunchKind, type MissionMode, type Settings, type WeatherMode } from "../settings";
 import { seaStateFor, weatherPreset, windFor, type WeatherPreset } from "./weather";
 import { HOME_SITE, dayPhase, sunPosition, sunVector, type DayPhase } from "../sim/sun";
@@ -1573,6 +1574,7 @@ export class Sim {
    */
   private applyTerrainSetting(): void {
     const want = this.settings.terrain === "earth" ? "earth" : "procedural";
+    if (want === "earth") this.ensureEarthImagery();
     if (want === activeTerrainSource()) return;
     setTerrainSource(want);
     this.renderer.applyWorld(this.paint());
@@ -1612,8 +1614,28 @@ export class Sim {
   }
 
   private paint(): TerrainPaint {
-    return { height: terrainHeight };
+    return {
+      height: terrainHeight,
+      // The beta world brings a real satellite photo; the seeded chain keeps
+      // its biome palette.
+      texture: activeTerrainSource() === "earth" ? earthImageryTexture() : null,
+    };
   }
+
+  /**
+   * Decode the baked photo if it is not ready, then rebuild the world once so
+   * the terrain picks it up. Cheap and idempotent after the first call.
+   */
+  private ensureEarthImagery(): void {
+    if (earthImageryTexture()) return;
+    void preloadEarthImagery().then((tex) => {
+      if (!tex || this.teardown || activeTerrainSource() !== "earth") return;
+      this.renderer.applyWorld(this.paint());
+    });
+  }
+
+  /** Set by dispose(), so a late async callback cannot touch the renderer. */
+  private teardown = false;
   private afterWorldChange(): void {
     this.fleetClock = 0;
     setFleetTime(0);
@@ -1625,6 +1647,7 @@ export class Sim {
   }
 
   dispose(): void {
+    this.teardown = true;
     cancelAnimationFrame(this.raf);
     this.net.dispose();
     this.remoteFleet.dispose();

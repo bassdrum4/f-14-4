@@ -12,6 +12,7 @@ anchorage depths and every mission are exactly as they were.
 | Place | Niihau and Lehua, Hawaii — 21.9100 N, 160.0900 W |
 | Box | 60 km × 60 km, the same `EXTENT` the procedural world uses |
 | Grid | 512 × 512 samples, 117.2 m per sample, int16 metres |
+| Imagery | Sentinel-2 cloudless, 10 m native, baked at z13 (~17 m/px) |
 | Cutting | unknown (2026-11) elevation, from open DEM tiles |
 
 The fixed airfield plateau sits on ground that is **139 m** in the real data
@@ -46,6 +47,21 @@ The script refuses to write output if any carrier anchorage lands on dry ground,
 and prints the airfield ground height and the box's land fraction so a new site
 can be checked before it is committed.
 
+## Imagery
+
+The ground is a real photo: **Sentinel-2 cloudless**, published by EOX IT
+Services under CC BY 4.0, fetched keyless from the EOX WMTS endpoint. Tiles are
+stored as raw JPEG bytes (no image decoder in the build) and stitched onto a
+single canvas texture at runtime, so the published file stays self-contained.
+
+Only tiles containing land are kept — 23 of them for this box. Water-only tiles
+are dropped because the sim draws its own sea over the terrain, and shipping
+thousands of empty ocean JPEGs would be dead weight. The terrain material uses
+the photo as its colour and keeps the vertex colours only for slope shading, so
+the procedural biome palette is not applied to this world at all.
+
+`--no-imagery` bakes heights only.
+
 ## Attribution (required)
 
 The Tilezen dataset is a composite, and its providers must be credited. Terrain
@@ -58,6 +74,11 @@ in this box is drawn from SRTM, GMTED2010 and USGS 3DEP:
 
 The full provider list is at
 [tilezen/joerd attribution](https://github.com/tilezen/joerd/blob/master/docs/attribution.md).
+
+Satellite imagery: **Sentinel-2 cloudless** by
+[EOX IT Services GmbH](https://s2maps.eu), licensed
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Contains modified
+Copernicus Sentinel data 2020.
 
 ## Limits
 

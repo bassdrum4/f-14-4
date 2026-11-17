@@ -56,6 +56,10 @@ function islandColor(h: number, slope: number, x: number, z: number, c: THREE.Co
 
 export interface TerrainPaint {
   height: (x: number, z: number) => number;
+  /** Real aerial photo of the terrain, when the world has one. It replaces the
+   *  biome palette: the photo carries the colour and the vertex colours become
+   *  slope shading only. */
+  texture?: THREE.Texture | null;
 }
 
 /**
@@ -80,6 +84,7 @@ export function buildTerrain(quality: Quality, paint: TerrainPaint): THREE.Mesh 
   }
 
   // biome colours from height + slope (central differences on the grid)
+  const photo = paint.texture ?? null;
   const colors = new Float32Array(pos.count * 3);
   const c = new THREE.Color();
   for (let i = 0; i < pos.count; i++) {
@@ -91,13 +96,28 @@ export function buildTerrain(quality: Quality, paint: TerrainPaint): THREE.Mesh 
     const zp = iy < w - 1 ? i + w : i;
     const gx = (heights[xp] - heights[xm]) / (Math.abs(xp - xm) * cell);
     const gz = (heights[zp] - heights[zm]) / (Math.abs(zp - zm) * cell);
-    islandColor(heights[i], Math.hypot(gx, gz), pos.getX(i), pos.getZ(i), c);
-    colors[i * 3] = c.r;
-    colors[i * 3 + 1] = c.g;
-    colors[i * 3 + 2] = c.b;
+    const slope = Math.hypot(gx, gz);
+    if (photo) {
+      // The aerial photo is the colour; steep faces only get a little shading
+      // so ridgelines still read at a glance.
+      const shade = 1 - 0.24 * smoothstep(0.45, 1.0, slope);
+      colors[i * 3] = shade;
+      colors[i * 3 + 1] = shade;
+      colors[i * 3 + 2] = shade;
+    } else {
+      islandColor(heights[i], slope, pos.getX(i), pos.getZ(i), c);
+      colors[i * 3] = c.r;
+      colors[i * 3 + 1] = c.g;
+      colors[i * 3 + 2] = c.b;
+    }
   }
   geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
+  const mat = new THREE.MeshStandardMaterial({
+    vertexColors: true,
+    roughness: 1,
+    metalness: 0,
+    ...(photo ? { map: photo } : {}),
+  });
   geom.computeVertexNormals();
   const mesh = new THREE.Mesh(geom, mat);
   mesh.receiveShadow = quality !== "low";

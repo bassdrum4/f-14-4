@@ -433,8 +433,8 @@ function FlightSetup({ sim, settings, onSettings, onBack, gate }: {
       <strong>{realTerrain ? `REAL TERRAIN ON — ${EARTH_TERRAIN_INFO.label.toUpperCase()}` : "FLY REAL TERRAIN"}</strong>
       <small>
         {realTerrain
-          ? `Actual elevation from public DEM tiles · ${EARTH_TERRAIN_INFO.sizeKm} km box · ${Math.round(EARTH_TERRAIN_INFO.metersPerSample)} m sampling. Tap to go back to the procedural chain.`
-          : `${EARTH_TERRAIN_INFO.label} from real elevation data, resampled to ${Math.round(EARTH_TERRAIN_INFO.metersPerSample)} m. Free flight only. Tap to switch it on.`}
+          ? `Sentinel-2 photo draped over real elevation · ${EARTH_TERRAIN_INFO.sizeKm} km box. Tap to go back to the procedural chain.`
+          : `${EARTH_TERRAIN_INFO.label} with real satellite imagery and elevation. Free flight only. Tap to switch it on.`}
       </small>
     </button>
 

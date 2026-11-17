@@ -1,25 +1,32 @@
-// Bake a real 60 km heightfield into the app from free, keyless elevation tiles.
+// Bake a real 60 km heightfield and its satellite imagery into the app, from
+// free, keyless sources.
 //
-// Source: Mapzen / Tilezen "terrarium" terrain tiles, an AWS Open Data dataset
-// (bucket `elevation-tiles-prod`, us-east-1, no account, no API key). Each tile
-// is a 256x256 PNG in Web Mercator whose colour channels carry metres:
+// Heights: Mapzen / Tilezen "terrarium" terrain tiles, an AWS Open Data dataset
+// (bucket `elevation-tiles-prod`, us-east-1, no account, no key). Each tile is a
+// 256x256 PNG in Web Mercator whose colour channels carry metres:
 //
 //     elevation = (R * 256 + G + B / 256) - 32768
 //
-// Attribution is required by the Tilezen dataset; the providers are listed in
-// docs/REAL-TERRAIN.md, which ships with this script's output.
+// Imagery: Sentinel-2 cloudless (EOX IT Services), CC BY 4.0 — free to
+// redistribute with attribution. Only tiles that actually contain land are
+// stored: the sea is drawn by the sim's own ocean, so shipping thousands of
+// empty water tiles would be dead weight.
 //
-// The output is a TypeScript module holding an Int16Array grid as base64. That
-// is deliberate: the published build is one self-contained HTML file
-// (vite-plugin-singlefile), so a separate .bin asset would not survive it.
+// The output is a TypeScript module holding an Int16Array grid and the land
+// tiles as base64. That is deliberate: the published build is one self-contained
+// HTML file (vite-plugin-singlefile), so separate assets would not survive it.
+// JPEGs are not decoded here at all — the browser stitches them on a canvas, so
+// this script needs no image library.
 //
 // Usage:
 //   bun scripts/bake-terrain.ts                       # bake the configured box
 //   bun scripts/bake-terrain.ts --lat 22.03 --lon -159.47
 //   bun scripts/bake-terrain.ts --probe               # heights at the fixed
 //                                                     # world points, no bake
+//   bun scripts/bake-terrain.ts --no-imagery
 //
-// Tiles are cached in .cache/terrain-tiles so a re-bake is offline.
+// Tiles are cached in .cache/terrain-tiles and .cache/imagery so a re-bake is
+// offline.
 
 import { inflateSync } from "node:zlib";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -28,8 +35,16 @@ import { fileURLToPath } from "node:url";
 
 const ZOOM = 12;
 const TILE = 256;
-const CACHE = resolve(dirname(fileURLToPath(import.meta.url)), "../.cache/terrain-tiles");
-const OUT = resolve(dirname(fileURLToPath(import.meta.url)), "../src/sim/terrain/niihau.ts");
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const CACHE = `${ROOT}/.cache/terrain-tiles`;
+const IMAGERY_CACHE = `${ROOT}/.cache/imagery`;
+const OUT = `${ROOT}/src/sim/terrain/niihau.ts`;
+
+// Sentinel-2 is 10 m native; z13 is ~17 m at this latitude, so it is not
+// thrown away by undersampling.
+const IMAGERY_ZOOM = 13;
+const imageryUrl = (z: number, y: number, x: number): string =>
+  `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/${z}/${y}/${x}.jpg`;
 
 // Must match src/sim/world.ts: world XZ extent and the fixed fleet layout.
 const EXTENT = 30000;
@@ -52,6 +67,7 @@ const arg = (name: string, fallback: number): number => {
   return i >= 0 && args[i + 1] !== undefined ? Number(args[i + 1]) : fallback;
 };
 const PROBE = args.includes("--probe");
+const WITH_IMAGERY = !args.includes("--no-imagery");
 const SITE = { lat: arg("lat", DEFAULT_SITE.lat), lon: arg("lon", DEFAULT_SITE.lon) };
 
 // ---------------------------------------------------------------------------
@@ -136,22 +152,29 @@ function decodePng(buf: Buffer): Bitmap {
 }
 
 // ---------------------------------------------------------------------------
-// Tile fetching + mosaic
+// Tile fetching
 // ---------------------------------------------------------------------------
 
-async function fetchTile(x: number, y: number): Promise<Buffer> {
-  const path = `${CACHE}/${ZOOM}/${x}/${y}.png`;
+async function cached(url: string, path: string): Promise<Buffer> {
   if (existsSync(path)) return readFileSync(path);
-  const url = `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${ZOOM}/${x}/${y}.png`;
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`tile ${ZOOM}/${x}/${y} -> HTTP ${res.status}`);
+  if (!res.ok) throw new Error(`${url} -> HTTP ${res.status}`);
   const buf = Buffer.from(await res.arrayBuffer());
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, buf);
   return buf;
 }
 
-/** The tiles covering the box, stitched into one bitmap. */
+const fetchTile = (x: number, y: number) =>
+  cached(
+    `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${ZOOM}/${x}/${y}.png`,
+    `${CACHE}/${ZOOM}/${x}/${y}.png`,
+  );
+
+const fetchImagery = (x: number, y: number) =>
+  cached(imageryUrl(IMAGERY_ZOOM, y, x), `${IMAGERY_CACHE}/${IMAGERY_ZOOM}/${x}/${y}.jpg`);
+
+/** The height tiles covering the box, stitched into one bitmap. */
 async function mosaic(): Promise<{ data: Buffer; channels: number; x0: number; y0: number; w: number; h: number }> {
   const north = worldToLatLon(EXTENT, -EXTENT);
   const south = worldToLatLon(-EXTENT, EXTENT);
@@ -164,7 +187,7 @@ async function mosaic(): Promise<{ data: Buffer; channels: number; x0: number; y
   const cols = x1 - x0 + 1, rows = y1 - y0 + 1;
   const w = cols * TILE, h = rows * TILE;
   const data = Buffer.alloc(w * h * 3);
-  process.stderr.write(`fetching ${cols}x${rows}=${cols * rows} tiles at z${ZOOM} …\n`);
+  process.stderr.write(`heights: ${cols}x${rows}=${cols * rows} tiles at z${ZOOM} …\n`);
   let done = 0;
   for (let ty = y0; ty <= y1; ty++) {
     const rowBufs = await Promise.all(
@@ -186,13 +209,13 @@ async function mosaic(): Promise<{ data: Buffer; channels: number; x0: number; y
         }
       }
       done++;
-      if (done % 16 === 0) process.stderr.write(`  ${done}/${cols * rows}\n`);
     });
+    process.stderr.write(`  ${done}/${cols * rows}\n`);
   }
   return { data, channels: 3, x0, y0, w, h };
 }
 
-/** Elevation in metres at a world XZ point, bilinear over the tile mosaic. */
+/** Elevation in metres at a world XZ point, bilinear over the height mosaic. */
 function makeProbe(m: Awaited<ReturnType<typeof mosaic>>): (x: number, z: number) => number {
   const px = (x: number, z: number) => {
     const { lat, lon } = worldToLatLon(x, z);
@@ -213,6 +236,62 @@ function makeProbe(m: Awaited<ReturnType<typeof mosaic>>): (x: number, z: number
     const a = at(ix, iy), b = at(ix + 1, iy), c = at(ix, iy + 1), d = at(ix + 1, iy + 1);
     return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
   };
+}
+
+// ---------------------------------------------------------------------------
+// Imagery
+// ---------------------------------------------------------------------------
+
+interface ImageryTile { x: number; y: number; jpg: string }
+
+/**
+ * The land tiles of the box, positioned in a mosaic whose pixel (0,0) is the
+ * box's north-west corner. Water-only tiles are dropped: the sim draws its own
+ * sea on top, so they would only bloat the bundle.
+ */
+async function bakeImagery(grid: Int16Array, step: number): Promise<{
+  widthPx: number; heightPx: number; tiles: ImageryTile[]; bytes: number;
+}> {
+  const west = worldToLatLon(-EXTENT, 0).lon;
+  const east = worldToLatLon(EXTENT, 0).lon;
+  const north = worldToLatLon(0, -EXTENT).lat;
+  const south = worldToLatLon(0, EXTENT).lat;
+  const pxW = mercX(west, IMAGERY_ZOOM);
+  const pxE = mercX(east, IMAGERY_ZOOM);
+  const pxN = mercY(north, IMAGERY_ZOOM);
+  const pxS = mercY(south, IMAGERY_ZOOM);
+  const leftPx = Math.floor(pxW), topPx = Math.floor(pxN);
+  const widthPx = Math.round(pxE - leftPx), heightPx = Math.round(pxS - topPx);
+  const tx0 = Math.floor(leftPx / TILE), tx1 = Math.floor((pxE - 1) / TILE);
+  const ty0 = Math.floor(topPx / TILE), ty1 = Math.floor((pxS - 1) / TILE);
+
+  // Which tiles hold land, straight from the baked heights.
+  const land = new Set<string>();
+  for (let iz = 0; iz < GRID; iz++) {
+    for (let ix = 0; ix < GRID; ix++) {
+      if (grid[iz * GRID + ix] < 0) continue;
+      const x = -EXTENT + (ix + 0.5) * step;
+      const z = -EXTENT + (iz + 0.5) * step;
+      const { lat, lon } = worldToLatLon(x, z);
+      land.add(`${Math.floor(mercX(lon, IMAGERY_ZOOM) / TILE)},${Math.floor(mercY(lat, IMAGERY_ZOOM) / TILE)}`);
+    }
+  }
+
+  const tiles: ImageryTile[] = [];
+  let bytes = 0;
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      if (!land.has(`${tx},${ty}`)) continue;
+      const buf = await fetchImagery(tx, ty);
+      bytes += buf.length;
+      tiles.push({ x: tx * TILE - leftPx, y: ty * TILE - topPx, jpg: buf.toString("base64") });
+    }
+  }
+  process.stderr.write(
+    `imagery: ${tiles.length} land tiles of ${(tx1 - tx0 + 1) * (ty1 - ty0 + 1)} at z${IMAGERY_ZOOM}, ` +
+      `${widthPx}x${heightPx} px, ${(bytes / 1024).toFixed(0)} KiB\n`,
+  );
+  return { widthPx, heightPx, tiles, bytes };
 }
 
 // ---------------------------------------------------------------------------
@@ -284,7 +363,7 @@ async function main(): Promise<void> {
     }
   }
 
-  process.stderr.write(`baked ${GRID}x${GRID} @ ${(step).toFixed(1)} m/sample\n`);
+  process.stderr.write(`heights: ${GRID}x${GRID} @ ${step.toFixed(1)} m/sample\n`);
   report(sample);
 
   const airfield = sample(AIRFIELD.x, AIRFIELD.z);
@@ -294,18 +373,39 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const imagery = WITH_IMAGERY
+    ? await bakeImagery(grid, step)
+    : { widthPx: 0, heightPx: 0, tiles: [] as ImageryTile[], bytes: 0 };
+
+  const imageryBlock = imagery.tiles.length === 0
+    ? "export const EARTH_IMAGERY = null;"
+    : `export const EARTH_IMAGERY = {
+  zoom: ${IMAGERY_ZOOM},
+  widthPx: ${imagery.widthPx},
+  heightPx: ${imagery.heightPx},
+  source: "Sentinel-2 cloudless (EOX IT Services), CC BY 4.0",
+  // Pixel offset of each 256px tile inside the mosaic; (0,0) is the box's
+  // north-west corner. Water-only tiles are omitted by design.
+  tiles: [
+${imagery.tiles.map((t) => `    { x: ${t.x}, y: ${t.y}, jpg: ${JSON.stringify(t.jpg)} },`).join("\n")}
+  ],
+} as const;`;
+
   const src = `// GENERATED by scripts/bake-terrain.ts — do not edit by hand.
 //
-// Real elevation for the free-flight "real terrain" beta: ${SITE.lat.toFixed(4)} N,
-// ${Math.abs(SITE.lon).toFixed(4)} W, a ${SIZE_M / 1000} km square resampled to a
-// ${GRID}x${GRID} grid at ${step.toFixed(1)} m per sample.
+// Real elevation and satellite imagery for the free-flight "real terrain" beta:
+// ${SITE.lat.toFixed(4)} N, ${Math.abs(SITE.lon).toFixed(4)} W, a ${SIZE_M / 1000} km square.
 //
-// Height source: Mapzen / Tilezen terrarium tiles (AWS Open Data, no key),
-// decoded from \`elevation = (R * 256 + G + B / 256) - 32768\`. Attribution for the
-// underlying providers is required and lives in docs/REAL-TERRAIN.md.
+// Heights: Mapzen / Tilezen terrarium tiles (AWS Open Data, no key), decoded
+// from \`elevation = (R * 256 + G + B / 256) - 32768\`, resampled to a
+// ${GRID}x${GRID} grid at ${step.toFixed(1)} m per sample, stored as base64 int16 metres.
 //
-// Stored as base64 int16 metres so it inlines into the single-file standalone
-// build. North-up: index 0 is world z = -${EXTENT}, +x is east.
+// Imagery: Sentinel-2 cloudless, CC BY 4.0. Land tiles only, as raw JPEG bytes;
+// the browser stitches them into one canvas texture at runtime.
+//
+// Attribution for both lives in docs/REAL-TERRAIN.md.
+//
+// Heights are north-up: index 0 is world z = -${EXTENT}, +x is east.
 
 export const EARTH_TERRAIN = {
   label: "Niihau, Hawaii",
@@ -325,6 +425,8 @@ const BASE64 = [
 ].join("");
 
 export default BASE64;
+
+${imageryBlock}
 `;
 
   mkdirSync(dirname(OUT), { recursive: true });
