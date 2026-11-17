@@ -1,19 +1,19 @@
 // Runtime terrain streaming: real elevation beyond the baked home box.
 //
-// The home box (Niihau, 60 km) is baked into the bundle because its heights are
-// queried synchronously by the flight model. This module extends that idea to
-// the rest of the world: 256-pixel DEM tiles fetched as needed and cached, so a
-// pilot can fly out of the box and keep finding real ground.
+// The home box is baked into the bundle because the flight model asks for
+// heights synchronously, thousands of times a second. Outside it the same data
+// arrives at runtime: 256-pixel DEM tiles fetched on demand, decoded and cached,
+// so a pilot can leave the box and keep finding real ground.
 //
-// Source: Esri "WorldElevation3D/Terrain3D" image service — free, no key, and
-// the only free elevation service found that sends CORS headers (the Mapzen
-// terraform bucket does not, so the browser cannot read its pixels). Tiles are
+// Source: Esri "WorldElevation3D/Terrain3D" — free, no key, and the only free
+// elevation service found that sends CORS headers (the Mapzen terrarium bucket
+// used by the bake does not, so a page cannot read its pixels). Tiles are
 // LERC-compressed float32 metres, decoded with Esri's Apache-2.0 `lerc` wasm.
 //
-// Positions are still absolute metres in the sim's flat XZ frame, mapped to
-// lat/lon by a local equirectangular projection around the home site. That is
-// accurate over a few hundred kilometres and degrades beyond it; a true global
-// flight needs a floating origin, which is the next stage.
+// Positions are absolute metres in the sim's flat XZ frame, mapped to lat/lon by
+// a local equirectangular projection around the home site. That is accurate over
+// a few hundred kilometres and degrades beyond it; a true round-the-world flight
+// needs a floating origin, which is the next stage.
 
 import { decode, load } from "lerc";
 import { EARTH_TERRAIN } from "./terrain/niihau";
@@ -30,17 +30,41 @@ const TILE_URL = (x: number, y: number): string =>
 export const imageryTileUrl = (x: number, y: number): string =>
   `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/${DEM_ZOOM}/${y}/${x}.jpg`;
 
-const lat0 = EARTH_TERRAIN.centerLat;
-const lon0 = EARTH_TERRAIN.centerLon;
 const M_PER_DEG_LAT = 110574;
-const M_PER_DEG_LON = 111320 * Math.cos((lat0 * Math.PI) / 180);
+
+// The mapping's anchor. Home is Niihau, where the baked box and the fleet live.
+// A sortie that starts elsewhere re-anchors it on that region, so the aircraft
+// begins at the world origin instead of tens of thousands of kilometres out,
+// where float32 metres would quantise to several metres and the view would
+// shimmer. It is a per-sortie origin, not a floating one: fly a few thousand
+// kilometres from the anchor and the same limit comes back.
+let datumLat: number = EARTH_TERRAIN.centerLat;
+let datumLon: number = EARTH_TERRAIN.centerLon;
+let mPerDegLon = 111320 * Math.cos((datumLat * Math.PI) / 180);
+
+/** Anchor the world frame on a place. See the note above. */
+export function setTerrainDatum(lat: number, lon: number): void {
+  datumLat = lat;
+  datumLon = lon;
+  mPerDegLon = 111320 * Math.cos((lat * Math.PI) / 180);
+}
+
+/** Back to the baked home box, where the fleet and the runway are. */
+export function resetTerrainDatum(): void {
+  setTerrainDatum(EARTH_TERRAIN.centerLat, EARTH_TERRAIN.centerLon);
+}
+
+/** True when the frame is anchored on the home box. */
+export function isHomeDatum(): boolean {
+  return datumLat === EARTH_TERRAIN.centerLat && datumLon === EARTH_TERRAIN.centerLon;
+}
 
 export function worldToLatLon(x: number, z: number): { lat: number; lon: number } {
-  return { lat: lat0 - z / M_PER_DEG_LAT, lon: lon0 + x / M_PER_DEG_LON };
+  return { lat: datumLat - z / M_PER_DEG_LAT, lon: datumLon + x / mPerDegLon };
 }
 
 export function latLonToWorld(lat: number, lon: number): { x: number; z: number } {
-  return { x: (lon - lon0) * M_PER_DEG_LON, z: (lat0 - lat) * M_PER_DEG_LAT };
+  return { x: (lon - datumLon) * mPerDegLon, z: (datumLat - lat) * M_PER_DEG_LAT };
 }
 
 const mercY = (lat: number): number => {
@@ -83,45 +107,84 @@ interface DemTile {
   heights: Float32Array;
 }
 
+/** Insertion order is recency order: the head is the coldest tile. */
 const tiles = new Map<string, DemTile>();
-const inflight = new Set<string>();
-const failed = new Set<string>();
+const inflight = new Map<string, AbortController>();
+const queued = new Set<string>();
+/** Failed tiles, with a backoff clock, so a flaky link is retried not abandoned. */
+const retry = new Map<string, { attempts: number; nextAt: number }>();
+
 let decoderReady: Promise<void> | null = null;
 let queue: Array<{ key: string; tx: number; ty: number }> = [];
 let active = 0;
+
 const MAX_ACTIVE = 6;
-const MAX_TILES = 512;
+/** Plenty for the drawn ring (81 tiles) plus the corridor ahead and history. */
+const MAX_TILES = 640;
+const MAX_ATTEMPTS = 4;
+const FETCH_TIMEOUT_MS = 15000;
+const EMPTY_TILE_BYTES = 64;
 
 const keyOf = (tx: number, ty: number): string => `${DEM_ZOOM}/${tx}/${ty}`;
 
 function ensureDecoder(): Promise<void> {
   if (!decoderReady) {
     decoderReady = (async () => {
-      // Loaded lazily and by a bundler-only module: node/bun diagnostics import
-      // this file without ever needing the wasm.
+      // Loaded lazily and from a bundler-only module: node/bun diagnostics
+      // import this file without ever needing the wasm.
       const wasm = (await import("./lercWasm")).default;
       await load({ locateFile: () => wasm });
-    })();
+    })().catch((err: unknown) => {
+      // A failed decode setup must not poison every later tile: clear it so the
+      // next request tries again.
+      decoderReady = null;
+      throw err;
+    });
   }
   return decoderReady;
 }
 
+/** Mark a tile as most recently used, so eviction takes the coldest first. */
+function touch(key: string): void {
+  const tile = tiles.get(key);
+  if (!tile) return;
+  tiles.delete(key);
+  tiles.set(key, tile);
+}
+
+function store(key: string, heights: Float32Array): void {
+  tiles.delete(key);
+  tiles.set(key, { heights });
+  retry.delete(key);
+  while (tiles.size > MAX_TILES) {
+    const oldest = tiles.keys().next().value;
+    if (oldest === undefined) break;
+    tiles.delete(oldest);
+  }
+}
+
 async function fetchTile(tx: number, ty: number): Promise<void> {
   const key = keyOf(tx, ty);
-  if (tiles.has(key) || inflight.has(key) || failed.has(key)) return;
-  inflight.add(key);
+  if (tiles.has(key) || inflight.has(key)) return;
+
+  const controller = new AbortController();
+  inflight.set(key, controller);
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     await ensureDecoder();
-    const res = await fetch(TILE_URL(tx, ty));
+    const res = await fetch(TILE_URL(tx, ty), { signal: controller.signal });
     if (!res.ok) throw new Error(`dem ${key} -> ${res.status}`);
     const buf = new Uint8Array(await res.arrayBuffer());
-    if (buf.byteLength <= 64) {
-      // An empty tile: open ocean, which the service returns as a stub.
-      tiles.set(key, { heights: new Float32Array(PX * PX) });
+    if (buf.byteLength <= EMPTY_TILE_BYTES) {
+      // The service returns a stub for open ocean.
+      store(key, new Float32Array(PX * PX));
       return;
     }
     const out = decode(buf);
-    const src = out.pixels[0] as Float32Array;
+    const src = out.pixels?.[0] as Float32Array | undefined;
+    if (!src || out.width < 2 || out.height < 2 || src.length < out.width * out.height) {
+      throw new Error(`dem ${key} decoded empty`);
+    }
     const heights = new Float32Array(PX * PX);
     if (out.width === PX && out.height === PX) {
       heights.set(src);
@@ -135,15 +198,18 @@ async function fetchTile(tx: number, ty: number): Promise<void> {
         }
       }
     }
-    tiles.set(key, { heights });
-    if (tiles.size > MAX_TILES) {
-      const oldest = tiles.keys().next().value;
-      if (oldest !== undefined) tiles.delete(oldest);
-    }
+    // A NaN in the source would propagate into the mesh and the flight model.
+    for (let i = 0; i < heights.length; i++) if (!Number.isFinite(heights[i])) heights[i] = 0;
+    store(key, heights);
   } catch {
-    failed.add(key);
+    const previous = retry.get(key)?.attempts ?? 0;
+    const attempts = previous + 1;
+    // 1 s, 2 s, 4 s: a lost packet costs a moment, not the tile.
+    retry.set(key, { attempts, nextAt: performance.now() + 1000 * 2 ** previous });
   } finally {
+    clearTimeout(timer);
     inflight.delete(key);
+    queued.delete(key);
   }
 }
 
@@ -158,18 +224,23 @@ function pump(): void {
   }
 }
 
-/** Ask for a tile now; it lands in the cache when the fetch finishes. */
+/**
+ * Ask for a tile now. Cheap and idempotent: the renderer calls this for every
+ * tile in its ring on every refresh, and only the missing ones do anything.
+ */
 export function ensureTile(tx: number, ty: number): void {
   const key = keyOf(tx, ty);
-  if (tiles.has(key) || inflight.has(key) || failed.has(key)) return;
-  if (queue.some((q) => q.key === key)) return;
+  if (tiles.has(key)) {
+    touch(key);
+    return;
+  }
+  if (inflight.has(key) || queued.has(key)) return;
+  const failed = retry.get(key);
+  if (failed && (failed.attempts >= MAX_ATTEMPTS || performance.now() < failed.nextAt)) return;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+  queued.add(key);
   queue.push({ key, tx, ty });
   pump();
-}
-
-/** Drop queued work, e.g. when the world switches back to the procedural chain. */
-export function clearStreamQueue(): void {
-  queue = [];
 }
 
 export function isTileReady(tx: number, ty: number): boolean {
@@ -183,17 +254,19 @@ export function isTileReady(tx: number, ty: number): boolean {
  */
 export function streamHeightAt(x: number, z: number): number | null {
   const { tx, ty } = tileAt(x, z);
-  const tile = tiles.get(keyOf(tx, ty));
+  const key = keyOf(tx, ty);
+  const tile = tiles.get(key);
   if (!tile) return null;
   const r = tileRect(tx, ty);
   const fx = ((x - r.west) / r.widthM) * TILE_PX;
   const fz = ((z - r.north) / r.heightM) * TILE_PX;
-  const x0 = Math.max(0, Math.min(PX - 1, Math.floor(fx)));
-  const z0 = Math.max(0, Math.min(PX - 1, Math.floor(fz)));
+  if (!(fx >= 0 && fz >= 0 && fx <= TILE_PX && fz <= TILE_PX)) return null;
+  const x0 = Math.min(PX - 1, Math.floor(fx));
+  const z0 = Math.min(PX - 1, Math.floor(fz));
   const x1 = Math.min(PX - 1, x0 + 1);
   const z1 = Math.min(PX - 1, z0 + 1);
-  const tx0 = Math.max(0, Math.min(1, fx - x0));
-  const tz0 = Math.max(0, Math.min(1, fz - z0));
+  const tx0 = Math.min(1, Math.max(0, fx - x0));
+  const tz0 = Math.min(1, Math.max(0, fz - z0));
   const h = tile.heights;
   const a = h[z0 * PX + x0];
   const b = h[z0 * PX + x1];
@@ -207,16 +280,11 @@ export function decodedHeights(tx: number, ty: number): Float32Array | null {
   return tiles.get(keyOf(tx, ty))?.heights ?? null;
 }
 
-/**
- * Keep the tiles around a point queued. `radius` is in tiles; the renderer uses
- * the same number so what it draws is what the flight model can feel.
- */
-export function prefetchAround(x: number, z: number, radius: number): void {
-  const { tx, ty } = tileAt(x, z);
-  for (let dy = -radius; dy <= radius; dy++) {
-    for (let dx = -radius; dx <= radius; dx++) {
-      if (dx * dx + dy * dy > radius * radius + radius) continue;
-      ensureTile(tx + dx, ty + dy);
-    }
-  }
+/** Drop queued work and in-flight requests, e.g. when the world switches back. */
+export function clearStream(): void {
+  queue = [];
+  queued.clear();
+  for (const controller of inflight.values()) controller.abort();
+  inflight.clear();
+  active = 0;
 }

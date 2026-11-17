@@ -18,6 +18,7 @@ import {
   recoveryLaunchPoint,
   glideStateFor,
   spawnAircraft,
+  airStart,
   stepAircraft,
   type AircraftState,
   type FlightInput,
@@ -25,6 +26,8 @@ import {
   type MissionKind,
   type SubsystemDamage,
 } from "../sim/flight";
+import { HOME_REGION, REGION_CRUISE_KT, regionById, regionStart } from "./regions";
+import { clearStream, isHomeDatum, resetTerrainDatum, setTerrainDatum } from "./terrainStream";
 import {
   DEFAULT_SEED,
   EXTENT,
@@ -153,6 +156,9 @@ export interface HudSnapshot {
   playerX: number;
   playerZ: number;
   playerHeadingDeg: number;
+  /** False when the frame is anchored away from Niihau, where there is no
+   *  fleet and no runway to show. */
+  homeWorld: boolean;
   carrierMarkers: Array<{ name: string; x: number; z: number; near: boolean; headingDeg: number; lengthM: number }>;
   fieldX: number;
   fieldZ: number;
@@ -378,6 +384,7 @@ function defaultHud(): HudSnapshot {
     distCarrierKm: 0, bearingCarrierDeg: 0, carrierName: "—", distFieldKm: 0,
     bearingFieldDeg: 0, worldLabel: "Procedural islands", worldSeed: DEFAULT_SEED,
     radarAltFt: 0,
+    homeWorld: true,
     playerX: 0, playerZ: 0, playerHeadingDeg: 0, carrierMarkers: [],
     fieldX: 0, fieldZ: 0, fieldHeadingDeg: 0, fieldLengthM: 0, worldExtent: 12000,
     localHour: 12, dayPhase: "day",
@@ -649,7 +656,7 @@ export class Sim {
     this.input.attach(canvas);
     window.addEventListener("resize", this.onResize);
     this.state = this.newState(this.mission, this.spawnCarrier);
-    this.spectateViewer = this.newState("carrier", 0);
+    this.spectateViewer = this.newState("carrier", 0, false);
     this.launchRemembered = true; // this park is already on file
     this.updateJetPose(1);
     this.updateHud();
@@ -657,7 +664,7 @@ export class Sim {
   }
 
   /** A freshly spawned airframe, already dressed for the theatre's weather. */
-  private newState(mission: MissionKind, carrier: number): AircraftState {
+  private newState(mission: MissionKind, carrier: number, placeRegion = true): AircraftState {
     this.motionEpoch = (this.motionEpoch+1) >>> 0;
     const st = spawnAircraft(mission, carrier, this.settings.aircraft, this.settings.bindings);
     if (st.spec.surfaceVessel && this.netState?.status === "online") {
@@ -666,7 +673,27 @@ export class Sim {
       st.prevPos.copy(st.pos);
     }
     this.applyWeather(st);
+    if (placeRegion) this.applyRegionStart(st);
     return st;
+  }
+
+  /**
+   * The real-terrain beta starts away from Niihau in the air: the carrier, the
+   * runway and the missions only exist at home, so there is nothing to launch
+   * from anywhere else.
+   */
+  private applyRegionStart(st: AircraftState): void {
+    if (this.settings.terrain !== "earth" || st.spec.surfaceVessel) return;
+    const region = regionById(this.settings.terrainRegion);
+    if (region.id === HOME_REGION) {
+      resetTerrainDatum();
+      return;
+    }
+    // Anchor the world frame on the chosen region, so the aircraft starts at the
+    // origin where the heights, the meshes and float32 are all at their best.
+    setTerrainDatum(region.lat, region.lon);
+    const start = regionStart(region);
+    airStart(st, start.x, start.z, region.altitudeM, region.headingDeg, REGION_CRUISE_KT);
   }
 
   /**
@@ -1649,6 +1676,8 @@ export class Sim {
   dispose(): void {
     this.teardown = true;
     cancelAnimationFrame(this.raf);
+    // Drop any terrain tiles still in flight with the sim that asked for them.
+    clearStream();
     this.net.dispose();
     this.remoteFleet.dispose();
     this.remoteWeapons.dispose();
@@ -2751,6 +2780,7 @@ export class Sim {
       playerX: st.pos.x,
       playerZ: st.pos.z,
       playerHeadingDeg: st.headingDeg,
+      homeWorld: isHomeDatum(),
       carrierMarkers: fleet.map((c) => ({
         name: c.name,
         x: c.x,

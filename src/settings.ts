@@ -2,6 +2,7 @@
 
 import { DEFAULT_AIRCRAFT, isAircraftId, type AircraftId } from "./sim/aircraft";
 import type { TerrainSource } from "./sim/world";
+import { REGIONS } from "./sim/regions";
 
 export type Quality = "low" | "medium" | "high";
 
@@ -148,6 +149,9 @@ export interface Settings {
   /** Heightfield for a solo sortie: the seeded chain, or the real-Earth beta.
    *  Optional so profiles saved before the beta still load. */
   terrain?: TerrainSource;
+  /** Which real place to start over. The fleet only exists at home, so any
+   *  other region starts the sortie in the air. */
+  terrainRegion?: string;
   daylight: DaylightMode;
   weather?: WeatherMode;
   /** Local clock hour 0..24, used by "fixed" mode. */
@@ -193,6 +197,7 @@ export function defaultSettings(): Settings {
     aircraft: DEFAULT_AIRCRAFT,
     missionMode: "cruise",
     terrain: "procedural",
+    terrainRegion: "niihau",
     missionStyle: "operation",
     strikeVariant: "convoy",
     daylight: "fixed",
@@ -273,6 +278,10 @@ export function loadSettings(): Settings {
           ? parsed.missionMode
           : base.missionMode,
       terrain: parsed.terrain === "earth" ? "earth" : "procedural",
+      terrainRegion:
+        typeof parsed.terrainRegion === "string" && REGIONS.some((r) => r.id === parsed.terrainRegion)
+          ? parsed.terrainRegion
+          : base.terrainRegion,
       missionStyle: parsed.missionStyle === "endless" ? "endless" : "operation",
       strikeVariant: parsed.strikeVariant === "bastion" ? "bastion" : "convoy",
       daylight:

@@ -6,6 +6,7 @@ import type { Sim, Phase } from "../sim/engine";
 import { AIRCRAFT_LIST, DEFAULT_AIRCRAFT } from "../sim/aircraft";
 import { carriers, worldSeedForRoom } from "../sim/world";
 import { EARTH_TERRAIN_INFO } from "../sim/earthTerrain";
+import { HOME_REGION, REGIONS, regionById } from "../sim/regions";
 import {
   USERNAME_MAX,
   currentAccount,
@@ -397,6 +398,8 @@ function FlightSetup({ sim, settings, onSettings, onBack, gate }: {
 }) {
   const mode = settings.missionMode === "versus" ? "cruise" : settings.missionMode;
   const realTerrain = settings.terrain === "earth";
+  const region = regionById(settings.terrainRegion);
+  const awayFromHome = realTerrain && region.id !== HOME_REGION;
   const craft = AIRCRAFT_LIST.find(a => a.id === settings.aircraft) ?? AIRCRAFT_LIST[0];
   const [launchFrom, setLaunchFrom] = useState<"carrier" | "airfield">(() => settings.launchKind);
   const selectedLaunch = craft.surfaceVessel ? "carrier" : launchFrom;
@@ -438,6 +441,24 @@ function FlightSetup({ sim, settings, onSettings, onBack, gate }: {
       </small>
     </button>
 
+    {/* Where in the world. Everything but the home box starts in the air,
+        because the fleet only exists at Niihau. */}
+    {realTerrain && <label className="sortie-field region-field" htmlFor="sortie-region">
+      <span className="sortie-label">START WHERE</span>
+      <select
+        id="sortie-region"
+        value={region.id}
+        onChange={e => onSettings({ ...settings, terrainRegion: e.target.value })}
+      >
+        {REGIONS.map(r => <option key={r.id} value={r.id}>{r.label} — {r.sub}</option>)}
+      </select>
+      <span className="sortie-caption">
+        {awayFromHome
+          ? `Airborne at ${region.altitudeM.toLocaleString()} m over ${region.label}. The fleet, the runway and the missions stay at Niihau.`
+          : "The carrier, the runway and every mission are here."}
+      </span>
+    </label>}
+
     <label className="sortie-field" htmlFor="sortie-aircraft">
       <span className="sortie-label">AIRCRAFT</span>
       <select id="sortie-aircraft" value={settings.aircraft} onChange={e => onSettings({ ...settings, aircraft: e.target.value as Settings["aircraft"] })}>
@@ -476,6 +497,8 @@ function FlightSetup({ sim, settings, onSettings, onBack, gate }: {
       <span className="sortie-label">LAUNCH FROM</span>
       {craft.surfaceVessel
         ? <span className="sortie-caption">Friendly fleet near {homeCarrier(settings)}</span>
+        : awayFromHome
+        ? <span className="sortie-caption">No deck or runway here — you start airborne, already at cruise.</span>
         : <div className="sortie-launch-choices" role="group" aria-label="Launch location">
           <button type="button" className={selectedLaunch === "carrier" ? "selected" : ""} aria-pressed={selectedLaunch === "carrier"} onClick={() => setLaunchFrom("carrier")}>CARRIER</button>
           <button type="button" className={selectedLaunch === "airfield" ? "selected" : ""} aria-pressed={selectedLaunch === "airfield"} onClick={() => setLaunchFrom("airfield")}>RUNWAY</button>
@@ -483,7 +506,7 @@ function FlightSetup({ sim, settings, onSettings, onBack, gate }: {
     </div>
 
     <div className="sortie-actions">
-      <Btn primary onClick={() => gate(launch)}>{craft.surfaceVessel ? "TAKE STATION" : realTerrain ? "FLY REAL TERRAIN" : selectedLaunch === "airfield" ? "TAKE OFF" : "LAUNCH SORTIE"}</Btn>
+      <Btn primary onClick={() => gate(launch)}>{craft.surfaceVessel ? "TAKE STATION" : awayFromHome ? `FLY ${region.label.toUpperCase()}` : realTerrain ? "FLY REAL TERRAIN" : selectedLaunch === "airfield" ? "TAKE OFF" : "LAUNCH SORTIE"}</Btn>
       <button type="button" className="subpage-back" onClick={onBack}>BACK</button>
     </div>
   </div>;

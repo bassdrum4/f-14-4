@@ -14,7 +14,7 @@
 
 import { fbm, ridged, smoothstep } from "./noise";
 import { earthHeightAt } from "./earthTerrain";
-import { streamHeightAt } from "./terrainStream";
+import { isHomeDatum, streamHeightAt } from "./terrainStream";
 
 /**
  * Terrain mesh extent (half-size, meters). Beyond this: open ocean.
@@ -642,7 +642,9 @@ export function applyLayoutOps(
 function makeEarthSampler(): (x: number, z: number) => number {
   const af = ARCHIPELAGO.airfield;
   return (x, z) => {
-    if (x > -EXTENT && x < EXTENT && z > -EXTENT && z < EXTENT) {
+    // The baked grid is Niihau's. Anchored anywhere else it would be the wrong
+    // place, so a relocated frame reads streamed tiles only.
+    if (isHomeDatum() && x > -EXTENT && x < EXTENT && z > -EXTENT && z < EXTENT) {
       return applyLayoutOps(x, z, earthHeightAt(x, z), af, ARCHIPELAGO.carriers);
     }
     // Beyond the baked box the real world keeps going: streamed DEM tiles when

@@ -600,6 +600,44 @@ export function glideStateFor(st: AircraftState): GlideState | null {
   };
 }
 
+/**
+ * Place an airframe in the air, trimmed for level cruise. The real-terrain beta
+ * uses this to start a sortie away from the fleet, where there is no deck and
+ * no runway to launch from.
+ */
+export function airStart(
+  st: AircraftState,
+  x: number,
+  z: number,
+  altitudeM: number,
+  headingDeg: number,
+  speedKt: number,
+): void {
+  st.pos.set(x, altitudeM, z);
+  st.prevPos.copy(st.pos);
+  st.quat.setFromAxisAngle(new Vector3(0, 1, 0), (-headingDeg * Math.PI) / 180);
+  st.headingDeg = headingDeg;
+  st.omega.set(0, 0, 0);
+  st.speed = speedKt * 0.514444;
+  st.vel.set(0, 0, -1).applyQuaternion(st.quat).multiplyScalar(st.speed);
+  st.onGround = false;
+  st.airborne = true;
+  st.groundKind = "water";
+  st.gearDown = false;
+  st.gearT = 0;
+  st.flapsDown = false;
+  st.flapT = 0;
+  st.brakeOn = false;
+  st.throttle = 0.9;
+  st.rpm = 0.9;
+  st.catPhase = "idle";
+  st.result = null;
+  // The deck and runway prompts are meaningless in mid-air.
+  st.banner = { text: "AIRBORNE — CRUISE SET", until: 8 };
+  // Past the point where the airborne flag is held back after a spawn.
+  st.flightTime = 2;
+}
+
 export function spawnAircraft(
   mission: MissionKind,
   carrierIndex = 0,

@@ -23,6 +23,7 @@ import { WeatherFx } from "./weather";
 import { DEFAULT_AIRCRAFT, type AircraftId } from "../sim/aircraft";
 import { activeTerrainSource, carriers } from "../sim/world";
 import { StreamedTerrain } from "./streamTerrain";
+import { isHomeDatum } from "../sim/terrainStream";
 import type { Quality } from "../settings";
 import type { SunPosition } from "../sim/sun";
 import type { WeatherPreset } from "../sim/weather";
@@ -377,6 +378,14 @@ export class WorldRenderer {
     // The sea is one flat plane, so sliding it under the camera keeps open
     // water endless no matter how far the pilot has flown — no coordinates grow.
     this.oceanMesh.position.set(this.focus.x, 0, this.focus.z);
+    // The baked terrain, the airfield and the fleet belong to Niihau. Anchored
+    // on another region they would be in the wrong place entirely, so they are
+    // simply not drawn: streamed chunks are the whole world out there.
+    const home = isHomeDatum();
+    if (this.worldRoot.visible !== home) {
+      this.worldRoot.visible = home;
+      this.nightRoot.visible = home;
+    }
     if (activeTerrainSource() === "earth") {
       this.streamed ??= new StreamedTerrain(this.scene);
       this.streamed.update(this.focus);

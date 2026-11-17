@@ -24,6 +24,7 @@ export function useHud(sim: Sim | null): HudSnapshot {
 }
 
 const EMPTY: HudSnapshot = {
+  homeWorld: true,
   speedKt: 0, altFt: 0, mach: 0, headingDeg: 0, aoaDeg: 0, vsFpm: 0, gLoad: 1,
   throttlePct: 0, rpmPct: 0, ab: 0, abOn: false, gear: true, flaps: false, speedbrake: false,
   trim: 0.5, sweepDeg: 20, sweepable: false, rotorcraft: false, stalled: false, onGround: true, catPhase: "ready",
@@ -128,7 +129,7 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
           {!hud.operation && !hud.battle && hud.dfActive &&
             <div>{hud.dfStrike ? "TARGETS" : "BANDITS"} {hud.dfBandits} · {hud.dfStrike ? "CLEARED" : "KILLS"} {hud.dfKills} · NEAREST {hud.dfNearestKm.toFixed(1)} KM · {Math.round(hud.dfNearestBrgDeg)}°</div>}
           {!hud.operation && !hud.dfActive && !hud.battle &&
-            <div>{hud.distCarrierKm <= hud.distFieldKm ? `CARRIER ${hud.carrierName} · ${hud.distCarrierKm.toFixed(1)} KM · ${Math.round(hud.bearingCarrierDeg)}°` : `AIRFIELD · ${hud.distFieldKm.toFixed(1)} KM · ${Math.round(hud.bearingFieldDeg)}°`}</div>}
+            (hud.homeWorld ? <div>{hud.distCarrierKm <= hud.distFieldKm ? `CARRIER ${hud.carrierName} · ${hud.distCarrierKm.toFixed(1)} KM · ${Math.round(hud.bearingCarrierDeg)}°` : `AIRFIELD · ${hud.distFieldKm.toFixed(1)} KM · ${Math.round(hud.bearingFieldDeg)}°`}</div> : null)}
           {!hud.spectating && <div className="hud-weapons">
             {hud.dfMissilesMax > 0 && <span>{hud.surfaceVessel ? "VLS" : "MSL"} {hud.dfMissiles}/{hud.dfMissilesMax}</span>}
             {!hud.surfaceVessel && hud.dfBombsMax > 0 && <span>LGB {hud.dfBombs}/{hud.dfBombsMax}</span>}
@@ -148,8 +149,10 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
             <div>RADAR ALT {Math.round(hud.radarAltFt)} FT · V/S {Math.round(hud.vsFpm)} FPM</div>
             {hud.sweepable && <div>WING SWEEP {hud.sweepDeg}°</div>}
           </>}
+          {hud.homeWorld && <>
           <div>CARRIER {hud.carrierName} · {hud.distCarrierKm.toFixed(1)} KM · {Math.round(hud.bearingCarrierDeg)}°</div>
           <div>FIELD {hud.distFieldKm.toFixed(1)} KM · {Math.round(hud.bearingFieldDeg)}°</div>
+          </>}
           {hud.dfCarrier && <div>OPFOR CV {hud.dfCarrier.name} · {hud.dfCarrier.status.toUpperCase()} · {hud.dfCarrier.hp}% · {hud.dfCarrier.distKm.toFixed(1)} KM · {Math.round(hud.dfCarrier.brgDeg)}°{hud.dfCarrier.inbound > 0 ? ` · ${hud.dfCarrier.inbound} INBOUND` : ""}</div>}
           {!hud.surfaceVessel && hud.dfBombsMax > 0 && <div>BOMBS {hud.dfBombs}/{hud.dfBombsMax} · {hud.dfBombsAway} AWAY · {hud.dfBombsTracking} TRACKING</div>}
           {hud.dfActive && <div>WAVE {hud.dfWave} · CONTACTS {hud.dfBandits} · KILLS {hud.dfKills}</div>}
@@ -357,10 +360,13 @@ function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
 
     // --- range: cover the furthest point of interest, with a little margin ---
     let maxR = 4000;
-    for (const m of hud.carrierMarkers) {
-      maxR = Math.max(maxR, Math.hypot(m.x - hud.playerX, m.z - hud.playerZ));
+    // Away from the home box there is no fleet and no runway to plot.
+    if (hud.homeWorld) {
+      for (const m of hud.carrierMarkers) {
+        maxR = Math.max(maxR, Math.hypot(m.x - hud.playerX, m.z - hud.playerZ));
+      }
+      maxR = Math.max(maxR, Math.hypot(hud.fieldX - hud.playerX, hud.fieldZ - hud.playerZ));
     }
-    maxR = Math.max(maxR, Math.hypot(hud.fieldX - hud.playerX, hud.fieldZ - hud.playerZ));
     if (hud.dfCarrier) {
       maxR = Math.max(maxR, Math.hypot(hud.dfCarrier.x - hud.playerX, hud.dfCarrier.z - hud.playerZ));
     }
@@ -401,7 +407,8 @@ function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
     }
 
     // --- world extent box (the terrain mesh edge) ---
-    const e = hud.worldExtent;
+    const e = hud.homeWorld ? hud.worldExtent : 0;
+    if (e > 0) {
     ctx.strokeStyle = "rgba(160, 200, 230, 0.22)";
     ctx.setLineDash([4, 4]);
     ctx.beginPath();
@@ -411,7 +418,9 @@ function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
     });
     ctx.closePath(); ctx.stroke();
     ctx.setLineDash([]);
+    }
 
+    if (hud.homeWorld) {
     // --- airfield: a bar laid along the runway's real heading ---
     // It used to be a fixed east/west line regardless of where the runway
     // actually pointed, which is the one thing a navigation aid must not get
@@ -443,6 +452,7 @@ function Minimap({ hud, big = false }: { hud: HudSnapshot; big?: boolean }) {
         m.near ? "rgba(120, 255, 140, 1)" : "rgba(150, 200, 230, 0.85)");
       ctx.fillStyle = m.near ? "rgba(120, 255, 140, 1)" : "rgba(150, 200, 230, 0.8)";
       ctx.fillText(m.name, x + Math.max(7, m.lengthM * scale) + 5, y + 3);
+    }
     }
 
     // --- wingmen (multiplayer): cyan chevrons with callsigns ---

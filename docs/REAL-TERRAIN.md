@@ -63,6 +63,22 @@ the procedural biome palette is not applied to this world at all.
 
 `--no-imagery` bakes heights only.
 
+## Where you start
+
+The beta card on the FLY SOLO screen carries a **START WHERE** picker: Niihau
+(the fleet, the runway, the missions) plus Kauai, the Grand Canyon, Everest, the
+Matterhorn, Mount Fuji and Rio de Janeiro. Everything except home starts the
+sortie **in the air** at that region's altitude and heading, already at cruise —
+there is no deck or runway out there to launch from.
+
+Choosing a region re-anchors the world frame on it, so the aircraft starts at the
+origin rather than tens of thousands of kilometres out, where float32 metres only
+resolve to a few metres and the view would shimmer. The frame is anchored per
+sortie, not floated: fly a few thousand kilometres from the anchor and the same
+limit returns. While the frame is away from home, the baked terrain, the airfield
+and the fleet are not drawn at all — they belong to Niihau, and the minimap drops
+their markers with them.
+
 ## Beyond the box: streaming
 
 The home box is baked because the flight model asks for heights synchronously,
@@ -91,9 +107,26 @@ thousands of times a second. Outside it the same data now arrives at runtime.
 - **The sea.** The ocean plane follows the aircraft, so open water is endless
   without any coordinate growing.
 
-Tiles that straddle the box edge are sunk 1.2 m so the baked mesh wins the depth
-test there. The two DEM sources disagree by a few metres, so a faint step at the
-30 km boundary is expected.
+Two things keep the 30 km boundary from showing:
+
+- **Chunks never cover the box.** A cell whose centre lies inside the baked box
+  is left out of the streamed geometry, so the two meshes meet at the edge
+  instead of fighting over the same ground. The single cell that straddles the
+  edge is sunk 1.2 m so the baked mesh wins that sliver.
+- **No ground under the sea.** The elevation service carries no bathymetry:
+  open ocean comes back as exactly 0 m. Drawn as terrain that is a flat sheet
+  coplanar with the sim's sea, which z-fights with it and shows the photo's
+  water colour under a hard chunk edge. Any cell whose corners are all at or
+  below the waterline is dropped, so the ring only ever draws land and the sea
+  is always the sim's own.
+
+Expect a faint tone step at the boundary: the box is photographed at z13 and
+the streamed ground at z12, and the two DEM sources disagree by a few metres.
+
+Robustness: tiles are fetched six at a time with a 15 s timeout, retried with
+1/2/4 s backoff up to four attempts, kept in a 640-tile least-recently-used
+cache, and asked for along the aircraft's track ~20 s ahead of where it is
+going. Requests still in flight are aborted when the sim is torn down.
 
 ## Attribution (required)
 
