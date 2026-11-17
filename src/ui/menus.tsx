@@ -5,6 +5,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import type { Sim, Phase } from "../sim/engine";
 import { AIRCRAFT_LIST, DEFAULT_AIRCRAFT } from "../sim/aircraft";
 import { carriers, worldSeedForRoom } from "../sim/world";
+import { EARTH_TERRAIN_INFO } from "../sim/earthTerrain";
 import {
   USERNAME_MAX,
   currentAccount,
@@ -395,6 +396,7 @@ function FlightSetup({ sim, settings, onSettings, onBack, gate }: {
   gate: (run: () => void) => void;
 }) {
   const mode = settings.missionMode === "versus" ? "cruise" : settings.missionMode;
+  const realTerrain = settings.terrain === "earth";
   const craft = AIRCRAFT_LIST.find(a => a.id === settings.aircraft) ?? AIRCRAFT_LIST[0];
   const [launchFrom, setLaunchFrom] = useState<"carrier" | "airfield">(() => settings.launchKind);
   const selectedLaunch = craft.surfaceVessel ? "carrier" : launchFrom;
@@ -406,11 +408,35 @@ function FlightSetup({ sim, settings, onSettings, onBack, gate }: {
   };
   const launch = () => {
     if (settings.missionMode === "versus") onSettings({ ...settings, missionMode: mode });
+    // The beta cruise is free flight only: the missions are built around the
+    // seeded islands, so a non-cruise pick falls back rather than misbehaving.
+    if (realTerrain && settings.missionMode !== "cruise") onSettings({ ...settings, missionMode: "cruise" });
     sim?.startMission(selectedLaunch);
   };
 
   return <div className="menu-screen sortie-simple">
     <h3 className="menu-h3">FLY SOLO</h3>
+
+    {/* The real-terrain beta: a start option, not a change to the sim. It swaps
+        the heightfield only, so the fleet, the runway and every mission stay
+        exactly where they were. */}
+    <button
+      type="button"
+      className={"real-terrain-card" + (realTerrain ? " on" : "")}
+      aria-pressed={realTerrain}
+      onClick={() => {
+        const next = realTerrain ? "procedural" : "earth";
+        onSettings({ ...settings, terrain: next, missionMode: next === "earth" ? "cruise" : settings.missionMode });
+      }}
+    >
+      <span className="real-terrain-kicker">NEW · IN BETA</span>
+      <strong>{realTerrain ? `REAL TERRAIN ON — ${EARTH_TERRAIN_INFO.label.toUpperCase()}` : "FLY REAL TERRAIN"}</strong>
+      <small>
+        {realTerrain
+          ? `Actual elevation from public DEM tiles · ${EARTH_TERRAIN_INFO.sizeKm} km box · ${Math.round(EARTH_TERRAIN_INFO.metersPerSample)} m sampling. Tap to go back to the procedural chain.`
+          : `${EARTH_TERRAIN_INFO.label} from real elevation data, resampled to ${Math.round(EARTH_TERRAIN_INFO.metersPerSample)} m. Free flight only. Tap to switch it on.`}
+      </small>
+    </button>
 
     <label className="sortie-field" htmlFor="sortie-aircraft">
       <span className="sortie-label">AIRCRAFT</span>
@@ -425,11 +451,13 @@ function FlightSetup({ sim, settings, onSettings, onBack, gate }: {
       <div className="sortie-mission-grid" role="group" aria-label="Select a mission">
         {(["cruise", "dogfight", "strike", "campaign"] as const).map(m =>
           <button key={m} type="button" className={"sortie-mission" + (mode === m ? " selected" : "")}
-            aria-pressed={mode === m} onClick={() => onSettings({ ...settings, missionMode: m })}>
+            aria-pressed={mode === m} disabled={realTerrain && m !== "cruise"}
+            onClick={() => onSettings({ ...settings, missionMode: m })}>
             <strong>{craft.surfaceVessel ? ({ cruise: "SEA TRIALS", dogfight: "AIR DEFENSE", strike: "NAVAL STRIKE", campaign: "TASK FORCE" })[m] : ({ cruise: "FREE FLIGHT", dogfight: "DOGFIGHT", strike: "STRIKE", campaign: "CAMPAIGN" })[m]}</strong>
             <small>{missionHints[m]}</small>
           </button>)}
       </div>
+      {realTerrain && <span className="sortie-caption">BETA: real terrain flies free flight only — the missions use the seeded islands.</span>}
     </div>
 
     <details className="setup-disclosure">
@@ -455,7 +483,7 @@ function FlightSetup({ sim, settings, onSettings, onBack, gate }: {
     </div>
 
     <div className="sortie-actions">
-      <Btn primary onClick={() => gate(launch)}>{craft.surfaceVessel ? "TAKE STATION" : selectedLaunch === "airfield" ? "TAKE OFF" : "LAUNCH SORTIE"}</Btn>
+      <Btn primary onClick={() => gate(launch)}>{craft.surfaceVessel ? "TAKE STATION" : realTerrain ? "FLY REAL TERRAIN" : selectedLaunch === "airfield" ? "TAKE OFF" : "LAUNCH SORTIE"}</Btn>
       <button type="button" className="subpage-back" onClick={onBack}>BACK</button>
     </div>
   </div>;

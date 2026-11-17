@@ -40,6 +40,8 @@ import {
   groundAt,
   nearestCarrier,
   setWorldSeed as regenerateTerrain,
+  setTerrainSource,
+  activeTerrainSource,
   terrainHeight,
   worldSeedForRoom,
   type CarrierDef,
@@ -564,6 +566,9 @@ export class Sim {
     // the first frame already flies real terrain. Solo flight flies the default
     // world; the room code picks a different one once a pilot opens a room.
     this.worldSeed = DEFAULT_SEED;
+    // The terrain choice survives a reload, so a pilot who left the beta cruise
+    // on comes back to the real island instead of a silent switch to the chain.
+    setTerrainSource(settings.terrain === "earth" ? "earth" : "procedural");
     regenerateTerrain(this.worldSeed);
     this.dayHours = this.resolveDayHours(settings);
     this.renderer = new WorldRenderer(
@@ -857,6 +862,9 @@ export class Sim {
 
   startMission(mission: MissionKind): void {
     this.tutorialPending = false;
+    // The heightfield is part of the sortie, so it is settled just before the
+    // jet is built — not while the pilot is still flicking through the menu.
+    this.applyTerrainSetting();
     // Always the pilot's own boat: the launch point follows where they last
     // flew from (see rememberRecovery), so a sortie picks up where it left off
     // instead of hopping to the next ship in the fleet.
@@ -900,6 +908,7 @@ export class Sim {
       this.battle = { match: this.battleReferee.match, pilots: [] };
       this.battleTickAt = 0;
     }
+    this.useRoomTerrain();
     this.mintAttempt(fresh);
     if (!this.operationOrigin) { const spawn = spawnAircraft(mission, this.spawnCarrier, this.settings.aircraft, this.settings.bindings); this.operationOrigin = { x: spawn.pos.x, z: spawn.pos.z, heading: spawn.headingDeg, carrier: this.spawnCarrier }; }
     this.net.launch(mission, this.spawnCarrier, { id: this.operationId, seed: this.operationSeed, style: this.settings.missionStyle ?? "operation", origin: this.operationOrigin });
@@ -1475,6 +1484,7 @@ export class Sim {
    * mesh from the previous session cannot bleed into this one.
    */
   openRoom(callsign: string, room: string): void {
+    this.useRoomTerrain();
     this.operationOrigin = undefined;
     this.remoteFleet.clear();
     this.chatLog = [];
@@ -1488,6 +1498,7 @@ export class Sim {
   }
 
   joinRoom(callsign: string, room: string, spectator = false): void {
+    this.useRoomTerrain();
     this.operationOrigin = undefined;
     this.remoteFleet.clear();
     this.chatLog = [];
@@ -1553,6 +1564,28 @@ export class Sim {
     this.chatLog.push(msg);
     if (this.chatLog.length > 60) this.chatLog.splice(0, this.chatLog.length - 60);
     for (const fn of this.chatListeners) fn();
+  }
+
+  /**
+   * Fly the heightfield the pilot asked for. Applied when a sortie starts rather
+   * than on every settings change, so the menu can show the choice without
+   * rebuilding the mesh behind the panel.
+   */
+  private applyTerrainSetting(): void {
+    const want = this.settings.terrain === "earth" ? "earth" : "procedural";
+    if (want === activeTerrainSource()) return;
+    setTerrainSource(want);
+    this.renderer.applyWorld(this.paint());
+  }
+
+  /**
+   * A room is a seeded world, so flying into one always means the procedural
+   * chain: the real-terrain beta is a solo free flight and never joins a room.
+   */
+  private useRoomTerrain(): void {
+    if (activeTerrainSource() === "procedural") return;
+    setTerrainSource("procedural");
+    this.renderer.applyWorld(this.paint());
   }
 
   /**

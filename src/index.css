@@ -988,6 +988,25 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .sortie-mission.selected { background: #383529; border-color: #f6cb51; box-shadow: inset 3px 0 #f6cb51; }
 .sortie-mission strong { font: 800 14px "Rajdhani","Segoe UI",system-ui,sans-serif; letter-spacing: .05em; }
 .sortie-mission small { font: 11px "Segoe UI",system-ui,sans-serif; line-height: 1.25; color: #94a9ad; }
+
+/* Real-terrain beta card: a start option that reads as new without pretending
+   to be part of the aircraft or mission pickers. */
+.real-terrain-card {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 5px;
+  width: 100%; padding: 13px 15px; text-align: left; cursor: pointer;
+  background: linear-gradient(100deg, #3a3119, #232a2c 72%);
+  border: 1px dashed #e8b357; color: #f2e6c8; font: inherit;
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+.real-terrain-card:hover { border-color: #ffce7c; box-shadow: inset 0 0 0 1px #ffce7c, 0 0 18px rgba(232,179,87,.18); }
+.real-terrain-card.on { border-style: solid; background: linear-gradient(100deg, #4b3d14, #2b2f2c 72%); }
+.real-terrain-kicker {
+  display: inline-block; padding: 2px 6px; border: 1px solid #e8b357; color: #ffce7c;
+  background: rgba(232,179,87,.12);
+  font: 700 9px ui-monospace, monospace; letter-spacing: .1em;
+}
+.real-terrain-card strong { font: 800 15px "Rajdhani","Segoe UI",system-ui,sans-serif; letter-spacing: .06em; }
+.real-terrain-card small { font: 11px "Segoe UI",system-ui,sans-serif; line-height: 1.3; color: #c9b992; }
 .sortie-mission.selected strong { color: #f6cb51; }
 .sortie-mission.selected small { color: #d4c9a7; }
 .setup-disclosure { border-top: 1px solid #3f4a4f; border-bottom: 1px solid #3f4a4f; }

@@ -13,6 +13,7 @@
 // islands clear of both, so any seed is flyable.
 
 import { fbm, ridged, smoothstep } from "./noise";
+import { earthHeightAt } from "./earthTerrain";
 
 /**
  * Terrain mesh extent (half-size, meters). Beyond this: open ocean.
@@ -429,8 +430,25 @@ function generateWorld(seed: number): WorldGen {
 // Active world
 // ---------------------------------------------------------------------------
 
+/**
+ * Which heightfield the sim is flying.
+ *
+ * "procedural" is the seeded island chain and every mission built on it.
+ * "earth" is the baked real-Earth box used by the free-flight beta cruise. It
+ * is a switch on the *source*, not on the layout: the airfield plateau, the
+ * fleet anchorages and every ground query stay exactly as they were, so the
+ * flight model, the trap logic and the missions are untouched.
+ */
+export type TerrainSource = "procedural" | "earth";
+
 let activeSeed = DEFAULT_SEED;
-let activeSampler: (x: number, z: number) => number = makeProceduralSampler(DEFAULT_SEED);
+let activeSource: TerrainSource = "procedural";
+
+function buildSampler(): (x: number, z: number) => number {
+  return activeSource === "earth" ? makeEarthSampler() : makeProceduralSampler(activeSeed);
+}
+
+let activeSampler: (x: number, z: number) => number = buildSampler();
 
 /**
  * Regenerate the world for `seed`. Deterministic and synchronous — no fetch and
@@ -440,7 +458,7 @@ let activeSampler: (x: number, z: number) => number = makeProceduralSampler(DEFA
 export function setWorldSeed(seed: number): void {
   setFleetTime(0);
   activeSeed = sanitizeSeed(seed);
-  activeSampler = makeProceduralSampler(activeSeed);
+  activeSampler = buildSampler();
 }
 
 export function resetWorld(): void {
@@ -449,6 +467,21 @@ export function resetWorld(): void {
 
 export function activeWorldSeed(): number {
   return activeSeed;
+}
+
+/**
+ * Fly the real-Earth heightfield instead of the seeded chain (or back again).
+ * Synchronous, like every other world change here, so the caller can rebuild
+ * the mesh and re-seat the jet in the same tick.
+ */
+export function setTerrainSource(source: TerrainSource): void {
+  if (activeSource === source) return;
+  activeSource = source;
+  activeSampler = buildSampler();
+}
+
+export function activeTerrainSource(): TerrainSource {
+  return activeSource;
 }
 
 export function activeWorldDef(): WorldDef {
@@ -596,6 +629,18 @@ export function applyLayoutOps(
   }
 
   return h;
+}
+
+/**
+ * The baked real-Earth heightfield, wearing the same layout operations as the
+ * procedural one: the airfield still gets its flat plateau and every anchorage
+ * is still forced deep. On this box both are close to no-ops — the baked ground
+ * under the runway is 139 m against the 140 m plateau — so the real coastline
+ * survives intact.
+ */
+function makeEarthSampler(): (x: number, z: number) => number {
+  const af = ARCHIPELAGO.airfield;
+  return (x, z) => applyLayoutOps(x, z, earthHeightAt(x, z), af, ARCHIPELAGO.carriers);
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 // User settings + keybindings, persisted to localStorage.
 
 import { DEFAULT_AIRCRAFT, isAircraftId, type AircraftId } from "./sim/aircraft";
+import type { TerrainSource } from "./sim/world";
 
 export type Quality = "low" | "medium" | "high";
 
@@ -144,6 +145,9 @@ export interface Settings {
   missionStyle?: "operation" | "endless";
   strikeVariant?: "convoy" | "bastion";
   missionMode: MissionMode; // free flight or an aggressor profile
+  /** Heightfield for a solo sortie: the seeded chain, or the real-Earth beta.
+   *  Optional so profiles saved before the beta still load. */
+  terrain?: TerrainSource;
   daylight: DaylightMode;
   weather?: WeatherMode;
   /** Local clock hour 0..24, used by "fixed" mode. */
@@ -188,6 +192,7 @@ export function defaultSettings(): Settings {
     adaptiveResolution: true,
     aircraft: DEFAULT_AIRCRAFT,
     missionMode: "cruise",
+    terrain: "procedural",
     missionStyle: "operation",
     strikeVariant: "convoy",
     daylight: "fixed",
@@ -267,6 +272,7 @@ export function loadSettings(): Settings {
         parsed.missionMode === "dogfight" || parsed.missionMode === "cruise" || parsed.missionMode === "strike" || parsed.missionMode === "versus" || parsed.missionMode === "campaign"
           ? parsed.missionMode
           : base.missionMode,
+      terrain: parsed.terrain === "earth" ? "earth" : "procedural",
       missionStyle: parsed.missionStyle === "endless" ? "endless" : "operation",
       strikeVariant: parsed.strikeVariant === "bastion" ? "bastion" : "convoy",
       daylight:
