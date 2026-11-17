@@ -21,7 +21,8 @@ import { ScaleCues } from "./scale";
 import { makeEnvironmentSample, sampleEnvironment, type EnvironmentSample } from "./environment";
 import { WeatherFx } from "./weather";
 import { DEFAULT_AIRCRAFT, type AircraftId } from "../sim/aircraft";
-import { carriers } from "../sim/world";
+import { activeTerrainSource, carriers } from "../sim/world";
+import { StreamedTerrain } from "./streamTerrain";
 import type { Quality } from "../settings";
 import type { SunPosition } from "../sim/sun";
 import type { WeatherPreset } from "../sim/weather";
@@ -34,6 +35,9 @@ export class WorldRenderer {
   jetGroup: THREE.Group;
   sun: THREE.DirectionalLight;
   oceanMat: THREE.MeshStandardMaterial;
+  private oceanMesh!: THREE.Mesh;
+  /** Real ground beyond the baked box, built from runtime tiles. */
+  private streamed?: StreamedTerrain;
   private quality: Quality;
   private resolutionBudget = new ResolutionBudget();
   private adaptiveResolution = true;
@@ -133,6 +137,7 @@ export class WorldRenderer {
     this.scene.add(this.nightRoot);
     const ocean = buildOcean();
     this.oceanMat = ocean.material as THREE.MeshStandardMaterial;
+    this.oceanMesh = ocean;
     this.scene.add(ocean);
     this.scene.add(this.worldRoot);
     this.applyWorld(initialPaint);
@@ -342,6 +347,7 @@ export class WorldRenderer {
 
   /** Release GPU resources (world, cues, airframe, renderer). */
   dispose(): void {
+    this.streamed?.dispose();
     this.weatherFx.dispose();
     this.scaleCues.dispose();
     disposeTree(this.scene);
@@ -368,6 +374,13 @@ export class WorldRenderer {
     // already on the hulls.
     const dt = this.lastRenderAt > 0 ? Math.min(0.05, (t - this.lastRenderAt)) : 1 / 60;
     this.lastRenderAt = t;
+    // The sea is one flat plane, so sliding it under the camera keeps open
+    // water endless no matter how far the pilot has flown — no coordinates grow.
+    this.oceanMesh.position.set(this.focus.x, 0, this.focus.z);
+    if (activeTerrainSource() === "earth") {
+      this.streamed ??= new StreamedTerrain(this.scene);
+      this.streamed.update(this.focus);
+    }
     this.weatherFx.update(dt, this.focus, this.wind);
     // Lights blink on wall-clock time, not sim time, so a paused night scene
     // still reads as a living one.

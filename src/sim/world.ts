@@ -14,6 +14,7 @@
 
 import { fbm, ridged, smoothstep } from "./noise";
 import { earthHeightAt } from "./earthTerrain";
+import { streamHeightAt } from "./terrainStream";
 
 /**
  * Terrain mesh extent (half-size, meters). Beyond this: open ocean.
@@ -640,7 +641,17 @@ export function applyLayoutOps(
  */
 function makeEarthSampler(): (x: number, z: number) => number {
   const af = ARCHIPELAGO.airfield;
-  return (x, z) => applyLayoutOps(x, z, earthHeightAt(x, z), af, ARCHIPELAGO.carriers);
+  return (x, z) => {
+    if (x > -EXTENT && x < EXTENT && z > -EXTENT && z < EXTENT) {
+      return applyLayoutOps(x, z, earthHeightAt(x, z), af, ARCHIPELAGO.carriers);
+    }
+    // Beyond the baked box the real world keeps going: streamed DEM tiles when
+    // they have arrived, open water when they have not. Unknown ground is the
+    // sea rather than a guess at a height, so a missing tile can never invent a
+    // mountain for the flight model to hit.
+    const streamed = streamHeightAt(x, z);
+    return streamed === null ? -25 : streamed;
+  };
 }
 
 // ---------------------------------------------------------------------------

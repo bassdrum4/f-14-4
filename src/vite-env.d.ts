@@ -19,3 +19,9 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+/** Bundler-resolved asset URL (used for the LERC decoder's wasm). */
+declare module "*.wasm?url" {
+  const src: string;
+  export default src;
+}

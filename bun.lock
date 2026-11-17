@@ -5,6 +5,7 @@
     "": {
       "name": "f14-tomcat-simulator",
       "dependencies": {
+        "lerc": "^4.3.0",
         "peerjs": "^1.5.5",
         "react": "^18.3.1",
         "react-dom": "^18.3.1",
@@ -370,6 +371,8 @@
     "jsesc": ["jsesc@3.1.0", "", { "bin": { "jsesc": "bin/jsesc" } }, "sha512-/sM3dO2FOzXjKQhJuo0Q173wf2KOo8t4I8vHy6lF9poUp7bKT0/NHE8fPX23PwfhnykfqnC2xRxOnVw5XuGIaA=="],
 
     "json5": ["json5@2.2.3", "", { "bin": { "json5": "lib/cli.js" } }, "sha512-XmOWe7eyHYH14cLdVPoyg+GOH3rYX++KpzrylJwSW98t3Nk+U8XOl8FWKOgwtzdb8lXGf6zYwDUzeHMWfxasyg=="],
+
+    "lerc": ["lerc@4.3.0", "", {}, "sha512-Tg5myb8x30piBCOa/WDNarpWI9rdbGayd9GxMVtKPTIhkKrx3ojceFYH1s/IpeuDcvU/IecpL41Q4eMzqpQAFA=="],
 
     "loose-envify": ["loose-envify@1.4.0", "", { "dependencies": { "js-tokens": "^3.0.0 || ^4.0.0" }, "bin": { "loose-envify": "cli.js" } }, "sha512-lyuxPGr/Wfhrlem2CL/UcnUc1zcqKAImBDzukY7Y5F/yQiNdko6+fRLevlw1HgMySw7f611UIY408EtxRSoK3Q=="],
 

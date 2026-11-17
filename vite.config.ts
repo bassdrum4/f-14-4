@@ -61,5 +61,8 @@ export default defineConfig({
     outDir: projectPath("./dist"),
     emptyOutDir: true,
     chunkSizeWarningLimit: 1600,
+    // The LERC decoder's wasm (~118 KB) must inline, or the published build
+    // stops being a single self-contained HTML file.
+    assetsInlineLimit: 8 * 1024 * 1024,
   },
 });

@@ -1,7 +1,8 @@
 # Real terrain (beta free flight)
 
-A solo free-flight option that flies a **real** 60 km square of Hawaii instead of
-the seeded island chain. It is a start option on the FLY SOLO screen (`NEW · IN
+A solo free-flight option that flies **real** terrain over Hawaii instead of the
+seeded island chain: a 60 km home box baked into the build, and real ground
+streamed in beyond it, so there is no wall to fly into. It is a start option on the FLY SOLO screen (`NEW · IN
 BETA`) and changes nothing else: the fleet, the airfield, the runway plateau, the
 anchorage depths and every mission are exactly as they were.
 
@@ -62,6 +63,38 @@ the procedural biome palette is not applied to this world at all.
 
 `--no-imagery` bakes heights only.
 
+## Beyond the box: streaming
+
+The home box is baked because the flight model asks for heights synchronously,
+thousands of times a second. Outside it the same data now arrives at runtime.
+
+| | |
+|---|---|
+| Heights | Esri `WorldElevation3D/Terrain3D`, z12 LERC tiles, float32 metres, ~42 KB each |
+| Photo | EOX Sentinel-2 z12 tiles — the same imagery the box was baked from |
+| Ring | every tile within 4 tiles (~36 km) of the aircraft |
+| Mesh | one chunk per tile, 32 × 32 quads (~285 m cells) |
+
+- **Why Esri for heights.** It is free and keyless, and the only free elevation
+  service found that sends CORS headers. The Mapzen terrarium bucket used for
+  the bake does not, so a page cannot read its pixels — fine at build time,
+  useless at runtime.
+- **Decoder.** Tiles are LERC-compressed, decoded in the page by Esri's
+  Apache-2.0 `lerc` package. Its 118 KB wasm is inlined by the bundler, so the
+  published build is still one self-contained HTML file.
+- **Why 36 km.** That is roughly where the scene fog closes, so drawing further
+  would cost fetches for ground nobody can see.
+- **The flight model.** `terrainHeight` uses the baked box inside ±30 km and the
+  streamed cache outside. Ground that has not arrived yet reads as open water
+  (−25 m) rather than a guess, so a late tile can never conjure a mountain in
+  front of the aircraft.
+- **The sea.** The ocean plane follows the aircraft, so open water is endless
+  without any coordinate growing.
+
+Tiles that straddle the box edge are sunk 1.2 m so the baked mesh wins the depth
+test there. The two DEM sources disagree by a few metres, so a faint step at the
+30 km boundary is expected.
+
 ## Attribution (required)
 
 The Tilezen dataset is a composite, and its providers must be credited. Terrain
@@ -80,11 +113,24 @@ Satellite imagery: **Sentinel-2 cloudless** by
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Contains modified
 Copernicus Sentinel data 2020.
 
+Streamed elevation outside the box: Esri
+[WorldElevation3D/Terrain3D](https://server.arcgisonline.com/arcgis/rest/services/WorldElevation3D/Terrain3D/ImageServer)
+from the ArcGIS Online world elevation services, used under their terms of use.
+
 ## Limits
 
 - Free flight only. Dogfight, strike and campaign depend on the seeded islands.
 - Multiplayer rooms are seeded worlds, so opening or joining a room returns to
   the procedural chain by design.
-- One box. A different region means re-baking with `--lat`/`--lon` and checking
-  the probe report; the airfield and the eight anchorages are fixed, and that is
-  what constrains where a real site can go.
+- No floating origin yet. Positions are absolute float32 metres: comfortable for
+  a few thousand kilometres, coarse beyond that. A true round-the-world flight
+  needs the floating origin, which is the next step.
+- The world → lat/lon mapping is a local equirectangular projection around
+  Niihau. It is right over Hawaii and stretches with distance, so ground far
+  from the box is positioned approximately even though its heights are real.
+- Expect pop-in at the streaming frontier: a new tile appears when its fetch
+  lands, and on a bad connection that can be a visible wall of ground filling in.
+- The home box still defines where the fleet lives. A different region means
+  re-baking with `--lat`/`--lon` and checking the probe report: the airfield and
+  the eight anchorages are fixed, and that is what constrains where the box can
+  go. Streaming does not lift that constraint — it only means you can leave.

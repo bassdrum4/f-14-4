@@ -66,6 +66,7 @@
     "test:aircraft:browser": "node scripts/diag-aircraft-browser.mjs"
   },
   "dependencies": {
+    "lerc": "^4.3.0",
     "peerjs": "^1.5.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
