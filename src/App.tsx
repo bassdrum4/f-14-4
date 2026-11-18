@@ -3,6 +3,7 @@ import { Sim } from "./sim/engine";
 import { UiRoot } from "./ui/menus";
 import { loadSettings, saveSettings, type Settings } from "./settings";
 import { createFlightAnalytics } from "./analytics";
+import { flushFeedback } from "./feedback/feedback";
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -25,6 +26,15 @@ export default function App() {
       g.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // A report the collector could not take is queued in localStorage, and the
+  // form tells the pilot it will retry. Nothing opens the feedback panel every
+  // session, so the queue has to be retried once per app start or those reports
+  // sit there forever. flushFeedback shares one in-flight run, so StrictMode's
+  // second pass costs nothing.
+  useEffect(() => {
+    void flushFeedback();
   }, []);
 
   // The room can ask for a setting — today the host's mission profile, so every
