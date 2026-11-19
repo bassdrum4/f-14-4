@@ -17,8 +17,8 @@ anchorage depths and every mission are exactly as they were.
 | Cutting | unknown (2026-11) elevation, from open DEM tiles |
 
 The fixed airfield plateau sits on ground that is **139 m** in the real data
-against its 140 m design height, so flattening it is invisible. All eight carrier
-anchorages fall in open water 513–2,594 m deep, so the anchorage carve is a no-op
+against its 140 m design height, so flattening it is invisible. The carrier
+anchorage falls in open water 513–2,594 m deep, so the anchorage carve is a no-op
 too. That is why this box was chosen: the world layout is untouched.
 
 The sun model already used `HOME_SITE` at 21.92 N, 159.47 W, so daylight in the

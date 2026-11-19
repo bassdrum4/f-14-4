@@ -1,10 +1,12 @@
 // Moving carrier geometry/physics, catapult launches and immutable seabed.
 import { strict as assert } from 'node:assert';
 import { Scene, Vector3, Quaternion } from 'three';
-import { ARCHIPELAGO, carriers, setWorldSeed, DEFAULT_SEED, terrainHeight, setFleetTime, fleetPoseAt, fleetVelocityAt, FLEET_SPEED, worldToDeck, deckAxes } from '../src/sim/world';
+import { ARCHIPELAGO, carriers, setWorldSeed, DEFAULT_SEED, terrainHeight, groundAt, setFleetTime, fleetPoseAt, fleetVelocityAt, FLEET_SPEED, worldToDeck, deckAxes } from '../src/sim/world';
+import { buildEscort, STRIKE_GROUP } from '../src/render/strikeGroup';
 import { spawnAircraft, stepAircraft, carryDeckPose } from '../src/sim/flight';
 import { AIRCRAFT_LIST } from '../src/sim/aircraft';
 import { Dogfight } from '../src/sim/dogfight';
+import { CV_CLOSE_SPEED } from '../src/sim/combat/tuning';
 import { ExplosionField } from '../src/render/effects';
 import { Sim } from '../src/sim/engine';
 import { defaultSettings } from '../src/settings';
@@ -64,7 +66,7 @@ for (const h of [0, 30, 90, 180, 270, 359]) {
 console.log('PASS heading-up map positions at cardinal and oblique headings');
 
 const before = { ...carriers()[0] }, point = new Vector3(before.x + 40, 22, before.z + 60), q = new Quaternion();
-const v = fleetVelocityAt(0, 100, fleetPoseAt(0, 100).x, fleetPoseAt(0, 100).z);
+const v = fleetVelocityAt(0, 100);
 const a = fleetPoseAt(0, 100), b = fleetPoseAt(0, 100.001);
 assert(Math.abs(v.x - (b.x - a.x) / .001) < .001 && Math.abs(v.z - (b.z - a.z) / .001) < .001);
 setFleetTime(50); const offset = worldToDeck(before, point.x, point.z); carryDeckPose(point, q, before, carriers()[0]);
@@ -78,7 +80,9 @@ const player = spawnAircraft('carrier'); df.begin(player);
 const origin = { ...df.cv.def };
 for (let i = 0; i < 1800; i++) { player.time += 1 / 60; df.step(1 / 60, player, false); }
 const moved = Math.hypot(df.cv.def.x - origin.x, df.cv.def.z - origin.z);
-assert(moved > 100 && moved < 190); assert(df.bandits.length > 0, 'moving hostile carrier still launches its wave');
+assert(moved > CV_CLOSE_SPEED * 15 && moved <= CV_CLOSE_SPEED * 30, `the enemy closes slowly (${moved.toFixed(0)} m in 30 s)`);
+assert.equal(df.cv.def.headingDeg, origin.headingDeg, 'the enemy steams a straight line — no rudder');
+assert(df.bandits.length > 0, 'moving hostile carrier still launches its wave');
 for (const bandit of df.bandits) if (bandit.catT >= 0) {
   const delta = Math.hypot(bandit.pos.x - df.cv.def.x, bandit.pos.z - df.cv.def.z);
   assert(delta < 250, 'launching plane stays attached to the moving ship');
@@ -88,7 +92,7 @@ df.cv.def.x += 80; df.cv.def.headingDeg += 15; df.setCatPose(bandit, df.cv.def.d
 const local = worldToDeck(df.cv.def, bandit.pos.x, bandit.pos.z);
 assert(Math.abs(local[1] - 20) < 1e-6, 'catapult stroke follows the carrier while it turns');
 df.dispose(); setFleetTime(0);
-console.log('PASS enemy closes slowly, launches planes, and keeps catapult strokes attached');
+console.log('PASS enemy steams straight and slowly, launches planes, and keeps catapult strokes attached');
 
 // Exercise the real engine boundary as well as the underlying flight model.
 for (const craft of AIRCRAFT_LIST) {
@@ -98,17 +102,43 @@ for (const craft of AIRCRAFT_LIST) {
     state: spawnAircraft('carrier', 0, craft.id), settings: { ...defaultSettings(), aircraft: craft.id },
     phase: 'flying', netState: { status: 'idle' }, poseOut: {}, acc: 0, crashSeq: null, dfArmed: false,
     prevPos: new Vector3(), prevQuat: new Quaternion(), fleetClock: 0,
-    input: { sample: () => idle }, renderer: { updateFleet() {}, setWind() {}, takeThunder: () => 0 },
+    input: { sample: () => idle }, renderer: { updateFleet() {}, setStrikeGroup() {}, setWind() {}, takeThunder: () => 0 },
     df: new Dogfight(scene, new ExplosionField(scene, 'low')),
     updateJetPose() {}, updateAudio() {}, updateHud() {},
   });
+  const parked = sim.state.pos.clone();
   const initial = worldToDeck(carriers()[0], sim.state.pos.x, sim.state.pos.z);
   for (let i = 1; i <= 3600; i++) { sim.moveFleet(i / 60); sim.stepSim(1 / 60); }
   assert.equal(sim.state.result, null);
-  const local = worldToDeck(carriers()[0], sim.state.pos.x, sim.state.pos.z);
-  assert(Math.hypot(local[0] - initial[0], local[1] - initial[1]) < 2, craft.id + ': engine integration preserves parked deck position');
-  const pose = sim.buildPose(), v = fleetVelocityAt(0, 60, sim.state.pos.x, sim.state.pos.z);
-  assert(Math.abs(pose.vx - sim.state.vel.x - v.x) < 1e-8 && Math.abs(pose.vz - sim.state.vel.z - v.z) < 1e-8);
+  const pose = sim.buildPose();
+  if (craft.surfaceVessel) {
+    // A destroyer floats in the water rather than on the deck: the carrier
+    // steams past her and she holds her own station, with no deck velocity
+    // riding her pose.
+    assert(Math.hypot(sim.state.pos.x - parked.x, sim.state.pos.z - parked.z) < .5, craft.id + ': surface hull holds its own station');
+    assert(Math.abs(pose.vx - sim.state.vel.x) < 1e-8 && Math.abs(pose.vz - sim.state.vel.z) < 1e-8, craft.id + ': no deck velocity on a floating hull');
+  } else {
+    const local = worldToDeck(carriers()[0], sim.state.pos.x, sim.state.pos.z);
+    assert(Math.hypot(local[0] - initial[0], local[1] - initial[1]) < 2, craft.id + ': engine integration preserves parked deck position');
+    const v = fleetVelocityAt(0, 60);
+    assert(Math.abs(pose.vx - sim.state.vel.x - v.x) < 1e-8 && Math.abs(pose.vz - sim.state.vel.z - v.z) < 1e-8);
+  }
   sim.df.dispose(); console.log('PASS ' + craft.id + ': engine movement and transmitted deck velocity');
+}
+
+// The campaign's strike group rides the same straight leg: every escort keeps
+// station on open water, clear of the carrier's hull, and builds headless.
+{
+  setFleetTime(0);
+  const c = carriers()[0], { fwd, right } = deckAxes(c.headingDeg);
+  for (const spec of STRIKE_GROUP) {
+    const x = c.x + fwd[0] * spec.along + right[0] * spec.across;
+    const z = c.z + fwd[1] * spec.along + right[1] * spec.across;
+    const range = Math.hypot(x - c.x, z - c.z);
+    assert.equal(groundAt(x, z).kind, 'water', spec.name + ': station is open water');
+    assert(range > 600 && range < 2600, spec.name + ': station keeps clear of the deck');
+    assert(buildEscort(spec).children.length > 5, spec.name + ': escort has a hull and a deckhouse');
+  }
+  console.log('PASS the strike group keeps station on open water around the carrier');
 }
 setFleetTime(0);

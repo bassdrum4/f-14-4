@@ -25,7 +25,7 @@ function setup(result: SimResult | null, host = true, aircraft: AircraftId = 'to
   sim.battleTickAt = now; sim.battleReadyAt = 0;
   sim.battleRecoveryLife = -1; sim.battleRecoveryAt = 0;
   sim.phase = 'flying'; sim.crashSeq = null; sim.acc = 0;
-  sim.state = spawnAircraft('carrier', 2, aircraft); sim.state.result = result;
+  sim.state = spawnAircraft('carrier', 0, aircraft); sim.state.result = result;
   sim.state.time = 42; sim.state.flightTime = 38;
   sim.spawnCarrier = 0;
   sim.prevPos = new Vector3(); sim.prevQuat = new Quaternion();
@@ -71,16 +71,16 @@ for (const result of [
   assert.equal(sim.phase, 'flying');
   assert.equal(sim.state.time, 42); assert.equal(sim.state.flightTime, 38);
   assert.equal(sim.df.hud(sim.state).missiles, 2); assert.equal(sim.df.hud(sim.state).bombs, 6);
-  // Recovering writes the launch point into the gamestate: a wire/landing on
-  // boat 3 leaves the pilot launching from boat 3, the runway from the runway.
+  // Recovering writes the launch point into the gamestate: a deck recovery
+  // leaves the pilot launching from the carrier, the runway from the runway.
   if (result.title === 'RUNWAY LANDING') {
     assert.equal(sim.settings.launchKind, 'airfield', 'a runway recovery moves home to the runway');
   } else {
     assert.equal(sim.settings.launchKind, 'carrier');
-    assert.equal(sim.settings.launchCarrier, 2, 'a deck recovery moves home to that deck');
+    assert.equal(sim.settings.launchCarrier, 0, 'a deck recovery moves home to the fleet carrier');
   }
   if (result.title !== 'RUNWAY LANDING') {
-    assert.equal(sim.state.catPhase, 'ready'); assert.equal(sim.state.catCarrier, 2);
+    assert.equal(sim.state.catPhase, 'ready'); assert.equal(sim.state.catCarrier, 0);
     sim.state.throttle = sim.state.rpm = 1;
     stepAircraft(sim.state, { pitch: 0, roll: 0, yaw: 0, throttleUp: false, throttleDown: false, trimUp: false, trimDown: false, brake: false, catHold: true }, 1 / 120);
     assert.equal(sim.state.catPhase, 'charging', 'a recovered carrier pilot can relaunch');

@@ -158,8 +158,8 @@ Controls, Graphics, Audio and Interface tabs.
   same.
 - Head-to-head uses the existing room codes and PeerJS connection. Open a room,
   have another pilot join, then the host selects Head-to-head and Start Air Battle.
-  Pilots spawn airborne apart on **two carriers drawn from the match id** (one
-  boat per side, so both ends of the room agree without another packet), have
+  Pilots spawn airborne apart around **the fleet carrier, on a spawn ring drawn
+  from the match id** (so both ends of the room agree without another packet), have
   five seconds of protection, and respawn three seconds after a death. A death
   costs the hull but **not the ordnance**: only landing re-arms the racks. Incoming tracers and missile plumes are visible, with a missile warning.
   Completed carrier/runway recoveries preserve the current life and score,

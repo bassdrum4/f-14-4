@@ -564,7 +564,8 @@ await step("spectators can take a cockpit seat in the current room sortie", () =
     else sim.followLaunch("carrier", 1, profile);
     check("the current launch is remembered while watching", sim.lastRoomLaunch?.profile === profile);
     sim.setSpectating(false);
-    check(`${returningPilot ? "a returning pilot" : "a spectator joiner"} launches on the room's boat`, launches.length === 1 && launches[0].carrier === 1 && launches[0].mission === "carrier");
+    check(`${returningPilot ? "a returning pilot" : "a spectator joiner"} launches on the room's boat`,
+      launches.length === 1 && launches[0].carrier === 0 && launches[0].mission === "carrier");
     check("the room's operation identity is preserved", sim.operationId === profile.id);
     check("the own-aircraft mesh is restored", sim.renderer.jetGroup.visible && !sim.spectating);
     // A normal duplicate host launch still must not reset an airborne pilot.

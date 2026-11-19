@@ -1,3 +1,18 @@
+## Unreleased — One carrier, straight-line steaming
+
+- Reduce the fleet to a single carrier, ARCHON, holding station in the north-east
+  approaches, and steam her on a straight, slow leg (three knots, no rudder)
+  instead of the old turning oval patrol.
+- Give the hostile carrier the same straight-line helm at about six knots, and
+  start the campaign's flagship 26 km out so stage 3 opens with her closing from
+  over the horizon.
+- Steam a carrier strike group with the campaign's carrier: a Ticonderoga-class
+  cruiser, two Arleigh Burke destroyers, a frigate and a fast combat support ship
+  in formation around her.
+- With one hull left, head-to-head drops the per-side carrier pair: both sides
+  share ARCHON's deck, and a repair claim no longer has to match an assigned
+  station.
+
 ## 2.12.0 — Lightweight flight analytics
 
 - Shares Bored's protected insert-only Supabase gameplay telemetry for sorties, playtime, modes, aircraft, results, and limited performance milestones.

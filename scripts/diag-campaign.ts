@@ -109,6 +109,10 @@ test("stage 2 hands over to stage 3, which stands up the opposing carrier", () =
   assert.equal(df.operationState!.phase, "scout");
   assert.equal(df.scenario, "dogfight", "the last stage is an air fight");
   assert(d.cv, "the opposing carrier is on the water");
+  const home = carriers()[0];
+  const range = Math.hypot(d.cv.def.x - home.x, d.cv.def.z - home.z);
+  assert(range > 20000, `the opposing flagship stands up far out (${Math.round(range / 1000)} km)`);
+  assert.equal(carriers().length, 1, "the task force still sails on one hull");
   assert.equal(d.roleQueue[0], "scout");
   assert(!d.strikeTargets.some((t: any) => t.role === "cargo"), "the convoy is gone");
   df.dispose();

@@ -142,22 +142,12 @@ console.log("launch point — settings + gamestate");
 console.log("launch point — which surface the sortie ended on");
 {
   const fleet = carriers();
-  check("the fleet has more than one boat", fleet.length > 1, String(fleet.length));
+  check("the fleet is one carrier", fleet.length === 1, String(fleet.length));
 
-  // Parked on the third boat: the deck under the jet names the launch point,
-  // whatever boat the sortie originally launched from.
-  const onThird = spawnAircraft("carrier", 2);
-  const third = recoveryLaunchPoint(onThird, 0);
-  check("a jet on boat 3 reports boat 3", third?.kind === "carrier" && third.carrier === 2, JSON.stringify(third));
-
-  // Landed away from home (the dogfight case): the deck it sits on wins.
-  const moved = spawnAircraft("carrier", 0);
-  const other = fleet[2];
-  moved.pos.set(other.x, other.deckY + 1.2, other.z);
-  moved.groundKind = "deck";
-  moved.airborne = false;
-  const movedPoint = recoveryLaunchPoint(moved, 0);
-  check("a landing on another boat moves home to it", movedPoint?.carrier === 2, JSON.stringify(movedPoint));
+  // Parked on the carrier: the deck under the jet names the launch point.
+  const onDeck = spawnAircraft("carrier", 0);
+  const deck = recoveryLaunchPoint(onDeck, 0);
+  check("a jet on the carrier reports the carrier", deck?.kind === "carrier" && deck.carrier === 0, JSON.stringify(deck));
 
   // The shore runway is its own launch point.
   const onRunway = spawnAircraft("airfield", 0);
@@ -165,20 +155,20 @@ console.log("launch point — which surface the sortie ended on");
   check("the runway reports an airfield launch", runwayPoint?.kind === "airfield", JSON.stringify(runwayPoint));
 
   // A death is not a landing: the deck on file stands.
-  const dead = spawnAircraft("carrier", 1);
+  const dead = spawnAircraft("carrier", 0);
   dead.crashFall = true;
   dead.result = { kind: "crash", title: "SHOT DOWN", detail: "" };
-  check("a shot-down jet changes nothing", recoveryLaunchPoint(dead, 1) === null);
+  check("a shot-down jet changes nothing", recoveryLaunchPoint(dead, 0) === null);
 }
 
 console.log("launch point — a real trap reads the deck it caught on");
 {
-  const boat = 2;
+  const boat = 0;
   const c = carriers()[boat];
   const aim = stripPoint(c, GLIDE_AIM_S, 0);
   const start = stripPoint(c, GLIDE_AIM_S - 2600, 0);
   const dir = aim.clone().sub(start).setY(0).normalize();
-  // Launched from boat 1, flown onto boat 3: the trap must name boat 3.
+  // Flown onto the carrier's deck: the trap must name that deck.
   const st = spawnAircraft("carrier", 0);
   st.pos.copy(start);
   st.pos.y = c.deckY + 2600 * Math.tan(GLIDE_DEG * RTD);
@@ -212,7 +202,7 @@ console.log("launch point — a real trap reads the deck it caught on");
   }
 
   console.log(`      result ${st.result?.kind ?? "none"} ${st.result?.title ?? ""} on deck ${st.deckRoll ?? "-"}`);
-  check("the scripted approach ends in a trap on boat 3", st.result?.kind === "wire", `${st.result?.kind ?? "none"}`);
+  check("the scripted approach ends in a trap on the carrier", st.result?.kind === "wire", `${st.result?.kind ?? "none"}`);
   check("the jet is sitting on that boat's deck", st.groundKind === "deck", st.groundKind);
   const point = recoveryLaunchPoint(st, 0);
   check(
@@ -247,11 +237,13 @@ console.log("launch point — a real runway landing");
 console.log("launch point — the engine writes it down (real stepSim, no WebGL)");
 {
   // Same trick as diag-battle-recovery: a real Sim prototype with only the
-  // state this path touches. The pilot launches from boat 1, ends the sortie
-  // parked on boat 3, and the engine must both move home and tell the UI.
+  // state this path touches. The pilot ends the sortie parked on the fleet
+  // carrier, and the engine must both move home and tell the UI.
   const sim = Object.create(Sim.prototype) as Record<string, any>;
   const seen: Settings[] = [];
-  sim.settings = { ...defaultSettings(), missionMode: "cruise" };
+  // The deck on file is the shore runway, so landing on the carrier is a real
+  // change the engine has to write down (and tell the UI about).
+  sim.settings = { ...defaultSettings(), missionMode: "cruise", launchKind: "airfield" };
   sim.settingsListeners = new Set();
   sim.phaseListeners = new Set();
   (sim.settingsListeners as Set<(s: Settings) => void>).add((s) => seen.push(s));
@@ -267,7 +259,7 @@ console.log("launch point — the engine writes it down (real stepSim, no WebGL)
   sim.rig = { resetFollow: () => {} };
   sim.renderer = { setWind() {}, takeThunder: () => 0 };
   sim.updateJetPose = sim.updateAudio = sim.updateHud = () => {};
-  sim.state = spawnAircraft("carrier", 2);
+  sim.state = spawnAircraft("carrier", 0);
   sim.state.time = 60;
   sim.state.flightTime = 60;
   sim.state.result = { kind: "landing", title: "DECK LANDING", detail: "Recovered" };
@@ -276,12 +268,12 @@ console.log("launch point — the engine writes it down (real stepSim, no WebGL)
 
   sim.stepSim(1 / 120);
 
-  check("the engine moves home to the boat it landed on", sim.settings.launchCarrier === 2,
+  check("the engine moves home to the boat it landed on", sim.settings.launchCarrier === 0,
     String(sim.settings.launchCarrier));
   check("...and says the launch kind is a carrier", sim.settings.launchKind === "carrier", sim.settings.launchKind);
-  check("...and tells the UI (which stores it) exactly once", seen.length === 1 && seen[0].launchCarrier === 2,
+  check("...and tells the UI (which stores it) exactly once", seen.length === 1 && seen[0].launchCarrier === 0,
     `listeners fired ${seen.length}×`);
-  check("the parked sortie keeps that boat for its relaunch", sim.spawnCarrier === 2 && sim.mission === "carrier",
+  check("the parked sortie keeps that boat for its relaunch", sim.spawnCarrier === 0 && sim.mission === "carrier",
     `${sim.spawnCarrier}/${sim.mission}`);
 }
 
@@ -293,8 +285,6 @@ console.log("launch point — cloud restore takes effect without a reload");
   sim.input = { applySettings() {} }; sim.audio = { setVolume() {} };
   sim.renderer = { setAircraft() {} }; sim.df = { setAircraft() {} }; sim.net = { setAircraft() {} };
   sim.prevPos = new Vector3(); sim.prevQuat = new Quaternion(); sim.updateJetPose = () => {};
-  sim.applySettings({ ...sim.settings, launchCarrier: 2 });
-  check("pulling a saved carrier moves the current home deck", sim.spawnCarrier === 2 && sim.state.catCarrier === 2);
   sim.applySettings({ ...sim.settings, launchKind: "airfield" });
   check("pulling a saved runway re-parks the current aircraft", sim.mission === "airfield" && sim.state.groundKind === "runway");
   const airborne = sim.state;

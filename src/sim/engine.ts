@@ -1,5 +1,5 @@
 import { RemoteWeapons } from "../render/remoteWeapons";
-import { BattleReferee, battleCarrierPair, type BattleAction, type BattleSnapshot, type BattleShot, type BattleMissiles } from "../net/versus";
+import { BattleReferee, type BattleAction, type BattleSnapshot, type BattleShot, type BattleMissiles } from "../net/versus";
 import { specFor, type AircraftId } from "./aircraft";
 import { atmosphere } from "./atmosphere";
 import { shipGunQuaternion, shipSpawn } from "./surface";
@@ -1803,6 +1803,9 @@ export class Sim {
       carryDeckPose(this.prevPos, this.prevQuat, before, ship);
       st.headingDeg = headingOfQuat(st.quat);
     }
+    // The campaign flies from a carrier strike group; every other sortie has
+    // the flagship on her own. Cheap: the renderer only flips visibility.
+    this.renderer.setStrikeGroup(this.settings.missionMode === "campaign");
     this.renderer.updateFleet();
     if (this.phase !== "flying") { this.updateJetPose(1); this.updateHud(); }
   }
@@ -1864,12 +1867,12 @@ export class Sim {
     this.battleRecoveryLife = -1;
     const ids = [this.netState.self, ...this.netState.pilots.filter(p => !p.spectator).map(p => p.id)].sort();
     const slot = Math.max(0, ids.indexOf(this.netState.self));
-    // The pair rides the match id; the host retains each pilot's side in the
-    // scoreboard so joins and departures never change an assigned station.
+    // One hull in the world, so both sides share her. The host still retains
+    // each pilot's side in the scoreboard: it decides the spawn ring, and joins
+    // and departures never change an assigned station.
     const fleet = carriers();
-    const pair = battleCarrierPair(Math.floor(this.battle.match) || 0, fleet.length);
-    const side = this.battleSide(this.netState.self) ?? slot % pair.length;
-    const carrierIndex = pair[side] % fleet.length;
+    const side = this.battleSide(this.netState.self) ?? slot % 2;
+    const carrierIndex = 0;
     const center = fleet[carrierIndex];
     const ring = ids.filter(id => this.battleSide(id) === side);
     const ringSlot = Math.max(0, ring.indexOf(this.netState.self));
@@ -1877,11 +1880,9 @@ export class Sim {
     this.state = this.newState("carrier", carrierIndex);
     const st = this.state;
     st.pos.set(center.x + Math.cos(angle) * 3000, 1600 + slot * 60, center.z + Math.sin(angle) * 3000);
-    // Nose on the contested middle rather than on your own boat: both sides
-    // start flying at each other instead of turning away from their own deck.
-    const midX = (fleet[pair[0]].x + fleet[pair[1]].x) / 2;
-    const midZ = (fleet[pair[0]].z + fleet[pair[1]].z) / 2;
-    const direction = new THREE.Vector3(midX - st.pos.x, 0, midZ - st.pos.z).normalize();
+    // Nose on the contested middle: with one hull she is the middle, so a
+    // head-to-head spawn ring converges on the boat instead of dispersing.
+    const direction = new THREE.Vector3(center.x - st.pos.x, 0, center.z - st.pos.z).normalize();
     const heading = Math.atan2(direction.x, -direction.z);
     st.quat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -heading);
     st.vel.copy(direction).multiplyScalar(210); st.speed = 210;
@@ -1948,7 +1949,7 @@ export class Sim {
       // A repair claim must agree with the host's view of the aircraft: near
       // a friendly deck/runway and slow enough to have completed a recovery.
       if (specFor(aircraft ?? "tomcat").surfaceVessel) {
-        if (!this.canServiceShip(from, velocity.length(), sender)) return;
+        if (!this.canServiceShip(from, velocity.length())) return;
       } else if ((surface.kind !== "deck" && surface.kind !== "runway") || Math.abs(from.y - surface.y) > 6 || velocity.length() > 20) return;
     }
     if (this.battleReferee.action(sender, action, performance.now() / 1000, range, specFor(aircraft ?? "tomcat").gunDamage)) {
@@ -2042,7 +2043,7 @@ export class Sim {
     p.vx = st.vel.x; p.vy = st.vel.y; p.vz = st.vel.z;
     const deck = st.catPhase === "firing" ? carriers()[st.catCarrier] : st.onGround && st.groundKind === "deck" ? carrierAt(st.pos.x, st.pos.z) : null;
     if (deck) {
-      const v = fleetVelocityAt(carriers().indexOf(deck), this.fleetClock ?? 0, st.pos.x, st.pos.z);
+      const v = fleetVelocityAt(carriers().indexOf(deck), this.fleetClock ?? 0);
       p.vx += v.x; p.vz += v.z;
     }
     p.speed = st.speed;
@@ -2315,12 +2316,12 @@ export class Sim {
       // Ground integration uses the moving ship's frame. Cross that boundary
       // once on departure/arrival, preserving the ship's launch momentum.
       if (deck && !this.state.onGround && this.state.catPhase !== "firing") {
-        const v = fleetVelocityAt(carriers().indexOf(deck), this.fleetClock ?? 0, this.state.pos.x, this.state.pos.z);
+        const v = fleetVelocityAt(carriers().indexOf(deck), this.fleetClock ?? 0);
         this.state.vel.x += v.x; this.state.vel.z += v.z;
       } else if (!deck && this.state.onGround && this.state.groundKind === "deck") {
         const landed = carrierAt(this.state.pos.x, this.state.pos.z);
         if (landed) {
-          const v = fleetVelocityAt(carriers().indexOf(landed), this.fleetClock ?? 0, this.state.pos.x, this.state.pos.z);
+          const v = fleetVelocityAt(carriers().indexOf(landed), this.fleetClock ?? 0);
           this.state.vel.x -= v.x; this.state.vel.z -= v.z;
         }
       }
@@ -2450,17 +2451,12 @@ export class Sim {
     return slot < 0 ? null : slot % 2;
   }
 
-  /** Local stores and host-owned repairs must agree on the friendly station. */
-  private canServiceShip(pos: THREE.Vector3, speed: number, pilot = this.netState.self): boolean {
+  /** Local stores and host-owned repairs must agree on the friendly station.
+   *  There is one hull, shared by both sides in a head-to-head, so proximity is
+   *  the whole test. */
+  private canServiceShip(pos: THREE.Vector3, speed: number): boolean {
     if (![pos.x, pos.y, pos.z, speed].every(Number.isFinite) || speed > 2 || Math.abs(pos.y) > 3 || groundAt(pos.x, pos.z).kind !== "water") return false;
-    let homes = carriers();
-    if (this.battleActive) {
-      const side = this.battleSide(pilot);
-      if (side === null) return false;
-      const pair = battleCarrierPair(Math.floor(this.battle.match) || 0, homes.length);
-      homes = [homes[pair[side]]];
-    }
-    return homes.some(c => Math.hypot(c.x - pos.x, c.z - pos.z) <= 1000);
+    return carriers().some(c => Math.hypot(c.x - pos.x, c.z - pos.z) <= 1000);
   }
 
   private stepShipRearm(held: boolean, dt: number): void {

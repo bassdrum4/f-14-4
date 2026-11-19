@@ -90,12 +90,16 @@ export const WAVE_MAX = 5;
 export const CV_NAME = "AGGRESSOR";
 export const CV_HP = 100;
 export const CV_START_DIST = 7200; // m — where the boat shows up on the horizon
+// The campaign's flagship is the enemy's main body: she starts over the horizon
+// (and closes on her own hull line, see carrier.ts) so stage 3 opens with the
+// strike group still far out and a long run-in ahead of the fight.
+export const CV_CAMPAIGN_DIST = 26000; // m — campaign stage 3 start range
 export const CV_LAUNCH_RANGE = 7800; // m — inside this, it can launch (it starts in range)
 export const CV_LAUNCH_HOLD = 40; // s — but never sit on a wave longer than this
-// A slow approach (~12 kt), with enough motion to lead a bombing run.
-export const CV_CLOSE_SPEED = 6; // m/s
+// A slow approach (about six knots) straight down her line: no rudder, no
+// circling, just a hull holding a steady course so the approach can be led.
+export const CV_CLOSE_SPEED = 3; // m/s
 export const CV_STANDOFF = 2800; // m — hold this far off the player
-export const CV_TURN_DEG = 0.45; // deg/s rudder (a 300 m hull does not pivot)
 export const CV_FRIENDLY_CLEAR = 2200; // m — never steam into a friendly anchorage
 export const CV_FIRST_LAUNCH = 2.2; // s after a wave is called that the first jet rolls
 export const CV_LAUNCH_GAP = 6; // s between aircraft off the two cats in an aggressor wave

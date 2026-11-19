@@ -6,9 +6,9 @@ import { spawnAircraft } from "../src/sim/flight";
 import { Sim } from "../src/sim/engine";
 import { ExplosionField } from "../src/render/effects";
 import { launchNavalMissile, navalLock, navalTarget } from "../src/sim/combat/naval";
-import { DEFAULT_SEED, carriers, setWorldSeed } from "../src/sim/world";
+import { DEFAULT_SEED, setWorldSeed } from "../src/sim/world";
 import { shipSpawn } from "../src/sim/surface";
-import { BattleReferee, battleCarrierPair } from "../src/net/versus";
+import { BattleReferee } from "../src/net/versus";
 import { defaultSettings } from "../src/settings";
 
 let failures = 0;
@@ -110,16 +110,16 @@ function serviceSim(host = true) {
     remoteWeapons: {}, net: { callsign: "ALPHA", publishBattle() {} }, remoteFleet: { combatTargets: () => [] } });
   sim.updateHud = () => {};
   df.beginVersus(player); df.missilesLeft = 2; df.setBattleHull(10);
-  return { sim, ref, df, player, pair: battleCarrierPair(17, carriers().length) };
+  return { sim, ref, df, player };
 }
 
-test("versus service rejects enemy bases locally and at the host; own base repairs without a new life", () => {
-  const { sim, ref, df, player, pair } = serviceSim();
+test("versus service needs the fleet carrier locally and at the host; the deck repairs without a new life", () => {
+  const { sim, ref, df, player } = serviceSim();
   const recover = { kind: "recover", match: 17, seq: 3, life: 1 };
-  player.pos.copy(shipSpawn(pair[1]));
-  sim.stepShipRearm(true, 3.1); assert.equal(df.missilesLeft, 2);
+  player.pos.copy(shipSpawn(0)).add(new Vector3(3000, 0, 3000));
+  sim.stepShipRearm(true, 3.1); assert.equal(df.missilesLeft, 2, "no service away from the deck");
   sim.receiveBattleAction("a", recover); assert.equal(ref.snapshot(performance.now() / 1000).pilots[0].hp, 10);
-  player.pos.copy(shipSpawn(pair[0]));
+  player.pos.copy(shipSpawn(0));
   sim.stepShipRearm(false, .1); sim.stepShipRearm(true, 3.1);
   assert.equal(df.missilesLeft, 32); assert.equal(df.hull, 10, "hull waits for host acknowledgement");
   sim.receiveBattleAction("a", { ...recover, seq: 4 });
@@ -129,20 +129,19 @@ test("versus service rejects enemy bases locally and at the host; own base repai
   df.dispose();
 });
 
-test("the host validates a remote destroyer's assigned base, speed and altitude", () => {
-  const { sim, ref, df, pair } = serviceSim();
-  const pos = shipSpawn(pair[0]), vel = new Vector3();
+test("the host validates a remote destroyer's speed and altitude before repairing", () => {
+  const { sim, ref, df } = serviceSim();
+  const pos = shipSpawn(0), vel = new Vector3();
   sim.netState.pilots[0].aircraft = "destroyer";
   sim.remoteFleet.combatTargets = () => [{ id: "b", pos, vel }];
   ref.action("a", { kind: "hit", weapon: "missile", match: 17, seq: 2, life: 1, victim: "b", victimLife: 1 }, performance.now() / 1000, 100);
   const hp = () => ref.snapshot(performance.now() / 1000).pilots.find(p => p.id === "b")!.hp;
-  sim.receiveBattleAction("b", { kind: "recover", match: 17, seq: 3, life: 1 }); assert.equal(hp(), 10);
-  pos.copy(shipSpawn(pair[1])); vel.x = 3;
-  sim.receiveBattleAction("b", { kind: "recover", match: 17, seq: 4, life: 1 }); assert.equal(hp(), 10);
+  vel.x = 3;
+  sim.receiveBattleAction("b", { kind: "recover", match: 17, seq: 3, life: 1 }); assert.equal(hp(), 10, "under way too fast to service");
   vel.x = 0; pos.y = 100;
-  sim.receiveBattleAction("b", { kind: "recover", match: 17, seq: 5, life: 1 }); assert.equal(hp(), 10);
+  sim.receiveBattleAction("b", { kind: "recover", match: 17, seq: 4, life: 1 }); assert.equal(hp(), 10, "airborne cannot service");
   pos.y = 1;
-  sim.receiveBattleAction("b", { kind: "recover", match: 17, seq: 6, life: 1 }); assert.equal(hp(), 100);
+  sim.receiveBattleAction("b", { kind: "recover", match: 17, seq: 5, life: 1 }); assert.equal(hp(), 100);
   df.dispose();
 });
 
@@ -199,7 +198,7 @@ test("naval collision and splash cannot report a hit on the locked pilot's new l
 });
 
 test("host-assigned service and spawn sides survive joins, departures and host takeover", () => {
-  const { sim, ref, player, pair, df } = serviceSim();
+  const { sim, ref, player, df } = serviceSim();
   const now = performance.now() / 1000;
   const side = (id: string) => ref.snapshot(now).pilots.find(p => p.id === id)!.side;
   assert.equal(side("a"), 0); assert.equal(side("b"), 1);
@@ -207,22 +206,20 @@ test("host-assigned service and spawn sides survive joins, departures and host t
   sim.netState.pilots.unshift({ id: "0", name: "LATE", aircraft: "tomcat" });
   sim.battle = ref.snapshot(now);
   assert.equal(side("a"), 0); assert.equal(side("b"), 1);
-  assert(sim.canServiceShip(shipSpawn(pair[0]), 0, "a"));
-  assert(!sim.canServiceShip(shipSpawn(pair[1]), 0, "a"));
-  assert(sim.canServiceShip(shipSpawn(pair[1]), 0, "b"));
+  assert(sim.canServiceShip(shipSpawn(0), 0, "a"));
+  assert(sim.canServiceShip(shipSpawn(0), 0, "b"));
   // Exercise the actual spawn selection after slot parity changed.
   sim.newState = (_mission: string, carrier: number) => spawnAircraft("carrier", carrier, "destroyer");
   sim.endPod = () => {}; sim.rig = { resetFollow() {} }; sim.remoteWeapons = { clear() {} };
   sim.prevPos = new Vector3(); sim.prevQuat = new Quaternion(); sim.motionEpoch = 0;
   sim.spawnBattleAircraft(true);
-  assert.equal(sim.state.catCarrier, pair[0]);
+  assert.equal(sim.state.catCarrier, 0);
   ref.reconcile([{ id: "0", name: "LATE" }, { id: "a", name: "ALPHA" }]);
   sim.netState.pilots = sim.netState.pilots.filter((p: { id: string }) => p.id !== "b");
   const restored = new BattleReferee(); restored.restore(ref.snapshot(now), now);
   sim.battle = restored.snapshot(now);
   assert.equal(sim.battle.pilots.find((p: { id: string }) => p.id === "a").side, 0);
-  assert(sim.canServiceShip(shipSpawn(pair[0]), 0, "a"));
-  assert(!sim.canServiceShip(shipSpawn(pair[1]), 0, "a"));
+  assert(sim.canServiceShip(shipSpawn(0), 0, "a"));
   assert.equal(player.result, null); df.dispose();
 });
 

@@ -132,49 +132,43 @@ export const ARCHIPELAGO: WorldDef = {
     runwayWidth: 48,
     headingDeg: 90, // runway points east
   },
-  carriers: [
-    carrier("ALPHA", 10000, 2000, 135), // due east of the main island
-    carrier("BRAVO", 20000, 9000, 85), // north-east approaches
-    carrier("CHARLIE", -27000, 8000, 125), // far west, off the NW chain
-    carrier("DELTA", -8000, -16000, 275), // south-central basin
-    carrier("ECHO", 6000, 12000, 40), // north of the airfield
-    carrier("FOXTROT", 26000, 14000, 0), // north-east corner
-    carrier("GOLF", 15000, -24000, 275), // southern waters
-    carrier("HOTEL", -17000, 8000, 275), // between the west islands
-  ],
+  // One hull: the task force's flagship, holding station in open water east of
+  // the main island. Her strike group (cruiser, destroyers, frigate and support
+  // ship) keeps the same station; see render/strikeGroup.ts for the formation
+  // that travels with her.
+  carriers: [carrier("ARCHON", 10000, 2000, 135)],
 };
 
 // Anchorages shape terrain permanently; live ship positions must not reshape it.
 const activeWorld: WorldDef = { ...ARCHIPELAGO, carriers: ARCHIPELAGO.carriers.map(c => ({ ...c })) };
 
-/** Gentle oval patrols stay inside each anchorage's guaranteed deep water. */
-export const FLEET_SPEED = 2.57; // m/s, maximum five knots
+/**
+ * The carrier steams one straight, slow leg: no rudder, no circling, no turn.
+ * Her bow stays on the anchorage heading and she eases along it
+ * (`FLEET_LEG` either side of the anchorage) at three knots, so she never
+ * leaves the anchorage's guaranteed deep water and a parked jet never feels the
+ * deck swing underneath it.
+ */
+export const FLEET_SPEED = 1.5; // m/s (about three knots) — the fastest the flagship moves
+export const FLEET_LEG = 220; // m either side of the anchorage along the bow line
 export function fleetPoseAt(index: number, seconds: number): { x: number; z: number; headingDeg: number } {
   const home = ARCHIPELAGO.carriers[index];
-  const { fwd, right } = deckAxes(home.headingDeg);
-  const phase = seconds * FLEET_SPEED / 220;
-  const along = 220 * Math.sin(phase), across = 80 * (1 - Math.cos(phase));
-  const vx = fwd[0] * 220 * Math.cos(phase) + right[0] * 80 * Math.sin(phase);
-  const vz = fwd[1] * 220 * Math.cos(phase) + right[1] * 80 * Math.sin(phase);
+  const { fwd } = deckAxes(home.headingDeg);
+  const along = FLEET_LEG * Math.sin((seconds * FLEET_SPEED) / FLEET_LEG);
   return {
-    x: home.x + fwd[0] * along + right[0] * across,
-    z: home.z + fwd[1] * along + right[1] * across,
-    headingDeg: (Math.atan2(vx, -vz) * 180 / Math.PI + 360) % 360,
+    x: home.x + fwd[0] * along,
+    z: home.z + fwd[1] * along,
+    headingDeg: home.headingDeg,
   };
 }
 
-/** Translation plus yaw velocity at a point on a patrol deck, in world axes. */
-export function fleetVelocityAt(index: number, seconds: number, x: number, z: number): { x: number; z: number } {
-  const home = ARCHIPELAGO.carriers[index], omega = FLEET_SPEED / 220;
-  const phase = seconds * omega, { fwd, right } = deckAxes(home.headingDeg);
-  const a = 220 * Math.cos(phase), b = 80 * Math.sin(phase);
-  const da = -220 * Math.sin(phase) * omega, db = 80 * Math.cos(phase) * omega;
-  const headingRate = (a * db - b * da) / (a * a + b * b);
-  const pose = fleetPoseAt(index, seconds);
-  return {
-    x: (fwd[0] * a + right[0] * b) * omega - headingRate * (z - pose.z),
-    z: (fwd[1] * a + right[1] * b) * omega + headingRate * (x - pose.x),
-  };
+/** Pure translation at a point on the deck: the hull keeps her heading, so
+ *  there is no yaw component to carry a parked aircraft around. */
+export function fleetVelocityAt(index: number, seconds: number): { x: number; z: number } {
+  const home = ARCHIPELAGO.carriers[index], omega = FLEET_SPEED / FLEET_LEG;
+  const { fwd } = deckAxes(home.headingDeg);
+  const v = FLEET_LEG * Math.cos(seconds * omega) * omega;
+  return { x: fwd[0] * v, z: fwd[1] * v };
 }
 
 // ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ import { Dogfight, DOGFIGHT_ARENA, terrainBlocks } from "../src/sim/dogfight";
 import { AIRCRAFT } from "../src/sim/aircraft";
 import { carriers, deckAxes, groundAt } from "../src/sim/world";
 import { ExplosionField } from "../src/render/effects";
+import { CV_CLOSE_SPEED } from "../src/sim/combat/tuning";
 
 let failures = 0;
 function check(name: string, cond: boolean, extra = ""): void {
@@ -165,7 +166,7 @@ let player = airPlayer();
   }
   const p1 = d0.hud(parked);
   check("the boat motors in while the jet is still on the deck",
-    p1.carrier!.distKm < p0.carrier!.distKm - 0.12,
+    p1.carrier!.distKm < p0.carrier!.distKm - (CV_CLOSE_SPEED * 30 / 1000) * 0.6,
     `${p0.carrier!.distKm.toFixed(2)}km -> ${p1.carrier!.distKm.toFixed(2)}km`);
   check("no bandits before the launch", p1.bandits === 0 && p1.carrier!.inbound === 0,
     `bandits=${p1.bandits}`);
@@ -222,7 +223,7 @@ check("the first bandit comes off the deck, not mid-air",
   firstSeen !== null && firstSeen.dist < 500 && firstSeen.y >= 0 && firstSeen.y < 30,
   JSON.stringify(firstSeen));
 check("launches come from the boat's catapults", launchesRolling);
-check("the carrier motors in toward the player", h1.carrier!.distKm < closeStart - 0.035,
+check("the carrier motors in toward the player", h1.carrier!.distKm < closeStart - (CV_CLOSE_SPEED * 12 / 1000) * 0.5,
   `${closeStart.toFixed(2)}km -> ${h1.carrier!.distKm.toFixed(2)}km`);
 check("the cat shot fires the bandit toward the player",
   firstSeen !== null && firstSeen.alongBow > 0.5, `alongBow=${firstSeen?.alongBow.toFixed(2)}`);

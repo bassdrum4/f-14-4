@@ -18,6 +18,7 @@ import {
   CV_CLIMB_TIME,
   CV_CLOSE_SPEED,
   CV_FRIENDLY_CLEAR,
+  CV_CAMPAIGN_DIST,
   CV_HP,
   CV_LAUNCH_GAP,
   CV_LAUNCH_HOLD,
@@ -25,7 +26,6 @@ import {
   CV_NAME,
   CV_STANDOFF,
   CV_START_DIST,
-  CV_TURN_DEG,
 } from "./tuning";
 import { HQ, PITCH_Q, WORLD_UP, disposeSubtree, hash } from "./scratch";
 
@@ -90,23 +90,32 @@ export function spawnEnemyCarrier(ctx: Dogfight, player: AircraftState): void {
   const originX = ctx.authored ? ctx.operationOrigin?.x ?? player.pos.x : player.pos.x;
   const originZ = ctx.authored ? ctx.operationOrigin?.z ?? player.pos.z : player.pos.z;
   const base = hdg + (hash(ctx.wave * 23.7 + 4.1 + (ctx.authored ? ctx.operationSeed : 0)) * 2 - 1) * 0.8;
-  const startDistance = ctx.authored ? 18000 : CV_START_DIST;
+  // The campaign's flagship starts well over the horizon, then closes on a
+  // straight line. The nearer ranges are fallbacks for a world where that far
+  // out is all island; the search below keeps the hull on open water either way.
+  const distances = ctx.operation?.state.kind === "campaign"
+    ? [CV_CAMPAIGN_DIST, CV_CAMPAIGN_DIST - 6000, 18000, CV_START_DIST]
+    : [ctx.authored ? 18000 : CV_START_DIST];
   // Fan out around the first bearing until the whole approach is water —
   // a carrier must not spawn on a hillside, and must not have to cross one.
   // The fan widens to the full circle, so an island dead ahead cannot leave
   // the boat beached.
-  let ang = base;
-  for (let i = 0; i < 17; i++) {
-    if (i > 0) ang = base + (i % 2 === 0 ? 1 : -1) * Math.ceil(i / 2) * 0.42;
-    const x = originX + Math.sin(ang) * startDistance;
-    const z = originZ - Math.cos(ang) * startDistance;
-    const mx = (x + player.pos.x) / 2;
-    const mz = (z + player.pos.z) / 2;
-    // the chain is 60 km across: keep the fan inside it, and outside that
-    // the heightfield is open ocean anyway
-    if (Math.abs(x) > 40000 || Math.abs(z) > 40000) continue;
-    if (groundAt(x, z).kind !== "water" || groundAt(mx, mz).kind !== "water") continue;
-    break;
+  let ang = base, startDistance = distances[distances.length - 1];
+  search: for (const distance of distances) {
+    for (let i = 0; i < 17; i++) {
+      const bearing = i === 0 ? base : base + (i % 2 === 0 ? 1 : -1) * Math.ceil(i / 2) * 0.42;
+      const x = originX + Math.sin(bearing) * distance;
+      const z = originZ - Math.cos(bearing) * distance;
+      const mx = (x + player.pos.x) / 2;
+      const mz = (z + player.pos.z) / 2;
+      // the chain is 60 km across: keep the fan inside it, and outside that
+      // the heightfield is open ocean anyway
+      if (Math.abs(x) > 40000 || Math.abs(z) > 40000) continue;
+      if (groundAt(x, z).kind !== "water" || groundAt(mx, mz).kind !== "water") continue;
+      ang = bearing;
+      startDistance = distance;
+      break search;
+    }
   }
   const x = originX + Math.sin(ang) * startDistance;
   const z = originZ - Math.cos(ang) * startDistance;
@@ -133,18 +142,13 @@ export function stepCarrier(ctx: Dogfight, dt: number, player: AircraftState): v
   // A wingman's boat is steered by the host's packets, not by our own AI.
   if (ctx.mirror) return;
   const def = cv.def;
-  const toX = player.pos.x - def.x;
-  const toZ = player.pos.z - def.z;
-  const dist = Math.hypot(toX, toZ);
+  const dist = Math.hypot(player.pos.x - def.x, player.pos.z - def.z);
 
-  // --- rudder: bring the bow onto the player, slowly ---
-  const { fwd: currentBow } = deckAxes(def.headingDeg);
-  const shoalAhead = groundAt(def.x + currentBow[0] * 900, def.z + currentBow[1] * 900).kind !== "water";
-  const wantHdg = shoalAhead ? (def.headingDeg + 90) % 360 : ((Math.atan2(toX, -toZ) * 180) / Math.PI + 360) % 360;
-  const delta = ((((wantHdg - def.headingDeg) % 360) + 540) % 360) - 180;
-  const maxTurn = CV_TURN_DEG * dt;
-  def.headingDeg =
-    (def.headingDeg + THREE.MathUtils.clamp(delta, -maxTurn, maxTurn) + 360) % 360;
+  // --- helm: hold the line. The boat keeps the heading she spawned on and
+  // steams straight down it; there is no rudder, so no slow circling. A shoal
+  // ahead stops her rather than turning her.
+  const { fwd } = deckAxes(def.headingDeg);
+  const shoalAhead = groundAt(def.x + fwd[0] * 900, def.z + fwd[1] * 900).kind !== "water";
 
   // --- throttle: close the range, then hold station short of it ---
   let target = 0;
@@ -159,7 +163,6 @@ export function stepCarrier(ctx: Dogfight, dt: number, player: AircraftState): v
 
   // --- advance, but only over open water ---
   if (cv.speed > 0.1) {
-    const { fwd } = deckAxes(def.headingDeg);
     const ahead = 900;
     if (groundAt(def.x + fwd[0] * ahead, def.z + fwd[1] * ahead).kind === "water") {
       def.x += fwd[0] * cv.speed * dt;

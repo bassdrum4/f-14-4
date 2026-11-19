@@ -23,6 +23,7 @@ import { WeatherFx } from "./weather";
 import { DEFAULT_AIRCRAFT, type AircraftId } from "../sim/aircraft";
 import { activeTerrainSource, carriers } from "../sim/world";
 import { StreamedTerrain } from "./streamTerrain";
+import { buildEscort, placeEscort, STRIKE_GROUP } from "./strikeGroup";
 import { isHomeDatum } from "../sim/terrainStream";
 import type { Quality } from "../settings";
 import type { SunPosition } from "../sim/sun";
@@ -48,6 +49,10 @@ export class WorldRenderer {
   private worldRoot = new THREE.Group();
   private nightRoot = new THREE.Group();
   private fleetMeshes: THREE.Group[] = [];
+  /** The campaign's carrier strike group: one mesh per escort station. */
+  private escorts: THREE.Group[] = [];
+  /** The escorts are drawn only while a campaign is being flown. */
+  private escortsOn = false;
   private nightLights!: THREE.MeshStandardMaterial;
   private sky: ReturnType<typeof buildSky>;
   private hemi: THREE.HemisphereLight;
@@ -265,6 +270,11 @@ export class WorldRenderer {
     this.worldRoot.add(this.scenery);
     this.fleetMeshes = carriers().map(c => buildCarrier(c));
     for (const ship of this.fleetMeshes) this.worldRoot.add(ship);
+    this.escorts = STRIKE_GROUP.map(spec => buildEscort(spec));
+    for (const ship of this.escorts) {
+      ship.visible = this.escortsOn;
+      this.worldRoot.add(ship);
+    }
 
     // Deck and runway lights follow the active layout too, or they would stay
     // where the previous world's carriers were.
@@ -280,7 +290,18 @@ export class WorldRenderer {
       root.updateMatrixWorld(true);
       root.traverse(o => { o.matrixWorldAutoUpdate = false; });
     }
-    for (const ship of this.fleetMeshes) ship.traverse(o => { o.matrixWorldAutoUpdate = true; });
+    for (const ship of [...this.fleetMeshes, ...this.escorts]) ship.traverse(o => { o.matrixWorldAutoUpdate = true; });
+  }
+
+  /**
+   * Show or hide the campaign's carrier strike group. The escorts travel with
+   * the fleet carrier, so they are built with the world and only their
+   * visibility changes here.
+   */
+  setStrikeGroup(on: boolean): void {
+    if (this.escortsOn === on) return;
+    this.escortsOn = on;
+    for (const ship of this.escorts) ship.visible = on;
   }
 
   /** Only ships and their attached deck lights need dynamic world matrices. */
@@ -296,6 +317,13 @@ export class WorldRenderer {
       ship.quaternion.copy(this.swellY);
       if (pitch !== 0) ship.quaternion.multiply(this.swellPitch.setFromAxisAngle(this.swellAxisZ, pitch));
       if (roll !== 0) ship.quaternion.multiply(this.swellRoll.setFromAxisAngle(this.swellAxisX, roll));
+      ship.updateMatrix();
+      ship.updateMatrixWorld(true);
+    });
+    this.escorts.forEach((ship, i) => {
+      const spec = STRIKE_GROUP[i];
+      if (!spec) return;
+      placeEscort(ship, spec);
       ship.updateMatrix();
       ship.updateMatrixWorld(true);
     });
