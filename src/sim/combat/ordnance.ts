@@ -136,6 +136,16 @@ export function stepBombs(ctx: Dogfight, dt: number, player: AircraftState, held
     // A guided weapon that reaches its spot detonates there, even on a limb
     // where the surface is a moving deck.
     if (b.guided && b.target && b.pos.distanceToSquared(b.target) < LGB_DET * LGB_DET) {
+      // A proximity-fuzed LGB can burst just above the hostile carrier's
+      // deck, before the solid-deck collision below. That path previously
+      // spawned an impact but skipped hull damage, making apparently direct
+      // hits (especially subsequent rack releases) score as misses.
+      const cv = ctx.cv;
+      if (cv && cv.status !== "sinking" && cv.status !== "sunk" &&
+          Math.abs(b.target.y - cv.def.deckY) <= LGB_DET &&
+          isOnDeck(cv.def, b.target.x, b.target.z)) {
+        ctx.damageCarrier(b.target, player, BOMB_HP);
+      }
       const onWater = groundAt(b.target.x, b.target.z).kind === "water";
       ctx.impactBomb(i, b.target, onWater ? "water" : "ground", player);
       continue;
