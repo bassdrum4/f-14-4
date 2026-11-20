@@ -14,5 +14,6 @@ jobs:
       - run: bun run typecheck
       - run: bun run test:accounts
       - run: bun run test:feedback
+      - run: bun run test:ordnance
       - run: bun run build
       - run: bun run check:standalone
