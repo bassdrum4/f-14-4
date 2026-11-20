@@ -290,6 +290,41 @@ function newFight(player: AircraftState): { df: Dogfight; blasts: ExplosionField
 }
 
 // ---------------------------------------------------------------------------
+// 3b. successive guided hits on the hostile deck must each damage the hull
+// ---------------------------------------------------------------------------
+{
+  console.log("\n[successive carrier deck hits]");
+  const player = airPlayer(0, 1200, 0, 0, 0);
+  const { df } = newFight(player);
+  const deck = df.enemyDeck()!;
+  const at = new Vector3(deck.x, deck.deckY, deck.z);
+  player.pos.copy(at).add(new Vector3(0, 600, 0));
+  player.vel.set(0, 0, 0);
+  player.speed = 0;
+  df.setDesignation(at);
+  const before = df.hud(player).carrier!.hp;
+  // Release from separate rack stations and take the last few metres of a
+  // guided trajectory deterministically. Both stores are inside the laser
+  // fuze radius but above the collision plane of the deck.
+  df.releaseBomb(player);
+  df.releaseBomb(player);
+  check("two stores leave their racks", df.bombs.length === 2);
+  for (const b of df.bombs) {
+    b.pos.copy(at).add(new Vector3(0, 5, 0));
+    b.vel.set(0, -5, 0);
+    b.arm = 0;
+  }
+  df.step(DT, player, false, false);
+  const after = df.hud(player).carrier!.hp;
+  check("both guided deck hits damage the carrier, not just the first",
+    before - after >= 68, `hull ${before} -> ${after}`);
+  check("a laser hit on the carrier has a deck blast, not a water splash",
+    df.lastImpactKind === "ground", String(df.lastImpactKind));
+  check("both bombs are retired after impact", df.bombs.length === 0);
+  df.dispose();
+}
+
+// ---------------------------------------------------------------------------
 // 4. water: a clean miss into the sea makes a splash, not a crater
 // ---------------------------------------------------------------------------
 {
