@@ -141,12 +141,12 @@ export function stepBombs(ctx: Dogfight, dt: number, player: AircraftState, held
       // spawned an impact but skipped hull damage, making apparently direct
       // hits (especially subsequent rack releases) score as misses.
       const cv = ctx.cv;
-      if (cv && cv.status !== "sinking" && cv.status !== "sunk" &&
-          Math.abs(b.target.y - cv.def.deckY) <= LGB_DET &&
-          isOnDeck(cv.def, b.target.x, b.target.z)) {
-        ctx.damageCarrier(b.target, player, BOMB_HP);
-      }
-      const onWater = groundAt(b.target.x, b.target.z).kind === "water";
+      const onCarrier = !!cv && cv.status !== "sinking" && cv.status !== "sunk" &&
+        Math.abs(b.target.y - cv.def.deckY) <= LGB_DET &&
+        isOnDeck(cv.def, b.target.x, b.target.z);
+      if (onCarrier) ctx.damageCarrier(b.target, player, BOMB_HP);
+      // The water beneath a carrier isn't the impact surface.
+      const onWater = !onCarrier && groundAt(b.target.x, b.target.z).kind === "water";
       ctx.impactBomb(i, b.target, onWater ? "water" : "ground", player);
       continue;
     }
