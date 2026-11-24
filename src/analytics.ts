@@ -67,6 +67,7 @@ export function createFlightAnalytics(sim: Sim, getSettings: () => Settings): { 
   let run: Run | null = null;
   let lastSample = performance.now();
   let busy = false;
+  let lastRetry = 0;
   let closed = false;
   const pending: FlightEvent[] = [];
 
@@ -174,7 +175,9 @@ export function createFlightAnalytics(sim: Sim, getSettings: () => Settings): { 
       end("account_change");
       if (sim.phase === "flying") start();
     }
-    if (pending.length && !busy) void flush();
+    if (pending.length && !busy && performance.now() - lastRetry >= 30000) {
+      lastRetry = performance.now(); void flush();
+    }
   }, 1000);
   const visibility = () => {
     sample();
