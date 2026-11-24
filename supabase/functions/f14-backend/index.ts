@@ -146,10 +146,11 @@ async function flight(req: Request, body: Body): Promise<Response> {
     (event.visitor_id !== null && event.visitor_id !== undefined && !UUID.test(String(event.visitor_id))) ||
     (event.user_id !== null && event.user_id !== undefined && !UUID.test(String(event.user_id))))
     return invalid("invalid flight event identity");
-  if (!["start", "interaction", "checkpoint", "end"].includes(String(event.kind)))
-    return invalid("invalid flight event kind");
+  // Cached clients may still send retired events; acknowledge without storage.
+  if (["interaction", "checkpoint"].includes(String(event.kind))) return response({ ok: true, id: event.id });
+  if (!["start", "end"].includes(String(event.kind))) return invalid("invalid flight event kind");
   for (const num of [event.active_ms, event.visible_ms]) {
-    if (!Number.isInteger(num) || (num as number) < 0 || (num as number) > 65000)
+    if (!Number.isInteger(num) || (num as number) < 0 || (num as number) > 86400000)
       return invalid("invalid flight duration");
   }
   if (!object(event.details) || JSON.stringify(event.details).length > 4000)
