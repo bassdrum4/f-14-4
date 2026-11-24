@@ -12,13 +12,13 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type FlightEvent = {
   id: string; session_id: string; visitor_id: string | null; user_id: string | null;
-  game: "f-14"; kind: "start" | "interaction" | "checkpoint" | "end";
+  game: "f-14"; kind: "start" | "end";
   active_ms: number; visible_ms: number; details: Record<string, string | number | boolean>;
 };
 type Run = {
   id: string; user: string | null; visitor: string | null; mode: string;
   aircraft: string; multiplayer: boolean; lastInput: number;
-  active: number; visible: number; interacted: boolean;
+  active: number; visible: number;
 };
 function stored(key: string): unknown {
   try { const raw = localStorage.getItem(key); return raw == null ? null : JSON.parse(raw); }
@@ -66,7 +66,6 @@ export function createFlightAnalytics(sim: Sim, getSettings: () => Settings): { 
   let enabled = analyticsEnabled();
   let run: Run | null = null;
   let lastSample = performance.now();
-  let lastFlush = lastSample;
   let busy = false;
   let closed = false;
   const pending: FlightEvent[] = [];
@@ -96,8 +95,8 @@ export function createFlightAnalytics(sim: Sim, getSettings: () => Settings): { 
     pending.push({
       id: crypto.randomUUID(), session_id: run.id, visitor_id: run.visitor,
       user_id: run.user, game: "f-14", kind,
-      active_ms: Math.min(65000, Math.floor(run.active)),
-      visible_ms: Math.min(65000, Math.floor(run.visible)), details,
+      active_ms: Math.min(86400000, Math.floor(run.active)),
+      visible_ms: Math.min(86400000, Math.floor(run.visible)), details,
     });
     run.active = 0; run.visible = 0;
     // Memory-only retries: don't leave player history on a shared computer.
@@ -140,13 +139,13 @@ export function createFlightAnalytics(sim: Sim, getSettings: () => Settings): { 
   }
   function start(): void {
     if (!enabled) return;
-    lastSample = performance.now(); lastFlush = lastSample;
+    lastSample = performance.now();
     const settings = getSettings(), auth = boredAuth();
     run = {
       id: crypto.randomUUID(), user: auth?.id ?? null, visitor: visitorId(),
       mode: settings.missionMode, aircraft: settings.aircraft,
       multiplayer: sim.netSnapshot.status === "online",
-      lastInput: -Infinity, active: 0, visible: 0, interacted: false,
+      lastInput: -Infinity, active: 0, visible: 0,
     };
     emit("start"); void flush();
   }
@@ -162,13 +161,11 @@ export function createFlightAnalytics(sim: Sim, getSettings: () => Settings): { 
       if (!run) start();
     } else if (phase === "result") end("result");
     else if (phase === "menu") end("menu");
-    else if (phase === "paused" && run) { emit("checkpoint", "paused"); void flush(); }
     previousPhase = phase;
   });
   const input = () => {
     if (!enabled || !run || sim.phase !== "flying") return;
     run.lastInput = performance.now();
-    if (!run.interacted) { run.interacted = true; emit("interaction"); void flush(); }
   };
   const tick = window.setInterval(() => {
     if (!enabled) return;
@@ -177,14 +174,11 @@ export function createFlightAnalytics(sim: Sim, getSettings: () => Settings): { 
       end("account_change");
       if (sim.phase === "flying") start();
     }
-    if (performance.now() - lastFlush >= 30000) {
-      if (run) emit("checkpoint");
-      lastFlush = performance.now(); void flush();
-    }
+    if (pending.length && !busy) void flush();
   }, 1000);
   const visibility = () => {
     sample();
-    if (document.hidden && run) { emit("checkpoint", "hidden"); void flush(true); }
+    if (document.hidden && pending.length) void flush(true);
   };
   const pageExit = () => { end("page_exit"); void flush(true); };
   const preference = () => {
