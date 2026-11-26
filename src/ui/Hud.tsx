@@ -44,7 +44,7 @@ const EMPTY: HudSnapshot = {
   dfFlares: 0, dfFlaresMax: 0, dfIncoming: null,
   glide: null,
   glideCue: false, glideCueKey: "L",
-  dfBombTracks: [], dfDesignated: null,
+  dfBombTracks: [], dfBombTargets: [], dfDesignated: null,
   dfReleased: null, dfLanded: null, pod: false, bigMap: false,
   weather: "clear", weatherLabel: "CLEAR",
   spectating: false, spectateTarget: "", spectateKind: "", spectateIndex: 0, spectateCount: 0,
@@ -747,6 +747,22 @@ function drawOrdnance(
   sim: Sim,
   hud: HudSnapshot,
 ): void {
+  // --- the spots being bombed: one red outline per live target ---
+  // The laser ring follows the cursor; these stay on the points that were
+  // clicked, so a salvo reads as several targets instead of only the newest.
+  if (!hud.pod) {
+    for (const t of hud.dfBombTargets) {
+      if (!sim.projectPoint(t.x, t.y + 2, t.z, ORD_P)) continue;
+      const x = ORD_P.x;
+      const y = ORD_P.y;
+      if (x < -40 || x > w + 40 || y < -40 || y > h + 40) continue;
+      const r = 8;
+      ctx.strokeStyle = "rgba(255,77,60,0.9)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x - r, y - r, r * 2, r * 2);
+    }
+  }
+
   // --- stores still falling ---
   let labelled = false;
   for (const b of hud.dfBombTracks) {
@@ -1117,6 +1133,17 @@ function TargetPod({ sim }: { sim: Sim | null }) {
           ctx.font = "10px ui-monospace, monospace";
           ctx.fillText(`BOMB ${b.km.toFixed(1)} KM`, out.x + r + 5, out.y + 3);
         }
+      }
+
+      // every clicked spot with a bomb on the way keeps its own red outline,
+      // so a salvo of clicks reads as a set of targets, not just the last one
+      for (const t of hud.dfBombTargets) {
+        if (!sim || !sim.projectPoint(t.x, t.y + 2, t.z, out)) continue;
+        if (out.x < 0 || out.x > w || out.y < 0 || out.y > h) continue;
+        const r = 8;
+        ctx.strokeStyle = "rgba(255,77,60,0.95)";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(out.x - r, out.y - r, r * 2, r * 2);
       }
 
       // the laser spot itself, if it is inside the sensor's field of view

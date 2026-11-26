@@ -149,7 +149,8 @@ Controls, Graphics, Audio and Interface tabs.
   bomb, and that bomb lands on exactly the point under the cursor — no reach
   check, no guidance window, no release queue. Dragging slews the sensor and
   never fires; a later click drops a new bomb on a new spot and leaves weapons
-  already in the air alone. One click spends one store from the racks.
+  already in the air alone. Each clicked spot keeps its own red outline until
+  its bomb goes off. One click spends one store from the racks.
 - Head-to-head uses the existing room codes and PeerJS connection. Open a room,
   have another pilot join, then the host selects Head-to-head and Start Air Battle.
   Pilots spawn airborne apart around **the fleet carrier, on a spawn ring drawn

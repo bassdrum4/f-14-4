@@ -151,6 +151,40 @@ export function bombPositions(ctx: Dogfight): THREE.Vector3[] {
 }
 
 /**
+ * The clicked point under every weapon still in the air, for the red outline
+ * that stays on each spot being bombed. Allocates; not for hot loops.
+ */
+export function bombTargets(ctx: Dogfight): THREE.Vector3[] {
+  return ctx.bombs.map((b) => b.to.clone());
+}
+
+/**
+ * One red outline per spot with a weapon on the way. The pod's laser ring
+ * follows the cursor; these rings stay on the points that were clicked, so a
+ * salvo reads as several targets instead of only the newest one.
+ */
+export function stepBombTargets(ctx: Dogfight, player: AircraftState): void {
+  for (let i = 0; i < ctx.bombs.length; i++) {
+    let ring = ctx.bombMarkers[i];
+    if (!ring) {
+      ring = new THREE.Mesh(ctx.bombMarkerGeom, ctx.bombMarkerMat);
+      ring.rotation.x = -Math.PI / 2;
+      ring.frustumCulled = false;
+      ctx.root.add(ring);
+      ctx.bombMarkers[i] = ring;
+    }
+    const to = ctx.bombs[i].to;
+    ring.visible = true;
+    ring.position.set(to.x, to.y + 3, to.z);
+    // A slow pulse says the ring is live, not scenery.
+    ring.scale.setScalar(0.85 + 0.1 * Math.sin(player.time * 6 + i * 1.7));
+  }
+  for (let i = ctx.bombs.length; i < ctx.bombMarkers.length; i++) {
+    ctx.bombMarkers[i].visible = false;
+  }
+}
+
+/**
  * Remember where the last release happened, so the HUD can mark the rack
  * position for a moment — the pilot sees the pickle even if the store itself
  * is hidden under the wing.

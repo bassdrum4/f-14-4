@@ -204,6 +204,8 @@ export interface HudSnapshot {
   dfCarrier: HostileCarrierHud | null;
   /** Every weapon in the air, for the pod's weapon symbology. */
   dfBombTracks: Array<{ x: number; y: number; z: number; km: number }>;
+  /** The clicked spot under every weapon in the air, for its red outline. */
+  dfBombTargets: Array<{ x: number; y: number; z: number; km: number }>;
   /** The laser spot, while one is designated. */
   dfDesignated: { x: number; y: number; z: number; km: number } | null;
   /** The rack the last store left, marked briefly so a release is visible. */
@@ -393,7 +395,7 @@ function defaultHud(): HudSnapshot {
     dfBombs: 6, dfBombsMax: 6, dfBombsAway: 0, dfCarrier: null,
     dfMissiles: 2, dfMissilesMax: 2,
     dfFlares: 30, dfFlaresMax: 30, dfIncoming: null,
-    dfBombTracks: [], dfDesignated: null,
+    dfBombTracks: [], dfBombTargets: [], dfDesignated: null,
     dfReleased: null, dfLanded: null, pod: false, bigMap: false,
     weather: "clear", weatherLabel: "CLEAR",
     spectating: false, spectateTarget: "", spectateKind: "", spectateIndex: 0, spectateCount: 0,
@@ -2814,7 +2816,7 @@ export class Sim {
         ...this.hud,
         aircraftName: `SPECTATING ${target?.kind ?? "ROOM"} · ${target?.label ?? ""}`.trim(),
         // Stores and flares belong to the pilot flying, not to the watcher.
-        dfBombs: 0, dfBombsMax: 0, dfBombsAway: 0, dfBombTracks: [],
+        dfBombs: 0, dfBombsMax: 0, dfBombsAway: 0, dfBombTracks: [], dfBombTargets: [],
         dfMissiles: 0, dfMissilesMax: 0, dfFlares: 0, dfFlaresMax: 0,
         dfDesignated: null, dfReleased: null, dfLanded: null,
         subsystems: undefined, lsoCall: null, lsoGrade: null,
@@ -2875,6 +2877,7 @@ export class Sim {
     | "dfIncoming"
     | "dfCarrier"
     | "dfBombTracks"
+    | "dfBombTargets"
     | "dfDesignated"
     | "dfReleased"
     | "dfLanded"
@@ -2907,6 +2910,12 @@ export class Sim {
       dfIncoming: h.incoming ?? this.remoteWeapons.warning ?? null,
       dfCarrier: h.carrier,
       dfBombTracks: this.df.bombPositions().map((p) => ({
+        x: p.x,
+        y: p.y,
+        z: p.z,
+        km: Math.hypot(p.x - st.pos.x, p.y - st.pos.y, p.z - st.pos.z) / 1000,
+      })),
+      dfBombTargets: this.df.bombTargets().map((p) => ({
         x: p.x,
         y: p.y,
         z: p.z,

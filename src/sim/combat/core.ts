@@ -91,11 +91,13 @@ import {
 } from "./gunnery";
 import {
   bombPositions,
+  bombTargets,
   detonateBomb,
   pushReleaseMarker,
   releaseBombAt,
   retireBomb,
   setDesignation,
+  stepBombTargets,
   stepBombs,
   stepDesignator,
 } from "./ordnance";
@@ -343,6 +345,17 @@ export class Dogfight {
   designation: THREE.Vector3 | null = null;
 
   designator: THREE.Mesh;
+
+  // One ring per live weapon's target: every spot that was clicked keeps its
+  // own red outline until its bomb goes off.
+  bombMarkers: THREE.Mesh[] = [];
+
+  bombMarkerGeom = new THREE.RingGeometry(5.5, 7.5, 26);
+
+  bombMarkerMat = new THREE.MeshBasicMaterial({
+    color: 0xff4d3c, transparent: true, opacity: 0.85, side: THREE.DoubleSide,
+    depthWrite: false, blending: THREE.AdditiveBlending, fog: false, toneMapped: false,
+  });
 
   /** Where/how the last weapon actually detonated (diagnostics/tests). */
   readonly lastImpact = new THREE.Vector3();
@@ -898,6 +911,7 @@ export class Dogfight {
     this.flareCd = 0;
     this.impactAge = Infinity;
     this.releaseAge = Infinity;
+    for (const ring of this.bombMarkers) ring.visible = false;
     this.setDesignation(null);
     this.designator.visible = false;
   }
@@ -923,6 +937,9 @@ export class Dogfight {
     this.flarePool = [];
     this.cv = null;
     this.designation = null;
+    this.bombMarkers = [];
+    this.bombMarkerGeom.dispose();
+    this.bombMarkerMat.dispose();
     this.designator.geometry.dispose();
     (this.designator.material as THREE.Material).dispose();
   }
@@ -959,6 +976,7 @@ export class Dogfight {
     // drop them, and one already in the air keeps falling after the player is
     // out. The target pod owns the release; there is no held-key path.
     this.stepBombs(dt, player);
+    this.stepBombTargets(player);
     // Missiles likewise: one in the air keeps hunting after the shooter is gone.
     this.stepMissiles(dt, player);
     this.stepEnemyBombs(dt, player);
@@ -1241,6 +1259,10 @@ export class Dogfight {
       return bombPositions(this);
     }
 
+    bombTargets(): THREE.Vector3[] {
+      return bombTargets(this);
+    }
+
     gunSolution(player: AircraftState): GunCue {
       return gunSolution(this, player);
     }
@@ -1283,6 +1305,10 @@ export class Dogfight {
 
     stepBombs(dt: number, player: AircraftState): void {
       stepBombs(this, dt, player);
+    }
+
+    stepBombTargets(player: AircraftState): void {
+      stepBombTargets(this, player);
     }
 
     detonateBomb(i: number, player: AircraftState): void {

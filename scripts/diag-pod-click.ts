@@ -249,6 +249,13 @@ console.log("\n[clicking]");
     `designation did not move (${d2 ? d2.distanceTo(d ?? TARGET).toFixed(3) : "none"} m)`);
   check("and drops its own bomb", pod.df.hud(pod.player).bombs === spent - 1,
     `${spent} -> ${pod.df.hud(pod.player).bombs}`);
+  // both spots stay marked: the outline belongs to the target, not the cursor
+  const marks = pod.df.bombTargets();
+  check("every spot being bombed keeps its own target mark",
+    marks.length === 2 &&
+      marks.some((m) => m.distanceTo(d ?? TARGET) < 0.01) &&
+      marks.some((m) => m.distanceTo(d2 ?? TARGET) < 0.01),
+    `${marks.length} marks`);
 }
 
 // ---------------------------------------------------------------------------
@@ -287,6 +294,8 @@ console.log("\n[the weapon]");
   const miss = solo.df.lastImpact.distanceTo(clicked);
   check("it detonated on land", solo.df.lastImpactKind === "ground", `${solo.df.lastImpactKind}`);
   check("it landed on the clicked spot", miss < 1.6, `${miss.toFixed(1)} m off after ${flew.toFixed(1)} s`);
+  check("the target mark goes away when its bomb goes off",
+    solo.df.bombTargets().length === 0, `${solo.df.bombTargets().length} left`);
   solo.input.detach();
   pod.input.detach();
 }
