@@ -138,8 +138,7 @@ function newFight(player: AircraftState): { df: Dogfight; blasts: ExplosionField
   const player = airPlayer(target.x - 6000, target.y + 2860, target.z, 90);
   const { df } = newFight(player);
 
-  // the pod's release request is queued, not immediate: it has to come out of
-  // the same step the rest of the sim does
+  // the click resolves to a surface point and drops one store on it
   const cam = new PerspectiveCamera(62, 1.6, 0.5, 70000);
   const podPos = POD_OFFSET.clone().applyQuaternion(player.quat).add(player.pos);
   cam.position.copy(podPos);
@@ -157,14 +156,13 @@ function newFight(player: AircraftState): { df: Dogfight; blasts: ExplosionField
     JSON.stringify(hit?.pos));
   df.setDesignation(hit!.pos);
   const racks = df.hud(player).bombs;
-  check("no weapon leaves the rack before the release step",
+  check("no weapon leaves the rack before the click",
     df.hud(player).bombs === racks && df.hud(player).bombsAway === 0);
-  df.requestBombRelease();
-  df.step(DT, player, false, false);
+  check("the click drops one store", df.releaseBombAt(player, hit!.pos));
   const fired = df.hud(player);
-  check("the pod's release request pickles a weapon", fired.bombs === racks - 1,
+  check("the click spends exactly one weapon", fired.bombs === racks - 1,
     `${racks} -> ${fired.bombs}`);
-  check("and it comes off guided", fired.bombsTracking === 1, `${fired.bombsTracking} tracking`);
+  check("and the store is in the air", fired.bombsAway === 1, `${fired.bombsAway} away`);
 
   // The sensor head is forward of the racks, so the weapon is behind it at
   // release and drops out of the frame: the pod has to draw the weapon itself.
@@ -173,7 +171,7 @@ function newFight(player: AircraftState): { df: Dogfight; blasts: ExplosionField
   for (let i = 0; i < Math.round(3 / DT); i++) {
     player.time += DT;
     player.pos.addScaledVector(player.vel, DT);
-    df.step(DT, player, false, false);
+    df.step(DT, player, false);
     const tracks = df.bombPositions();
     if (tracks.length === 0) {
       // gone: it detonated, which is the end of the fall
@@ -210,26 +208,25 @@ function newFight(player: AircraftState): { df: Dogfight; blasts: ExplosionField
   df.setDesignation(target);
   check("the designation is registered", df.designated !== null);
   const before = df.hud(player).bombs;
-  df.step(DT, player, false, true); // one release request
+  check("the click drops one weapon", df.releaseBombAt(player, target));
   const after = df.hud(player);
-  check("a click release pickles one weapon", after.bombs === before - 1,
+  check("the click spends one weapon", after.bombs === before - 1,
     `${before} -> ${after.bombs}`);
-  check("the weapon is tracking the laser", after.bombsTracking === 1,
-    `${after.bombsTracking} tracking`);
+  check("the weapon is in the air", after.bombsAway === 1, `${after.bombsAway} away`);
   check("the HUD reports the designation", after.designated !== null,
     JSON.stringify(after.designated));
 
   let flew = 0;
   while (flew < 45 && df.hud(player).bombsAway > 0) {
     player.time += DT;
-    df.step(DT, player, false, false);
+    df.step(DT, player, false);
     flew += DT;
   }
   const miss = df.lastImpact.distanceTo(target);
-  check("the guided bomb detonated on land", df.lastImpactKind === "ground", `${df.lastImpactKind}`);
-  // the fuze trips on proximity to the spot, so a converged weapon lands
-  // inside the detonation radius rather than merely nearby
-  check("it landed on the designated spot", miss < 12,
+  check("the bomb detonated on land", df.lastImpactKind === "ground", `${df.lastImpactKind}`);
+  // the arc ends on the clicked coordinate: no guidance convergence, no fuze
+  // radius, no envelope to fall short of
+  check("it landed on the clicked spot", miss < 1.6,
     `miss ${miss.toFixed(1)} m after ${flew.toFixed(1)} s`);
   check("the impact spawned an explosion", blasts.blastCount >= 1, `${blasts.blastCount}`);
   check("the explosion is still burning", blasts.liveParticles > 0,
@@ -241,8 +238,7 @@ function newFight(player: AircraftState): { df: Dogfight; blasts: ExplosionField
     const p3 = airPlayer(target.x - 6000, target.y + 2860, target.z, 90);
     const fresh = newFight(p3);
     fresh.df.setDesignation(target);
-    fresh.df.requestBombRelease();
-    fresh.df.step(DT, p3, false, false);
+    fresh.df.releaseBombAt(p3, target);
     const justReleased = fresh.df.hud(p3).released;
     check("the HUD marks the rack the weapon just left",
       justReleased !== null &&
@@ -254,7 +250,7 @@ function newFight(player: AircraftState): { df: Dogfight; blasts: ExplosionField
     let hitAt = 0;
     for (let i = 0; i < Math.round(60 / DT) && fresh.df.hud(p3).bombsAway > 0; i++) {
       p3.time += DT;
-      fresh.df.step(DT, p3, false, false);
+      fresh.df.step(DT, p3, false);
       hitAt += DT;
     }
     const landed = fresh.df.hud(p3).landed;
@@ -266,7 +262,7 @@ function newFight(player: AircraftState): { df: Dogfight; blasts: ExplosionField
     // the mark fades on its own, so the HUD does not accumulate old craters
     for (let i = 0; i < Math.round(12 / DT); i++) {
       p3.time += DT;
-      fresh.df.step(DT, p3, false, false);
+      fresh.df.step(DT, p3, false);
     }
     check("the impact mark expires", fresh.df.hud(p3).landed === null,
       JSON.stringify(fresh.df.hud(p3).landed));
@@ -275,17 +271,21 @@ function newFight(player: AircraftState): { df: Dogfight; blasts: ExplosionField
     fresh.df.dispose();
   }
 
-  // re-designating mid-flight must pull weapons already in the air
-  console.log("\n[relock]");
+  // a later click is a new bomb on a new spot; it must not move the first one
+  console.log("\n[two clicks]");
   const player2 = airPlayer(6000, 3000, 9000, 90);
   const { df: df2 } = newFight(player2);
-  df2.setDesignation(new Vector3(9000, 0, 9000));
-  df2.step(DT, player2, false, true);
-  check("bomb away toward the first spot", df2.hud(player2).bombsTracking === 1);
-  df2.setDesignation(new Vector3(9000, 0, 8600));
-  check("a new designation retargets it in flight",
-    Math.abs(df2.designated!.z - 8600) < 1e-6,
-    `${df2.designated!.z}`);
+  const first = new Vector3(9000, 0, 9000);
+  const second = new Vector3(9000, 0, 8600);
+  df2.setDesignation(first);
+  df2.releaseBombAt(player2, first);
+  df2.setDesignation(second);
+  df2.releaseBombAt(player2, second);
+  check("two clicks put two stores in the air", df2.bombs.length === 2,
+    `${df2.bombs.length} away`);
+  check("each store keeps the spot it was clicked on",
+    df2.bombs[0].to.distanceTo(first) < 1e-6 && df2.bombs[1].to.distanceTo(second) < 1e-6,
+    `${df2.bombs[0].to.toArray()} / ${df2.bombs[1].to.toArray()}`);
   df2.dispose();
 }
 
@@ -303,22 +303,16 @@ function newFight(player: AircraftState): { df: Dogfight; blasts: ExplosionField
   player.speed = 0;
   df.setDesignation(at);
   const before = df.hud(player).carrier!.hp;
-  // Release from separate rack stations and take the last few metres of a
-  // guided trajectory deterministically. Both stores are inside the laser
-  // fuze radius but above the collision plane of the deck.
-  df.releaseBomb(player);
-  df.releaseBomb(player);
-  check("two stores leave their racks", df.bombs.length === 2);
-  for (const b of df.bombs) {
-    b.pos.copy(at).add(new Vector3(0, 5, 0));
-    b.vel.set(0, -5, 0);
-    b.arm = 0;
+  // Two clicks on the deck, from separate rack stations.
+  check("two stores leave their racks",
+    df.releaseBombAt(player, at) && df.releaseBombAt(player, at));
+  for (let i = 0; i < Math.round(10 / DT) && df.bombs.length > 0; i++) {
+    df.step(DT, player, false);
   }
-  df.step(DT, player, false, false);
   const after = df.hud(player).carrier!.hp;
-  check("both guided deck hits damage the carrier, not just the first",
+  check("both deck hits damage the carrier, not just the first",
     before - after >= 68, `hull ${before} -> ${after}`);
-  check("a laser hit on the carrier has a deck blast, not a water splash",
+  check("a hit on the carrier has a deck blast, not a water splash",
     df.lastImpactKind === "ground", String(df.lastImpactKind));
   check("both bombs are retired after impact", df.bombs.length === 0);
   df.dispose();
@@ -334,11 +328,11 @@ function newFight(player: AircraftState): { df: Dogfight; blasts: ExplosionField
   const player = airPlayer(target.x - 6000, 2600, target.z, 90);
   const { df, blasts } = newFight(player);
   df.setDesignation(target);
-  df.step(DT, player, false, true);
+  df.releaseBombAt(player, target);
   let flew = 0;
   while (flew < 45 && df.hud(player).bombsAway > 0) {
     player.time += DT;
-    df.step(DT, player, false, false);
+    df.step(DT, player, false);
     flew += DT;
   }
   check("a bomb into the sea splashes", df.lastImpactKind === "water", `${df.lastImpactKind}`);
@@ -443,7 +437,7 @@ function newFight(player: AircraftState): { df: Dogfight; blasts: ExplosionField
 
 // ---------------------------------------------------------------------------
 // 7. the pod's release gesture: aiming the sensor is a drag, so letting go of
-//    the drag has to fire — otherwise the shot never reaches requestBombRelease
+//    the drag must not fire — the click that follows it is the shot
 // ---------------------------------------------------------------------------
 {
   console.log("\n[pod input]");

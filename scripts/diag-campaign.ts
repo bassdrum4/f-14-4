@@ -220,7 +220,7 @@ test("the campaign cannot be won by clearing every enemy in the air", () => {
   // the bastion still has to be bombed, so the operation must stay open.
   for (let i = 0; i < 600; i++) {
     d.bandits.length = 0;
-    df.step(.1, player, false, false, true);
+    df.step(.1, player, false, true);
   }
   assert.equal(df.operationState!.status, "active");
   assert.equal(df.operationState!.campaignStage, 1);

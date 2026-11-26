@@ -114,7 +114,7 @@ test("bombers spend one attack pass and withdraw; all four unopposed passes disa
 });
 test("terminal operation state and missiles remain bounded in a long combat run", () => {
   const { df, player } = combat("fleet");
-  for (let i = 0; i < 18000; i++) df.step(.05, player, false, false, true);
+  for (let i = 0; i < 18000; i++) df.step(.05, player, false, true);
   assert(["success", "failure"].includes(df.operationState!.status), JSON.stringify(df.operationState));
   assert(validSharedCombat(df.sharedSnapshot())); df.dispose();
 });
@@ -155,15 +155,16 @@ test("endless Strike retains bounded wreck history and sync remains valid beyond
   }
   assert(d.wave >= 8); df.dispose();
 });
-test("one laser designation follows a moving cargo ship and an actual bomb disables it", () => {
+test("an actual bomb dropped on a cargo ship disables it", () => {
   const { df, player, internal: d } = combat("convoy");
   const cargo = d.strikeTargets.find((t: any) => t.role === "cargo");
   d.strikeTargets.find((t: any) => t.role === "escort").ammo = 0;
-  player.pos.copy(cargo.pos).add(new Vector3(0, 900, 0)); player.vel.set(0, 0, 0); player.speed = 0;
-  df.setDesignation(cargo.pos.clone().add(new Vector3(0, 6, 0)));
-  assert(df.requestBombRelease(player));
+  player.pos.copy(cargo.pos).add(new Vector3(0, 300, 0)); player.vel.set(0, 0, 0); player.speed = 0;
+  const at = cargo.pos.clone().add(new Vector3(0, 6, 0));
+  df.setDesignation(at);
+  assert(df.releaseBombAt(player, at));
   for (let i = 0; i < 2400 && !cargo.disabled; i++) { player.time += 1 / 120; df.step(1 / 120, player, false); }
-  assert(cargo.progress > 20); assert(cargo.disabled, `cargo hp ${cargo.hp}`);
+  assert(cargo.progress > 0); assert(cargo.disabled, `cargo hp ${cargo.hp}`);
   assert.equal(df.missionStats.storesUsed, 1); df.dispose();
 });
 test("unopposed fleet attacks release all four bombs and disable the carrier without terrain losses", () => {
@@ -176,7 +177,7 @@ test("unopposed fleet attacks release all four bombs and disable the carrier wit
     d.crashBandit = (...args: any[]) => { if (args[0].role === "bomber") terrainLosses++; return crash(...args); };
     try {
       for (let i = 0; i < 120 * 850 && df.operationState!.status === "active"; i++) {
-        player.time += 1 / 120; df.step(1 / 120, player, false, false, true);
+        player.time += 1 / 120; df.step(1 / 120, player, false, true);
       }
       assert.equal(terrainLosses, 0, `world ${world}: bombers must clear terrain`);
       assert.equal(releases, 4, `world ${world}: both attacks must make their passes`);

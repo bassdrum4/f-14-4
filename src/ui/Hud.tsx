@@ -44,7 +44,7 @@ const EMPTY: HudSnapshot = {
   dfFlares: 0, dfFlaresMax: 0, dfIncoming: null,
   glide: null,
   glideCue: false, glideCueKey: "L",
-  dfBombsTracking: 0, dfBombTracks: [], dfDesignated: null,
+  dfBombTracks: [], dfDesignated: null,
   dfReleased: null, dfLanded: null, pod: false, bigMap: false,
   weather: "clear", weatherLabel: "CLEAR",
   spectating: false, spectateTarget: "", spectateKind: "", spectateIndex: 0, spectateCount: 0,
@@ -132,7 +132,7 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
             (hud.homeWorld ? <div>{hud.distCarrierKm <= hud.distFieldKm ? `CARRIER ${hud.carrierName} · ${hud.distCarrierKm.toFixed(1)} KM · ${Math.round(hud.bearingCarrierDeg)}°` : `AIRFIELD · ${hud.distFieldKm.toFixed(1)} KM · ${Math.round(hud.bearingFieldDeg)}°`}</div> : null)}
           {!hud.spectating && <div className="hud-weapons">
             {hud.dfMissilesMax > 0 && <span>{hud.surfaceVessel ? "VLS" : "MSL"} {hud.dfMissiles}/{hud.dfMissilesMax}</span>}
-            {!hud.surfaceVessel && hud.dfBombsMax > 0 && <span>LGB {hud.dfBombs}/{hud.dfBombsMax}</span>}
+            {!hud.surfaceVessel && hud.dfBombsMax > 0 && <span>BOMB {hud.dfBombs}/{hud.dfBombsMax}</span>}
             {hud.dfFlaresMax > 0 && <span>FLR {hud.dfFlares}/{hud.dfFlaresMax}</span>}
           </div>}
           {hud.dfDesignated && <div className="hud-laser">LASER · {hud.dfDesignated.km.toFixed(1)} KM</div>}
@@ -154,7 +154,7 @@ export function Hud({ sim, daylight, minimap, ladder = true, gunCross = true }: 
           <div>FIELD {hud.distFieldKm.toFixed(1)} KM · {Math.round(hud.bearingFieldDeg)}°</div>
           </>}
           {hud.dfCarrier && <div>OPFOR CV {hud.dfCarrier.name} · {hud.dfCarrier.status.toUpperCase()} · {hud.dfCarrier.hp}% · {hud.dfCarrier.distKm.toFixed(1)} KM · {Math.round(hud.dfCarrier.brgDeg)}°{hud.dfCarrier.inbound > 0 ? ` · ${hud.dfCarrier.inbound} INBOUND` : ""}</div>}
-          {!hud.surfaceVessel && hud.dfBombsMax > 0 && <div>BOMBS {hud.dfBombs}/{hud.dfBombsMax} · {hud.dfBombsAway} AWAY · {hud.dfBombsTracking} TRACKING</div>}
+          {!hud.surfaceVessel && hud.dfBombsMax > 0 && <div>BOMBS {hud.dfBombs}/{hud.dfBombsMax} · {hud.dfBombsAway} AWAY</div>}
           {hud.dfActive && <div>WAVE {hud.dfWave} · CONTACTS {hud.dfBandits} · KILLS {hud.dfKills}</div>}
           {hud.netStatus === "online" && hud.remotes.slice(0, 3).map(r =>
             <div key={r.name}>WING {r.name.toUpperCase()} · {r.km.toFixed(1)} KM · {Math.round(r.brgDeg)}°</div>)}
@@ -1115,7 +1115,7 @@ function TargetPod({ sim }: { sim: Sim | null }) {
           labeled = true;
           ctx.fillStyle = "rgba(255,210,80,0.95)";
           ctx.font = "10px ui-monospace, monospace";
-          ctx.fillText(`LGB ${b.km.toFixed(1)} KM`, out.x + r + 5, out.y + 3);
+          ctx.fillText(`BOMB ${b.km.toFixed(1)} KM`, out.x + r + 5, out.y + 3);
         }
       }
 
@@ -1141,13 +1141,12 @@ function TargetPod({ sim }: { sim: Sim | null }) {
       ctx.fillText("TARGET POD", m, m - 10);
       ctx.fillStyle = "rgba(214,236,255,0.85)";
       ctx.font = "11px ui-monospace, monospace";
-      ctx.fillText("DRAG TO SLEW · CLICK A TARGET TO LAUNCH", m, h - m + 22);
+      ctx.fillText("DRAG TO SLEW · CLICK A SPOT TO DROP A BOMB", m, h - m + 22);
       ctx.fillText("[R] OR [C] TO LEAVE THE POD", m, h - m + 38);
       ctx.fillStyle = "rgba(255,210,80,0.9)";
       ctx.fillText(
-        `LGB ${hud.dfBombs}/${hud.dfBombsMax}` +
-          (hud.dfBombsAway > 0 ? ` · ${hud.dfBombsAway} AWAY` : "") +
-          (hud.dfBombsTracking > 0 ? ` · ${hud.dfBombsTracking} TRACKING` : ""),
+        `BOMB ${hud.dfBombs}/${hud.dfBombsMax}` +
+          (hud.dfBombsAway > 0 ? ` · ${hud.dfBombsAway} AWAY` : ""),
         w - m - 150,
         m - 10,
       );

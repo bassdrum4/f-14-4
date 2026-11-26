@@ -157,7 +157,7 @@ function fly(ctx: Ctx, seconds: number): void {
   for (let i = 0; i < steps; i++) {
     ctx.player.time += DT;
     ctx.player.pos.addScaledVector(ctx.player.vel, DT);
-    ctx.df.step(DT, ctx.player, false, false);
+    ctx.df.step(DT, ctx.player, false);
   }
 }
 
@@ -211,7 +211,7 @@ const pod = (() => {
     `target still at pixel ${after.x.toFixed(0)},${after.y.toFixed(0)}`);
   check("letting go of the slew fires nothing", pod.df.hud(pod.player).bombs === bombs,
     `${bombs} -> ${pod.df.hud(pod.player).bombs}`);
-  check("and it says nothing about a weapon", !pod.log.some(t => t.startsWith("LGB")),
+  check("and it says nothing about a weapon", !pod.log.some(t => t.startsWith("BOMB")),
     pod.log[pod.log.length - 1] ?? "");
 }
 
@@ -231,21 +231,24 @@ console.log("\n[clicking]");
   const miss = d ? d.distanceTo(TARGET) : Infinity;
   check("the click designates the spot under the cursor", d !== null && miss < 25,
     d ? `designation is ${miss.toFixed(1)} m from the clicked spot` : "no designation");
-  check("the pod reports the weapon away", pod.log.some(t => t.startsWith("LGB AWAY")),
+  check("the pod reports the weapon away", pod.log.some(t => t.startsWith("BOMB AWAY")),
     pod.log[pod.log.length - 1] ?? "");
   fly(pod, DT); // one sim step: the queued release leaves the rack
   check("the click spends one weapon where the drag spent none",
     pod.df.hud(pod.player).bombs === bombs - 1,
     `${bombs} -> ${pod.df.hud(pod.player).bombs}`);
 
-  // the click also moves a laser already pointed somewhere else
+  // a second click is a new bomb on the new spot
+  const spent = pod.df.hud(pod.player).bombs;
   moveTo(pixel.x + 6, pixel.y + 6);
   pressButton(pixel.x + 6, pixel.y + 6);
   releaseButton(pixel.x + 6, pixel.y + 6);
   frame(pod);
   const d2 = pod.df.designated?.clone() ?? null;
-  check("a second click re-aims the laser", d2 !== null && d2.distanceTo(d ?? TARGET) > 1,
+  check("a second click re-aims the pod", d2 !== null && d2.distanceTo(d ?? TARGET) > 1,
     `designation did not move (${d2 ? d2.distanceTo(d ?? TARGET).toFixed(3) : "none"} m)`);
+  check("and drops its own bomb", pod.df.hud(pod.player).bombs === spent - 1,
+    `${spent} -> ${pod.df.hud(pod.player).bombs}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -253,17 +256,38 @@ console.log("\n[clicking]");
 // ---------------------------------------------------------------------------
 console.log("\n[the weapon]");
 {
-  const dropped = pod.df.hud(pod.player).bombsAway;
-  check("the weapon left the rack", dropped >= 1, `${dropped} away`);
-  const clicked = pod.df.designated!.clone();
+  // one click, one store, so the impact belongs to the spot this test clicked
+  const solo = podSim(airPlayer(START.x, START.y, START.z, 90, 250));
+  pressKey(BOMB_KEY);
+  releaseKey(BOMB_KEY);
+  frame(solo);
+  pressButton(W / 2, H / 2);
+  let cur = { x: W / 2, y: H / 2 };
+  for (let i = 0; i < 4; i++) {
+    cur = { x: cur.x, y: cur.y + 80 };
+    moveTo(cur.x, cur.y, 0, 80);
+    frame(solo);
+  }
+  releaseButton(cur.x, cur.y);
+  frame(solo);
+  const pixel = pixelOf(solo, TARGET);
+  moveTo(pixel.x, pixel.y);
+  frame(solo);
+  pressButton(pixel.x, pixel.y);
+  releaseButton(pixel.x, pixel.y);
+  frame(solo);
+  const clicked = solo.df.designated!.clone();
+  const dropped = solo.df.hud(solo.player).bombsAway;
+  check("the weapon left the rack", dropped === 1, `${dropped} away`);
   let flew = 0;
-  while (flew < 90 && pod.df.hud(pod.player).bombsAway > 0) {
-    fly(pod, DT);
+  while (flew < 90 && solo.df.hud(solo.player).bombsAway > 0) {
+    fly(solo, DT);
     flew += DT;
   }
-  const miss = pod.df.lastImpact.distanceTo(clicked);
-  check("it detonated on land", pod.df.lastImpactKind === "ground", `${pod.df.lastImpactKind}`);
-  check("it landed on the clicked spot", miss < 12, `${miss.toFixed(1)} m off after ${flew.toFixed(1)} s`);
+  const miss = solo.df.lastImpact.distanceTo(clicked);
+  check("it detonated on land", solo.df.lastImpactKind === "ground", `${solo.df.lastImpactKind}`);
+  check("it landed on the clicked spot", miss < 1.6, `${miss.toFixed(1)} m off after ${flew.toFixed(1)} s`);
+  solo.input.detach();
   pod.input.detach();
 }
 
@@ -301,10 +325,9 @@ console.log("\n[refusals]");
 }
 
 {
-  // A spot the weapon cannot reach: over open ocean, low and fast, with the
-  // click going to a point a kilometre behind the jet. A bomb cannot turn round
-  // in the fifteen metres of altitude it has, so the predictor refuses it —
-  // diag-bomb-envelope pins the same envelope. The sensor has to slew right
+  // A spot behind the jet: over open ocean, low and fast, with the click going
+  // to a point a kilometre behind. There is no envelope to refuse it: the click
+  // drops a bomb and the bomb lands on that point. The sensor has to slew right
   // round to see the spot at all, which is its own check on the gimbal.
   const seaFrom = new Vector3(-27000, 15, -27000);
   const seaAim = new Vector3(-27000, 0, -26000);
@@ -337,12 +360,16 @@ console.log("\n[refusals]");
   check("the click still lands on the spot that was clicked",
     d !== null && d.distanceTo(seaAim) < 40,
     d ? `${d.distanceTo(seaAim).toFixed(1)} m off` : "no designation");
-  check("but it does not spend a weapon", ctx.df.hud(ctx.player).bombs === bombs,
+  check("and the click spends a weapon", ctx.df.hud(ctx.player).bombs === bombs - 1,
     `${bombs} -> ${ctx.df.hud(ctx.player).bombs}`);
-  // the predictor's warning rides the flight banner, not the pod's own notice
-  check("and the pilot is told to close in or climb",
-    ctx.player.banner?.text.includes("CANNOT REACH") === true,
-    ctx.player.banner?.text ?? "no banner");
+  let flew = 0;
+  while (flew < 20 && ctx.df.hud(ctx.player).bombsAway > 0) {
+    fly(ctx, DT);
+    flew += DT;
+  }
+  check("a spot behind the jet is still hit exactly",
+    ctx.df.lastImpact.distanceTo(seaAim) < 2,
+    `${ctx.df.lastImpact.distanceTo(seaAim).toFixed(1)} m off after ${flew.toFixed(1)} s`);
   ctx.input.detach();
 }
 

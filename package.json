@@ -41,7 +41,6 @@
     "test:versus": "bun scripts/diag-versus.ts",
     "test:battle-recovery": "bun scripts/diag-battle-recovery.ts",
     "test:net-authority": "bun scripts/diag-net-authority.ts",
-    "test:bomb-envelope": "bun scripts/diag-bomb-envelope.ts",
     "test:performance": "bun scripts/diag-performance.ts",
     "test:countermeasures:pvp": "bun scripts/diag-countermeasures-pvp.ts",
     "test:gameplay-edges": "bun scripts/diag-gameplay-edges.ts",

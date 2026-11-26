@@ -109,16 +109,11 @@ export const CV_CLIMB_TIME = 3.5; // s of nose-up after a shot before it starts 
 // --- bombs ---
 export const BOMB_MAG = 6; // default racks, overridden by the player's airframe
 export const BOMB_HP = 34; // one hit takes a third of the carrier's hull
-export const BOMB_RELEASE_CD = 0.5; // s between releases while the key is held
-export const BOMB_AIR_RADIUS = 13; // m — a near miss on an airframe breaks it up
 export const GRAVITY = 9.81;
 
-// --- laser-guided bombs ---
-export const LGB_TRAIL = 0.09; // s between trail puffs behind a guided bomb
-export const LGB_TRAIL_TTL = 2.4; // s each puff hangs, i.e. how long the wake reads
-// Every store smokes from the moment it leaves the rack, guided or not: without
-// it a falling bomb is a dark speck lost against the terrain, and the pilot
-// cannot tell whether the release happened at all.
+// Every store smokes from the moment it leaves the rack: without it a falling
+// bomb is a dark speck lost against the terrain, and the pilot cannot tell
+// whether the release happened at all.
 export const BOMB_TRAIL = 0.16; // s between trail puffs behind a free-fall bomb
 export const BOMB_TRAIL_TTL = 3.2; // s each puff hangs
 /** How long the last impact keeps its place marked on the HUD. */

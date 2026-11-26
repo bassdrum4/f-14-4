@@ -202,8 +202,6 @@ export interface HudSnapshot {
   /** The nearest hostile round in the air, for the RWR call-out. */
   dfIncoming: { km: number; brgDeg: number; sec: number } | null;
   dfCarrier: HostileCarrierHud | null;
-  /** Guided bombs still tracking the laser. */
-  dfBombsTracking: number;
   /** Every weapon in the air, for the pod's weapon symbology. */
   dfBombTracks: Array<{ x: number; y: number; z: number; km: number }>;
   /** The laser spot, while one is designated. */
@@ -395,7 +393,7 @@ function defaultHud(): HudSnapshot {
     dfBombs: 6, dfBombsMax: 6, dfBombsAway: 0, dfCarrier: null,
     dfMissiles: 2, dfMissilesMax: 2,
     dfFlares: 30, dfFlaresMax: 30, dfIncoming: null,
-    dfBombsTracking: 0, dfBombTracks: [], dfDesignated: null,
+    dfBombTracks: [], dfDesignated: null,
     dfReleased: null, dfLanded: null, pod: false, bigMap: false,
     weather: "clear", weatherLabel: "CLEAR",
     spectating: false, spectateTarget: "", spectateKind: "", spectateIndex: 0, spectateCount: 0,
@@ -1714,7 +1712,7 @@ export class Sim {
     // The host advances the shared operation while opening menus or recovering.
     // Solo pause freezes combat; a landing decision keeps the convoy moving.
     if (this.df.operationState && (this.phase !== "flying" || this.crashSeq) && (this.netState.status === "online" || this.phase === "result") && !this.df.mirroring) {
-      this.state.time += frameDt; this.df.step(frameDt, this.state, false, false, true); this.updateHud();
+      this.state.time += frameDt; this.df.step(frameDt, this.state, false, true); this.updateHud();
     }
     this.checkOperationPilots(frameDt);
 
@@ -1776,7 +1774,7 @@ export class Sim {
   private stepSpectateRoom(frameDt: number): void {
     const w = windFor(this.weather, this.worldSeed, this.fleetClock);
     this.renderer.setWind(w.x, w.z);
-    this.df.step(frameDt, this.state, false, false);
+    this.df.step(frameDt, this.state, false);
     this.updateAudio();
     this.updateHud();
   }
@@ -2233,11 +2231,7 @@ export class Sim {
     const el = this.renderer.renderer.domElement;
     el.style.cursor = "crosshair";
     if (this.state.spec.surfaceVessel) { this.pushBanner("GUN DIRECTOR — ARROWS / DRAG TO AIM · Q GUN · E VLS LOCK · CLICK SURFACE TO STRIKE"); return; }
-    this.pushBanner(
-      this.df.designated
-        ? "TARGET POD — SLEW ONTO A TARGET, CLICK TO RE-ENGAGE · [R] TO LEAVE"
-        : "TARGET POD — SLEW THE SENSOR ONTO A TARGET, THEN CLICK IT TO LAUNCH",
-    );
+    this.pushBanner("TARGET POD — DRAG TO AIM · CLICK A SPOT TO DROP A BOMB · [R] TO LEAVE");
   }
 
   private endPod(): void {
@@ -2249,10 +2243,10 @@ export class Sim {
   }
 
   /**
-   * A click in the pod view: pick the surface under the cursor, paint the laser
-   * there, and send one weapon after it. Slew with any drag you like — only the
-   * click is a shot — and every later click moves the same laser to the new
-   * spot, pulling weapons already in the air with it.
+   * A click in the pod view: pick the surface under the cursor and drop one
+   * weapon on that exact point. Slew with any drag you like — only the click is
+   * a shot — and a later click is a new bomb on a new spot, never an order to
+   * weapons already in the air.
    */
   private handlePodClick(): void {
     const click = this.input.takeClick();
@@ -2271,14 +2265,11 @@ export class Sim {
     this.df.setDesignation(hit.pos);
     if (this.state.result) return;
     if (this.state.spec.surfaceVessel) { launchNavalMissile(this.df, this.state, hit.pos); return; }
-    if (this.df.hud(this.state).bombs <= 0) {
-      this.pushBanner("TARGET DESIGNATED — BOMBS EXPENDED");
-      return;
-    }
-    if (!this.df.requestBombRelease(this.state)) return;
-    // The weapon sits behind the sensor head the moment it leaves the rack, so
-    // the banner says it is gone and the pod overlay tracks it down from there.
-    this.pushBanner(`LGB AWAY — TARGET ${(hit.range / 1000).toFixed(1)} KM (${hit.surface.toUpperCase()})`);
+    // The click is the release: one bomb, on the point under the cursor. The
+    // store sits behind the sensor head the moment it leaves the rack, so the
+    // banner says it is gone and the pod overlay tracks it down from there.
+    if (!this.df.releaseBombAt(this.state, hit.pos)) return;
+    this.pushBanner(`BOMB AWAY — TARGET ${(hit.range / 1000).toFixed(1)} KM (${hit.surface.toUpperCase()})`);
   }
 
   private stepSim(frameDt: number): void {
@@ -2293,7 +2284,7 @@ export class Sim {
       this.inputPitch = 0;
       this.inputRoll = 0;
       this.inputYaw = 0;
-      this.df.step(FIXED_DT, this.state, false, false);
+      this.df.step(FIXED_DT, this.state, false);
       this.stepCrashReplay(frameDt);
       this.updateJetPose(1);
       this.updateAudio();
@@ -2339,7 +2330,7 @@ export class Sim {
       }
       // Releases come from target-pod clicks (queued in the Dogfight), not
       // from holding the key: the pod is the aiming station.
-      this.df.step(FIXED_DT, this.state, inp.fire === true, false);
+      this.df.step(FIXED_DT, this.state, inp.fire === true);
       this.stepShipRearm(inp.catHold, FIXED_DT);
       // A wheels-down on a friendly deck or runway is a recovery, not the end:
       // the racks and the hull come back full so the pilot can go again.
@@ -2823,7 +2814,7 @@ export class Sim {
         ...this.hud,
         aircraftName: `SPECTATING ${target?.kind ?? "ROOM"} · ${target?.label ?? ""}`.trim(),
         // Stores and flares belong to the pilot flying, not to the watcher.
-        dfBombs: 0, dfBombsMax: 0, dfBombsAway: 0, dfBombsTracking: 0, dfBombTracks: [],
+        dfBombs: 0, dfBombsMax: 0, dfBombsAway: 0, dfBombTracks: [],
         dfMissiles: 0, dfMissilesMax: 0, dfFlares: 0, dfFlaresMax: 0,
         dfDesignated: null, dfReleased: null, dfLanded: null,
         subsystems: undefined, lsoCall: null, lsoGrade: null,
@@ -2883,7 +2874,6 @@ export class Sim {
     | "dfFlaresMax"
     | "dfIncoming"
     | "dfCarrier"
-    | "dfBombsTracking"
     | "dfBombTracks"
     | "dfDesignated"
     | "dfReleased"
@@ -2916,7 +2906,6 @@ export class Sim {
       dfFlaresMax: h.flaresMax,
       dfIncoming: h.incoming ?? this.remoteWeapons.warning ?? null,
       dfCarrier: h.carrier,
-      dfBombsTracking: h.bombsTracking,
       dfBombTracks: this.df.bombPositions().map((p) => ({
         x: p.x,
         y: p.y,

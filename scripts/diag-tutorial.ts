@@ -109,7 +109,7 @@ console.log("tutorial — the practice drone and its sortie");
     drone.pos.distanceTo(player.pos).toFixed(0));
 
   const before = drone.pos.clone();
-  for (let i = 0; i < 240; i++) df.step(1 / 120, player, false, false);
+  for (let i = 0; i < 240; i++) df.step(1 / 120, player, false);
   check("the drone flies its orbit", drone.pos.distanceTo(before) > 10, drone.pos.distanceTo(before).toFixed(1));
   check("it never shoots the parked pilot", player.result === null);
 
@@ -119,7 +119,7 @@ console.log("tutorial — the practice drone and its sortie");
 
   // Killing the practice target must not call a wave: the lesson does not turn
   // into Endless Practice behind the pilot's back.
-  for (let i = 0; i < 120 * 25; i++) df.step(1 / 120, player, false, false);
+  for (let i = 0; i < 120 * 25; i++) df.step(1 / 120, player, false);
   check("no wave launches after the lesson", df.bandits.length === 0 && df.wave === 1,
     `bandits=${df.bandits.length} wave=${df.wave}`);
   blasts.dispose();

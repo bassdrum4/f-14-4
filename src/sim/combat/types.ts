@@ -165,13 +165,14 @@ export interface EnemyCarrier {
 
 export interface Bomb {
   pos: THREE.Vector3;
-  vel: THREE.Vector3;
-  arm: number; // s until the fuze is live
-  age: number; // s since release — the laser's guidance window runs on this
+  /** Rack station the store left, the arc's control point, and its impact point. */
+  from: THREE.Vector3;
+  ctrl: THREE.Vector3;
+  to: THREE.Vector3;
+  /** Seconds in flight, and the total the arc takes to reach `to`. */
+  t: number;
+  flight: number;
   mesh: THREE.Object3D;
-  /** Laser-guided: steers onto `target` (the designation) while it falls. */
-  guided: boolean;
-  target: THREE.Vector3 | null;
   trailT: number; // s until the next trail puff
 }
 export interface EnemyBomb { id: number; pos: THREE.Vector3; vel: THREE.Vector3; age: number; mesh: THREE.Mesh }
@@ -264,8 +265,6 @@ export interface DogfightHud {
   bombsMax: number;
   /** Bombs in the air right now. */
   bombsAway: number;
-  /** Guided bombs still falling, tracking the laser. */
-  bombsTracking: number;
   /** The laser spot, while one is designated. */
   designated: { x: number; y: number; z: number; km: number } | null;
   /** Where the last weapon came off the rack, marked briefly (null when stale). */

@@ -91,12 +91,9 @@ import {
 } from "./gunnery";
 import {
   bombPositions,
-  bombReachable,
-  followDesignation,
-  impactBomb,
+  detonateBomb,
   pushReleaseMarker,
-  releaseBomb,
-  requestBombRelease,
+  releaseBombAt,
   retireBomb,
   setDesignation,
   stepBombs,
@@ -340,18 +337,10 @@ export class Dogfight {
 
   station = 0;
 
-  bombCd = 0;
-
-  /** Releases asked for by the target pod, waiting on the release cooldown. */
-  releaseQueue = 0;
-
-  // laser designation: a live aim point (bombs in flight follow it) + the ring
-  // marker on the ground under it. There is deliberately no beam from the jet to
-  // the spot: the line read as a stray laser sweeping the canopy the moment a
-  // weapon left the rack, and the ring already says where the pod is looking.
+  // laser designation: the spot the pod is looking at, and the ring marker on
+  // the ground under it. Weapons are given their own point when they are
+  // dropped, so a later click never moves a bomb that is already away.
   designation: THREE.Vector3 | null = null;
-
-  designationAttachment: { id: number | "carrier"; along: number; across: number; height: number } | null = null;
 
   designator: THREE.Mesh;
 
@@ -893,8 +882,6 @@ export class Dogfight {
     this.bombs = [];
     this.bombsLeft = this.bombsMax;
     this.station = 0;
-    this.bombCd = 0;
-    this.releaseQueue = 0;
     for (const m of this.missiles) {
       m.mesh.visible = false;
       this.missilePool.push(m.mesh);
@@ -944,11 +931,9 @@ export class Dogfight {
   /**
    * Advance the fight one fixed sim step.
    * @param fireHeld true while the player holds the gun trigger
-   * @param bombHeld true while the player holds the bomb release
    * @returns true if the player was shot down this step
    */
-  step(dt: number, player: AircraftState, fireHeld: boolean, bombHeld = false, worldOnly = false): boolean {
-    this.followDesignation();
+  step(dt: number, player: AircraftState, fireHeld: boolean, worldOnly = false): boolean {
     // The release and impact markers decay with the sim so they freeze on
     // pause, and they run even with no fight on (a cruise-leg bomb still has to
     // have its hit marked, and the mark has to expire).
@@ -971,8 +956,9 @@ export class Dogfight {
       this.muzzle.visible = false;
     }
     // Bombs are ordnance for both modes: an aircraft on a cruise leg can still
-    // pickle them off, and a live one keeps falling after the player is out.
-    this.stepBombs(dt, player, bombHeld && !player.result);
+    // drop them, and one already in the air keeps falling after the player is
+    // out. The target pod owns the release; there is no held-key path.
+    this.stepBombs(dt, player);
     // Missiles likewise: one in the air keeps hunting after the shooter is gone.
     this.stepMissiles(dt, player);
     this.stepEnemyBombs(dt, player);
@@ -1171,16 +1157,8 @@ export class Dogfight {
       setDesignation(this, p);
     }
 
-    followDesignation(): void {
-      followDesignation(this);
-    }
-
-    requestBombRelease(player?: AircraftState): boolean {
-      return requestBombRelease(this, player);
-    }
-
-    bombReachable(player: AircraftState): boolean {
-      return bombReachable(this, player);
+    releaseBombAt(player: AircraftState, at: THREE.Vector3): boolean {
+      return releaseBombAt(this, player, at);
     }
 
     enemyDeck(): CarrierDef | null {
@@ -1303,16 +1281,12 @@ export class Dogfight {
       stepLaunch(this, b, dt);
     }
 
-    stepBombs(dt: number, player: AircraftState, held: boolean): void {
-      stepBombs(this, dt, player, held);
+    stepBombs(dt: number, player: AircraftState): void {
+      stepBombs(this, dt, player);
     }
 
-    impactBomb(i: number, at: THREE.Vector3, kind: BlastKind, player: AircraftState): void {
-      impactBomb(this, i, at, kind, player);
-    }
-
-    releaseBomb(player: AircraftState): void {
-      releaseBomb(this, player);
+    detonateBomb(i: number, player: AircraftState): void {
+      detonateBomb(this, i, player);
     }
 
     pushReleaseMarker(at: THREE.Vector3): void {

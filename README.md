@@ -145,17 +145,11 @@ Controls, Graphics, Audio and Interface tabs.
   wire area. A missed wire leaves the aircraft controllable for a go-around.
   Runway landings are confirmed after slowing below 12 m/s: idle throttle and
   hold the wheel-brake binding (B by default).
-- Bombing keeps **R → slew, then click a target**. The click is the shot:
-  dropping out of a slew never fires, so looking around costs nothing and the
-  weapon goes to the spot under the cursor rather than wherever the drag
-  happened to end. Every later click re-aims the laser and pulls bombs already
-  in flight onto the new spot. A shared trajectory predictor checks each click
-  and warns without spending a bomb if the spot cannot be reached. The weapon is
-  genuinely laser-guided: it steers hard onto the painted spot and every
-  correction costs it speed, so the designator's guidance window bounds the shot
-  at a few kilometres — inside it the click is hit, past it the store flies
-  ballistically and the release is refused. Racks and release cadence stay the
-  same.
+- Bombing is **R → click a spot**. The pod's click is the shot: it drops one
+  bomb, and that bomb lands on exactly the point under the cursor — no reach
+  check, no guidance window, no release queue. Dragging slews the sensor and
+  never fires; a later click drops a new bomb on a new spot and leaves weapons
+  already in the air alone. One click spends one store from the racks.
 - Head-to-head uses the existing room codes and PeerJS connection. Open a room,
   have another pilot join, then the host selects Head-to-head and Start Air Battle.
   Pilots spawn airborne apart around **the fleet carrier, on a spawn ring drawn
@@ -217,7 +211,6 @@ Local diagnostics (Bun required, **not connected to GitHub Actions**):
 ```bash
 npm run test:aim
 npm run test:landing
-npm run test:bomb-envelope
 npm run test:versus
 npm run test:battle-recovery
 npm run test:settings

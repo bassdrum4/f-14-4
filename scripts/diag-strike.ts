@@ -135,30 +135,23 @@ const player = airPlayer();
   let guard = 0;
   while (df.hud(player).bandits > 0 && guard++ < 8) {
     const spot = df.hud(player).spots[0];
-    // hover over the target and pickle; the laser stays on it and walks the
-    // weapon in — which is exactly how a pod operator kills a steaming ship
-    const at = new Vector3(spot.x, spot.y, spot.z);
-    player.pos.set(spot.x, spot.y + 600, spot.z);
+    // hover over the target and click it: every click drops one bomb on the
+    // point under the cursor, and the pod keeps clicking as the ship steams
+    player.pos.set(spot.x, spot.y + 250, spot.z);
     player.vel.set(0, 0, 0);
     player.speed = 0;
     df.refill();
-    df.setDesignation(at);
-    df.requestBombRelease();
-    df.requestBombRelease();
+    let bombCd = 0;
     for (let i = 0; i < Math.round(16 / DT); i++) {
-      // keep the spot on the target as it moves
-      let best: { x: number; y: number; z: number } | null = null;
-      let bestD = Infinity;
-      for (const s of df.hud(player).spots) {
-        const d = Math.hypot(s.x - at.x, s.y - at.y, s.z - at.z);
-        if (d < bestD) {
-          bestD = d;
-          best = s;
-        }
+      const live = df.hud(player).spots[0];
+      if (!live) break;
+      bombCd -= DT;
+      if (bombCd <= 0) {
+        const at = new Vector3(live.x, live.y, live.z);
+        df.setDesignation(at);
+        df.releaseBombAt(player, at);
+        bombCd = 1.5;
       }
-      // do not let the designation jump to another target across the map
-      if (best && bestD < 200) at.set(best.x, best.y, best.z);
-      df.setDesignation(at);
       df.step(DT, player, false);
       if (df.hud(player).bandits === 0) break;
     }

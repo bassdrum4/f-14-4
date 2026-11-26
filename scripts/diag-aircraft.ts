@@ -174,11 +174,9 @@ function airPlayer(id: AircraftId): AircraftState {
   check("the bomber is racked with sixteen bombs", hb.bombsMax === 16 && hb.bombs === 16,
     `${hb.bombs}/${hb.bombsMax}`);
   check("the bomber's hull is the tougher one", hb.hull === 130, `${hb.hull}`);
-  // hold the release: 16 bombs at 0.5 s spacing takes 8 s to empty the racks
-  for (let i = 0; i < Math.round(9 / DT); i++) {
-    bomber.time += DT;
-    d.step(DT, bomber, false, true);
-  }
+  // one click per bomb: sixteen clicks empty the racks
+  const sea = new Vector3(bomber.pos.x, 0, bomber.pos.z);
+  for (let i = 0; i < 16; i++) d.releaseBombAt(bomber, sea);
   const after = d.hud(bomber);
   check("the bomber can pickle all sixteen away", after.bombs === 0 && after.bombsAway === 16,
     `${after.bombs} left, ${after.bombsAway} away`);

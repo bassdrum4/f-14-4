@@ -401,48 +401,45 @@ df.begin(player);
   check("terrain never blocks above the peaks", highBlocked === 0, `${highBlocked} blocked`);
 }
 
-// --- 8. bombs: no release on deck, ballistic fall, splash, deck hits ---
+// --- 8. bombs: pod clicks, exact impacts, splash, deck hits ---
 {
   // on the deck with the brake on, the racks stay shut
   const parked = spawnAircraft("carrier", 0);
   df.begin(parked);
-  for (let i = 0; i < Math.round(3 / DT); i++) {
-    parked.time += DT;
-    df.step(DT, parked, false, true);
-  }
-  check("bombs cannot be released while parked on deck", df.hud(parked).bombs === 6,
-    `${df.hud(parked).bombs} left`);
+  const shut = df.releaseBombAt(parked, parked.pos.clone());
+  check("bombs cannot be dropped while parked on deck",
+    !shut && df.hud(parked).bombs === 6, `${df.hud(parked).bombs} left`);
 
-  // airborne over the sea: hold the key and watch them go
+  // airborne over the sea: one click, one bomb, on the clicked point
   player = airPlayer();
   player.vel.set(0, 0, 0);
   player.speed = 0;
   df.begin(player);
+  const seaAim = new Vector3(player.pos.x, 0, player.pos.z);
+  const released = df.releaseBombAt(player, seaAim);
+  const afterRelease = df.hud(player);
+  check("a click pickles one bomb off the racks",
+    released && afterRelease.bombs === 5, `${afterRelease.bombs} left`);
+  check("the bomb is away, not gone", afterRelease.bombsAway === 1,
+    `${afterRelease.bombsAway} away`);
+  // it is still in the air for a moment, then splashes on the clicked point
+  let stillFalling = true;
   for (let i = 0; i < Math.round(2 / DT); i++) {
     player.time += DT;
-    df.step(DT, player, false, true);
-  }
-  const afterRelease = df.hud(player);
-  check("holding the release key pickles bombs off the racks",
-    afterRelease.bombs < 6 && afterRelease.bombs > 0, `${afterRelease.bombs} left`);
-  check("released bombs are away, not gone", afterRelease.bombsAway === 6 - afterRelease.bombs,
-    `${afterRelease.bombsAway} away, ${afterRelease.bombs} on the racks`);
-  // from 1500 m the fall takes a while: they are still in the air, then splash
-  let stillFalling = true;
-  for (let i = 0; i < Math.round(6 / DT); i++) {
-    player.time += DT;
-    df.step(DT, player, false, false);
+    df.step(DT, player, false);
     if (df.hud(player).bombsAway === 0) stillFalling = false;
   }
-  check("bombs fall ballistically for more than a moment", stillFalling,
-    `${df.hud(player).bombsAway} away after 6 s`);
-  for (let i = 0; i < Math.round(26 / DT); i++) {
+  check("bombs fall for more than a moment", stillFalling,
+    `${df.hud(player).bombsAway} away after 2 s`);
+  for (let i = 0; i < Math.round(30 / DT); i++) {
     player.time += DT;
-    df.step(DT, player, false, false);
+    df.step(DT, player, false);
   }
   check("bombs splash into the sea and clear",
-    df.hud(player).bombsAway === 0 && df.hud(player).bombs < 6,
+    df.hud(player).bombsAway === 0 && df.hud(player).bombs === 5,
     `${df.hud(player).bombsAway} away, ${df.hud(player).bombs} on the racks`);
+  check("the splash is on the clicked point", df.lastImpact.distanceTo(seaAim) < 2,
+    `${df.lastImpact.distanceTo(seaAim).toFixed(1)} m off`);
   // the same refill a recovery triggers puts the expended stores back
   const spent = df.hud(player).bombs;
   df.refill();
@@ -459,9 +456,11 @@ df.begin(player);
   player.pos.set(cvDef.x, cvDef.y + 900, cvDef.z);
   player.vel.set(0, 0, 0);
   player.speed = 0;
+  const deckAim = new Vector3(cvDef.x, cvDef.y, cvDef.z);
+  for (let n = 0; n < 3; n++) df.releaseBombAt(player, deckAim);
   for (let i = 0; i < Math.round(60 / DT); i++) {
     player.time += DT;
-    df.step(DT, player, false, i < Math.round(3 / DT)); // release first 3 s only
+    df.step(DT, player, false);
   }
   const sunk = df.hud(player).carrier!;
   check("bombs on the deck hurt the carrier", sunk.hp < 100, `hp=${sunk.hp}`);
@@ -476,7 +475,7 @@ df.begin(player);
   let maxBandits = atSink;
   for (let i = 0; i < Math.round(30 / DT); i++) {
     player.time += DT;
-    df.step(DT, player, false, false);
+    df.step(DT, player, false);
     const h = df.hud(player);
     maxBandits = Math.max(maxBandits, h.bandits);
     if (h.bandits > atSink) grew = true;

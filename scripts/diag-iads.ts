@@ -204,7 +204,7 @@ test("a SAM launch is a guided hostile round, and the site reloads", () => {
 
 test("a bastion sortie never expires on its own, and its wire frame stays valid", () => {
   const { df, player, d } = bastion(408);
-  for (let i = 0; i < 4000; i++) df.step(.05, player, false, false, true);
+  for (let i = 0; i < 4000; i++) df.step(.05, player, false, true);
   assert.equal(df.operationState!.status, "active", "the fortress has to be taken: it cannot time out");
   assert.equal(d.strikeTargets.length, 7, "no waves are added to a fixed fortress layout");
   assert(validSharedCombat(df.sharedSnapshot()));
