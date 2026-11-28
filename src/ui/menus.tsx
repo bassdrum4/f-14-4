@@ -371,6 +371,7 @@ function MainMenu({ sim, settings, onSettings, openMultiplayer, onOpenedMultipla
             <button onClick={() => setScreen("settings")}>SETTINGS</button>
             <button onClick={() => setScreen("feedback")}>FEEDBACK</button>
           </nav>
+          <small style={{opacity:.6,fontSize:10}}>Tomcat model: <a href="https://sketchfab.com/3d-models/grumman-f-14-tomcat-fighter-jet-ea556e61aebf4153b9b34cdb3a64b559" target="_blank" rel="noreferrer">Muhamad Mirza Arrafi</a> / <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a> (adapted).</small>
         </>}
         {screen === "solo" && <FlightSetup sim={sim} settings={settings} onSettings={onSettings} gate={gate} onBack={() => setScreen("main")} />}
         {screen === "settings" && <SettingsPanel sim={sim} settings={settings} onSettings={onSettings} onBack={() => setScreen("main")} />}

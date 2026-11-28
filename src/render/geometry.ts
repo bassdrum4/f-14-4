@@ -6,6 +6,7 @@ import type { AircraftId } from "../sim/aircraft";
 import { addAirLights, type AirLightSpots } from "./lights";
 import { airfoil, aircraftMaterial, finGeometry, intakeDuct, loft, planform } from "./airframe";
 import { addAircraftDetails } from "./aircraftDetails";
+import { applyTomcatAsset } from "./tomcatAsset";
 
 /**
  * Named parts every airframe exposes so the rig can animate it: wings (which
@@ -783,6 +784,7 @@ function buildBaseAircraft(id: AircraftId, paint: "gray" | "bandit"): TomcatMesh
 export function buildAircraft(id: AircraftId, paint: "gray" | "bandit" = "gray"): TomcatMesh {
   const mesh = buildBaseAircraft(id,paint);
   if(id !== "destroyer") addAircraftDetails(mesh,id,paint === "bandit");
+  if(id === "tomcat" && paint === "gray") applyTomcatAsset(mesh);
   return mesh;
 }
 

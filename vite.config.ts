@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, normalizePath } from "vite";
 import react from "@vitejs/plugin-react";
 import { viteSingleFile } from "vite-plugin-singlefile";
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -24,7 +24,7 @@ export default defineConfig({
       transformIndexHtml: {
         order: "pre",
         handler(html) {
-          return html.replace('../src/main.tsx', `/@fs${projectPath("./src/main.tsx")}`);
+          const entry = normalizePath(projectPath("./src/main.tsx")); return html.replace('../src/main.tsx', `/@fs${entry.startsWith("/") ? "" : "/"}${entry}`);
         },
       },
     },
